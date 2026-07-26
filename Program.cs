@@ -8,7 +8,7 @@ class Program
 {
   static void Main(string[] args)
   {
-    Testbench testbench = new(new ConsoleLogger());
+    Testbench testbench = new();
     testbench.Start();
   }
 }

@@ -7,15 +7,19 @@ using BTokenLib;
 namespace BTokenCore_Testbench;
 
 
-class Testbench
+class Testbench : ILogEntryNotifier
 {
-  public Testbench(ILogEntryNotifier logEntryNotifier)
-  {
-    TokenBitcoin tokenBitcoin = new TokenBitcoin(logEntryNotifier);
-    TokenBToken tokenBToken = new TokenBToken(logEntryNotifier, tokenBitcoin);
-  }
+  public Testbench()
+  { }
 
   public void Start()
   {
+    TokenBitcoin tokenBitcoin = new TokenBitcoin(this);
+
+  }
+
+  public void NotifyLogEntry(string logEntry, string source)
+  {
+    Console.WriteLine($"{source}: {logEntry}");
   }
 }
