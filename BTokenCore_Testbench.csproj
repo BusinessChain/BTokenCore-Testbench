@@ -9,9 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Reference Include="BTokenCore">
-      <HintPath>..\BTokenCore\bin\Debug\net8.0\BTokenCore.dll</HintPath>
-    </Reference>
+    <ProjectReference Include="..\BTokenCore\BTokenCore.csproj" />
   </ItemGroup>
 
 </Project>
