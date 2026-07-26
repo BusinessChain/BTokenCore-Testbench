@@ -1,13 +1,14 @@
-﻿using BTokenLib;
-using System;
+﻿using System;
+
+
+namespace BTokenCore_Testbench;
+
 
 class Program
 {
   static void Main(string[] args)
   {
-    Console.WriteLine("Hello");
-
-    TokenBitcoin tokenBitcoin = new TokenBitcoin();
-    TokenBToken tokenBToken = new TokenBToken(, tokenBitcoin);
+    Testbench testbench = new(new ConsoleLogger());
+    testbench.Start();
   }
 }
