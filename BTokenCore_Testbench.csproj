@@ -8,6 +8,16 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
+    <WarningLevel>3</WarningLevel>
+    <NoWarn />
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
+    <WarningLevel>3</WarningLevel>
+    <NoWarn />
+  </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\BTokenCore\BTokenCore.csproj" />
   </ItemGroup>
