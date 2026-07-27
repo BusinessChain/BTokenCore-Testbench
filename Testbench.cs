@@ -2,35 +2,66 @@
 using System.Linq;
 using System.Text;
 using System.Diagnostics;
+
 using BTokenLib;
 
 
 namespace BTokenCore_Testbench;
 
 
-class Testbench : ILogEntryNotifier
+partial class Testbench : ILogEntryNotifier
 {
+  List<Test_Testbench> Tests;
+
+  TokenBitcoin TokenBitcoin;
+
+
   public Testbench()
-  { }
+  {
+    LoadTests();
+  }
+
+
+  void LoadTests()
+  {
+    Tests = new()
+    {
+      new MakeAnInstanceOfBitcoin(this)
+    };
+  }
 
   public void Start()
   {
-    Console.WriteLine($"Test 1: Make an instance of TokenBitcoin.");
-    
-    try
-    {
-      TokenBitcoin tokenBitcoin = new TokenBitcoin(this);
+    bool resultIsSuccess = false;
+    string message = "";
+    Test_Testbench test;
 
-      Console.WriteLine($"Test 1 result: success");
-    }
-    catch(Exception ex)
+    for (int i = 0; i < Tests.Count; i++)
     {
-      Console.WriteLine($"Test 1 result: fail");
-      Console.WriteLine($"\n{ex.GetType().Name}: {ex.Message}");
-      Console.WriteLine($"\nStack trace:\n");
+      test = Tests[i];
 
-      PrintStackTrace(ex);
+      try
+      {
+        resultIsSuccess = test.TryRun(out message);
+
+        if (resultIsSuccess)
+          continue;
+      }
+      catch (Exception ex)
+      {
+        Console.WriteLine($"\n{ex.GetType().Name}: {ex.Message}");
+        PrintStackTrace(ex);
+      }
+
+      Console.WriteLine($"\n\nTest {i + 1} ({Tests[i].GetType().Name}) of {Tests.Count} tests failed.");
+
+      if(message != "")
+        Console.WriteLine(message);
+
+      return;
     }
+
+    Console.WriteLine($"All ({Tests.Count}) tests succeded, congratulations !");
   }
 
   public void NotifyLogEntry(string logEntry, string source)
@@ -40,6 +71,8 @@ class Testbench : ILogEntryNotifier
 
   static void PrintStackTrace(Exception ex)
   {
+    Console.WriteLine($"\nStack trace:\n");
+
     StackTrace stackTrace = new(ex, true);
 
     foreach (StackFrame frame in stackTrace.GetFrames() ?? [])
