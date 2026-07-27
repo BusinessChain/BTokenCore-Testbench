@@ -14,6 +14,7 @@ partial class Testbench : ILogEntryNotifier
   List<Test_Testbench> Tests;
 
   TokenBitcoin TokenBitcoin;
+  TokenBToken TokenBToken;
 
 
   public Testbench()
@@ -26,7 +27,9 @@ partial class Testbench : ILogEntryNotifier
   {
     Tests = new()
     {
-      new MakeAnInstanceOfBitcoin(this)
+      new MakeAnInstanceOfBitcoin(this),
+      new MakeAnInstanceOfBToken(this),
+      //new StartBToken(this)
     };
   }
 
@@ -35,6 +38,8 @@ partial class Testbench : ILogEntryNotifier
     bool resultIsSuccess = false;
     string message = "";
     Test_Testbench test;
+
+    Console.WriteLine($"Start testbench, {Tests.Count} tests in total.\n");
 
     for (int i = 0; i < Tests.Count; i++)
     {
@@ -53,7 +58,7 @@ partial class Testbench : ILogEntryNotifier
         PrintStackTrace(ex);
       }
 
-      Console.WriteLine($"\n\nTest {i + 1} ({Tests[i].GetType().Name}) of {Tests.Count} tests failed.");
+      Console.WriteLine($"\nTest {i + 1} ({Tests[i].GetType().Name}) failed.");
 
       if(message != "")
         Console.WriteLine(message);
@@ -61,7 +66,7 @@ partial class Testbench : ILogEntryNotifier
       return;
     }
 
-    Console.WriteLine($"All ({Tests.Count}) tests succeded, congratulations !");
+    Console.WriteLine($"All tests succeded, congratulations !");
   }
 
   public void NotifyLogEntry(string logEntry, string source)
