@@ -29,7 +29,7 @@ partial class Testbench : ILogEntryNotifier
     {
       new MakeAnInstanceOfBitcoin(this),
       new MakeAnInstanceOfBToken(this),
-      //new StartBToken(this)
+      new StartBToken(this)
     };
   }
 
@@ -47,10 +47,15 @@ partial class Testbench : ILogEntryNotifier
 
       try
       {
+        Console.WriteLine($"Run test {i + 1} : {test.GetType().Name}");
+
         resultIsSuccess = test.TryRun(out message);
 
         if (resultIsSuccess)
+        {
+          Console.WriteLine($"success.\n");
           continue;
+        }
       }
       catch (Exception ex)
       {
