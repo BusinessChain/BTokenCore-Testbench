@@ -47,13 +47,13 @@ partial class Testbench : ILogEntryNotifier
 
       try
       {
-        Console.WriteLine($"Run test {i + 1} : {test.GetType().Name}");
+        Console.Write($"Run test {i + 1} : {test.GetType().Name}");
 
         resultIsSuccess = test.TryRun(out message);
 
         if (resultIsSuccess)
         {
-          Console.WriteLine($"success.\n");
+          Console.WriteLine($" -- success.");
           continue;
         }
       }
@@ -81,8 +81,6 @@ partial class Testbench : ILogEntryNotifier
 
   static void PrintStackTrace(Exception ex)
   {
-    Console.WriteLine($"\nStack trace:\n");
-
     StackTrace stackTrace = new(ex, true);
 
     foreach (StackFrame frame in stackTrace.GetFrames() ?? [])
