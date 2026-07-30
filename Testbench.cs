@@ -3,7 +3,7 @@ using System.Linq;
 using System.Text;
 using System.Diagnostics;
 
-using BTokenLib;
+using BTokenCore;
 
 
 namespace BTokenCore_Testbench;
