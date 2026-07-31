@@ -9,7 +9,7 @@ using BTokenCore;
 namespace BTokenCore_Testbench;
 
 
-partial class Testbench : ILogEntryNotifier
+partial class Testbench : ISocketToken
 {
   List<Test_Testbench> Tests;
 
@@ -74,9 +74,9 @@ partial class Testbench : ILogEntryNotifier
     Console.WriteLine($"All tests succeded, congratulations !");
   }
 
-  public void NotifyLogEntry(string logEntry, string source)
+  public void Log(string message)
   {
-    Console.WriteLine($"{source}: {logEntry}");
+    Console.WriteLine($"{message}");
   }
 
   static void PrintStackTrace(Exception ex)
