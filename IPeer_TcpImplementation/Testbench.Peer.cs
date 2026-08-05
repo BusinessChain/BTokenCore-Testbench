@@ -24,100 +24,6 @@ public partial class Testbench
   List<string> IPAddresses = new();
 
 
-  public async Task<IPeer> GetInterfacePeer()
-  {
-    IPAddress iP = LoadIPAddress();
-
-    TcpClient tcpClient = new TcpClient();
-
-    try
-    {
-      Peer peer = new(CreateStateMachineProtocol(), tcpClient, Peer.ConnectionType.OUTBOUND, iP);
-
-      await peer.Start();
-
-      return peer;
-    }
-    catch (Exception ex)
-    {
-      tcpClient.Dispose();
-      return null;
-    }
-  }
-
-
-  readonly DirectoryInfo DirectoryPeers = Directory.CreateDirectory(
-        Path.Combine(GetType().Name, "logPeers"));
-  readonly DirectoryInfo DirectoryPeersDisposed = Directory.CreateDirectory(
-    Path.Combine(DirectoryPeers.FullName, "disposed"));
-
-  IPAddress LoadIPAddress()
-  {
-    if (IPAddresses.Count == 0)
-    {
-      IPAddresses = GetSeedAddresses();
-
-      foreach (FileInfo iPDisposed in DirectoryPeersDisposed.EnumerateFiles())
-      {
-        if (iPDisposed.Name.Contains(ConnectionType.OUTBOUND.ToString()))
-        {
-          int secondsBanned = TIMESPAN_PEER_BANNED_SECONDS -
-            (int)(DateTime.Now - iPDisposed.CreationTime).TotalSeconds;
-
-          if (0 < secondsBanned)
-          {
-            IPAddresses.RemoveAll(iP => iPDisposed.Name.Contains(iP));
-            continue;
-          }
-
-          iPDisposed.MoveTo(Path.Combine(
-            DirectoryPeersArchive.FullName,
-            iPDisposed.Name));
-        }
-      }
-
-      foreach (FileInfo fileIPAddressArchive in DirectoryPeersArchive.EnumerateFiles())
-      {
-        string iPFromFile = fileIPAddressArchive.Name.GetIPFromFileName();
-
-        if (!IPAddresses.Any(ip => ip == iPFromFile))
-          IPAddresses.Add(iPFromFile);
-      }
-
-      foreach (FileInfo fileIPAddressActive in DirectoryPeersActive.EnumerateFiles())
-        IPAddresses.RemoveAll(iP => fileIPAddressActive.Name.GetIPFromFileName() == iP);
-    }
-
-    while (iPAddresses.Count < maxCount && IPAddresses.Count > 0)
-    {
-      int randomIndex = randomGenerator.Next(IPAddresses.Count);
-
-      string iPAddress = IPAddresses[randomIndex];
-      IPAddresses.RemoveAt(randomIndex);
-
-      if (!Peers.Any(p => p.IPAddress.ToString() == iPAddress))
-        iPAddresses.Add(iPAddress);
-    }
-
-    return iPAddresses.Select(iP => IPAddress.Parse(iP)).ToList();
-  }
-
-  public List<string> GetSeedAddresses()
-  {
-    //mit DNS seeds arbeiten.
-    //seed.bitcoin.sipa.be
-    //dnsseed.bluematt.me
-    //dnsseed.bitcoin.dashjr.org
-    //seed.bitcoinstats.com
-    //seed.bitnodes.io
-
-    return new List<string>()
-        {"83.229.86.158" 
-        // 84.74.69.100
-        };
-  }
-
-
   public async Task StartPeerInboundConnector()
   {
     TcpListener tcpListener = new(IPAddress.Any, Port);
@@ -199,6 +105,7 @@ public partial class Testbench
 
     return true;
   }
+  
   async Task CreatePeerInbound(TcpClient tcpClient, IPAddress iP)
   {
     try
@@ -214,31 +121,5 @@ public partial class Testbench
     {
       tcpClient.Dispose();
     }
-  }
-
-
-  Dictionary<string, MessageNetworkProtocol> CreateStateMachineProtocol()
-  {
-    Dictionary<string, MessageNetworkProtocol> protocol = new();
-
-    Block blockDownload = new(Token);
-    Block blockUpload = new(Token);
-
-    AddMessageNetworkProtocol(protocol, new GetDataMessage(blockUpload));
-    AddMessageNetworkProtocol(protocol, new GetHeadersMessage());
-    AddMessageNetworkProtocol(protocol, new HeadersMessage(blockDownload));
-    AddMessageNetworkProtocol(protocol, new BlockMessage(blockDownload));
-    AddMessageNetworkProtocol(protocol, new TXMessage());
-    AddMessageNetworkProtocol(protocol, new VerAckMessage());
-    AddMessageNetworkProtocol(protocol, new VersionMessage());
-
-    return protocol;
-  }
-
-  static void AddMessageNetworkProtocol(
-    Dictionary<string, MessageNetworkProtocol> protocol,
-    MessageNetworkProtocol message)
-  {
-    protocol.Add(message.GetCommand(), message);
   }
 }

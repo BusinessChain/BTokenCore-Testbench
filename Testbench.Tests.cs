@@ -9,7 +9,7 @@ using BTokenCore;
 
 namespace BTokenCore_Testbench;
 
-internal partial class Testbench
+public partial class Testbench
 {
   abstract class Test_Testbench
   {

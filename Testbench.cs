@@ -8,8 +8,7 @@ using BTokenCore;
 
 namespace BTokenCore_Testbench;
 
-
-partial class Testbench : ISocketToken
+partial class Testbench : ISocketCommunication
 {
   List<Test_Testbench> Tests;
 
