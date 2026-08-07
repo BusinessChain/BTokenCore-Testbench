@@ -8,12 +8,14 @@ using BTokenCore;
 
 namespace BTokenCore_Testbench;
 
-partial class Testbench : ISocketCommunication
+partial class Testbench : IEnvironment
 {
   List<Test_Testbench> Tests;
 
   TokenBitcoin TokenBitcoin;
   TokenBToken TokenBToken;
+
+  NetworkAdapterTCP NetworkAdapterTCP;
 
 
   public Testbench()
@@ -22,12 +24,22 @@ partial class Testbench : ISocketCommunication
   }
 
 
+  public Task<ISocketCommunication> GetSocketCommunication(Token token, string address)
+  {
+    ISocketCommunication networkAdapterTCP = new NetworkAdapterTCP(address);
+
+    await networkAdapterTCP.Start(token.port);
+
+    return (Task<ISocketCommunication>)networkAdapterTCP;
+  }
+
   void LoadTests()
   {
     Tests = new()
     {
       new MakeAnInstanceOfBitcoin(this),
       new MakeAnInstanceOfBToken(this),
+      new MakeAnInstanceOfNetworkAdapterTCP(this),
       new StartBToken(this)
     };
   }
