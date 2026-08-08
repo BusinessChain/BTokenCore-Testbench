@@ -1,6 +1,8 @@
 ﻿using System;
 using System.Linq;
 using System.Text;
+using System.Net;
+using System.Net.Sockets;
 using System.Diagnostics;
 
 using BTokenCore;
@@ -15,22 +17,34 @@ partial class Testbench : IEnvironment
   TokenBitcoin TokenBitcoin;
   TokenBToken TokenBToken;
 
-  NetworkAdapterTCP NetworkAdapterTCP;
-
 
   public Testbench()
   {
     LoadTests();
   }
 
-
-  public Task<ISocketCommunication> GetSocketCommunication(Token token, string address)
+  public async Task<ISocketCommunication> GetSocketCommunication(Token token, string address)
   {
-    ISocketCommunication networkAdapterTCP = new NetworkAdapterTCP(address);
+    ISocketCommunication networkAdapterTCP = new NetworkAdapterTCP(address, token.Port);
 
-    await networkAdapterTCP.Start(token.port);
+    await networkAdapterTCP.Start();
 
-    return (Task<ISocketCommunication>)networkAdapterTCP;
+    return networkAdapterTCP;
+  }
+
+  TcpListener TcpListener;
+
+  public void StartListenerCommunicationInbound(int port)
+  {
+    TcpListener = new(IPAddress.Any, port);
+    TcpListener.Start(1);
+  }
+
+  public async Task<ISocketCommunication> AcceptSocketCommunicationInbound()
+  {
+    TcpClient tcpClient = await TcpListener.AcceptTcpClientAsync().ConfigureAwait(false);
+
+    return new NetworkAdapterTCP(tcpClient);
   }
 
   void LoadTests()
@@ -83,11 +97,6 @@ partial class Testbench : IEnvironment
     }
 
     Console.WriteLine($"All tests succeded, congratulations !");
-  }
-
-  public void Log(string message)
-  {
-    Console.WriteLine($"{message}");
   }
 
   static void PrintStackTrace(Exception ex)
