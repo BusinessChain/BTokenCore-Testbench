@@ -53,19 +53,6 @@ public partial class Testbench
     }
   }
 
-  class MakeAnInstanceOfNetworkAdapterTCP : Test_Testbench
-  {
-    public MakeAnInstanceOfNetworkAdapterTCP(Testbench testbench)
-      : base(testbench)
-    { }
-
-    public override bool TryRun(out string message)
-    {
-      message = "";
-      return true;
-    }
-  }
-
   class StartBToken : Test_Testbench
   {
     public StartBToken(Testbench testbench)

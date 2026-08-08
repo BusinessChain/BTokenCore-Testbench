@@ -23,13 +23,14 @@ partial class Testbench : IEnvironment
     LoadTests();
   }
 
-  public async Task<ISocketCommunication> GetSocketCommunication(Token token, string address)
+  //public ISocketCommunication GetSocketCommunication(Token token, string address)
+  //{
+  //  return new NetworkAdapterTCP(address, token.Port);
+  //}
+
+  public ISocketCommunication GetSocketCommunication(Token token, string address)
   {
-    ISocketCommunication networkAdapterTCP = new NetworkAdapterTCP(address, token.Port);
-
-    await networkAdapterTCP.Start();
-
-    return networkAdapterTCP;
+    return new NetworkAdapterTestbench(address);
   }
 
   TcpListener TcpListener;
@@ -53,7 +54,6 @@ partial class Testbench : IEnvironment
     {
       new MakeAnInstanceOfBitcoin(this),
       new MakeAnInstanceOfBToken(this),
-      new MakeAnInstanceOfNetworkAdapterTCP(this),
       new StartBToken(this)
     };
   }
