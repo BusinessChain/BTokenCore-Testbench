@@ -17,10 +17,8 @@ public class NetworkAdapterTestbench : ISocketCommunication
     ID = id;
   }
 
-  public async Task<Stream> Start()
+  public async Task Start()
   {
-    // hier müssten bereits alle message Daten hineingeschrieben werden.
-    return new MemoryStream(); 
   }
 
   public void Dispose()
