@@ -86,15 +86,16 @@ public class NetworkAdapterTCP : ISocketCommunication
     }
   }
 
-  async Task<MessageNetworkProtocol> ReceiveMessageNext()
+  public async Task<string> ReceiveCommandMessageNext()
   {
     await ReadBytes(MagicBytesRead, 4);
-
     await ReadBytes(CommandRead, CommandRead.Length);
-    string commandString = Encoding.ASCII.GetString(CommandRead).TrimEnd('\0');
 
-    MessageNetworkProtocol message = ProtocolStateMachine[commandString];
+    return Encoding.ASCII.GetString(CommandRead).TrimEnd('\0');
+  }
 
+  public async Task LoadMessageNext(MessageNetworkProtocol message)
+  {
     await ReadBytes(LengthRead, LengthRead.Length);
     message.LengthDataPayload = BitConverter.ToInt32(LengthRead);
 
@@ -103,8 +104,6 @@ public class NetworkAdapterTCP : ISocketCommunication
     byte[] bufferPayloadMessage = message.GetPayloadBuffer();
 
     await ReadBytes(bufferPayloadMessage, message.LengthDataPayload);
-
-    return message;
   }
 
   async Task ReadBytes(byte[] buffer, int bytesToRead)

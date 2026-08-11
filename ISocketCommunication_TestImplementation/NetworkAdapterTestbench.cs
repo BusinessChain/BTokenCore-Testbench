@@ -21,6 +21,21 @@ public class NetworkAdapterTestbench : ISocketCommunication
   {
   }
 
+  public async Task SendMessage(string commandString, int lengthDataPayload, byte[] payload)
+  {
+
+  }
+
+  public async Task<string> ReceiveCommandMessageNext()
+  {
+    return "test";
+  }
+
+  public async Task LoadMessageNext(MessageNetworkProtocol message)
+  {
+
+  }
+
   public void Dispose()
   {
 

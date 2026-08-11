@@ -20,7 +20,12 @@ partial class Testbench : IEnvironment
 
   public Testbench()
   {
-    LoadTests();
+    Tests = new()
+    {
+      new MakeAnInstanceOfBitcoin(this),
+      new MakeAnInstanceOfBToken(this),
+      new StartBToken(this)
+    };
   }
 
   //public ISocketCommunication GetSocketCommunication(Token token, string address)
@@ -46,16 +51,6 @@ partial class Testbench : IEnvironment
     TcpClient tcpClient = await TcpListener.AcceptTcpClientAsync().ConfigureAwait(false);
 
     return new NetworkAdapterTCP(tcpClient);
-  }
-
-  void LoadTests()
-  {
-    Tests = new()
-    {
-      new MakeAnInstanceOfBitcoin(this),
-      new MakeAnInstanceOfBToken(this),
-      new StartBToken(this)
-    };
   }
 
   public void Start()
