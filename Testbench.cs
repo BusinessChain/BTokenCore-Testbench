@@ -24,6 +24,7 @@ partial class Testbench : IEnvironment
     {
       new MakeAnInstanceOfBitcoin(this),
       new MakeAnInstanceOfBToken(this),
+      new StartBitcoin(this),
       new StartBToken(this)
     };
   }
@@ -35,7 +36,7 @@ partial class Testbench : IEnvironment
 
   public ISocketCommunication GetSocketCommunication(Token token, string address)
   {
-    return new NetworkAdapterTestbench(address);
+    return new SocketTest(address);
   }
 
   TcpListener TcpListener;
@@ -50,7 +51,7 @@ partial class Testbench : IEnvironment
   {
     TcpClient tcpClient = await TcpListener.AcceptTcpClientAsync().ConfigureAwait(false);
 
-    return new NetworkAdapterTCP(tcpClient);
+    return new SocketTCP(tcpClient);
   }
 
   public void Start()
@@ -91,7 +92,7 @@ partial class Testbench : IEnvironment
       return;
     }
 
-    Console.WriteLine($"All tests succeded, congratulations !");
+    Console.WriteLine($"\nAll tests succeded, congratulations !");
   }
 
   static void PrintStackTrace(Exception ex)

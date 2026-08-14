@@ -53,6 +53,28 @@ public partial class Testbench
     }
   }
 
+  class StartBitcoin : Test_Testbench
+  {
+    public StartBitcoin(Testbench testbench)
+      : base(testbench)
+    { }
+
+    public override bool TryRun(out string message)
+    {
+      message = "";
+
+      Testbench.TokenBitcoin.Start();
+
+      foreach (List<string> logsSendMessage in Testbench.TokenBitcoin.Network.GetLogsSendMessage())
+      {
+        if (logsSendMessage[0] != "version")
+          message = "Did not initiate version message when starting Bitcoin.";
+      }
+
+      return true;
+    }
+  }
+
   class StartBToken : Test_Testbench
   {
     public StartBToken(Testbench testbench)
@@ -61,9 +83,16 @@ public partial class Testbench
 
     public override bool TryRun(out string message)
     {
+      message = "";
+
       Testbench.TokenBToken.Start();
 
-      message = "";
+      foreach(List<string> logsSendMessage in Testbench.TokenBToken.Network.GetLogsSendMessage())
+      {
+        if (logsSendMessage[0] != "version")
+          message = "Did not initiate version message when starting BToken.";
+      }
+
       return true;
     }
   }

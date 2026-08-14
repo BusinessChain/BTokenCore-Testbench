@@ -1,33 +1,33 @@
-﻿using BTokenCore;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+﻿using System;
+
+using BTokenCore;
 
 
 namespace BTokenCore_Testbench;
 
-public class NetworkAdapterTestbench : ISocketCommunication
+public class SocketTest : ISocketCommunication
 {
   string ID;
 
-  public NetworkAdapterTestbench(string id)
+  public SocketTest(string id)
   {
     ID = id;
   }
 
   public async Task Start()
   {
+
   }
 
+  public List<string> LogSendMessage = new();
   public async Task SendMessage(string commandString, int lengthDataPayload, byte[] payload)
   {
-
+    LogSendMessage.Add(commandString);
   }
 
   public async Task<string> ReceiveCommandMessageNext()
   {
+    await Task.Delay(-1).ConfigureAwait(false);
     return "test";
   }
 
