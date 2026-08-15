@@ -9,27 +9,27 @@ using BTokenCore;
 
 namespace BTokenCore_Testbench;
 
-public partial class Testbench
+internal partial class Testbench
 {
   abstract class Test_Testbench
   {
     protected Testbench Testbench;
 
-    public Test_Testbench(Testbench testbench)
+    internal Test_Testbench(Testbench testbench)
     {
       Testbench = testbench;
     }
 
-    public abstract bool TryRun(out string message);
+    internal abstract bool TryRun(out string message);
   }
 
   class MakeAnInstanceOfBitcoin : Test_Testbench
   {
-    public MakeAnInstanceOfBitcoin(Testbench testbench)
+    internal MakeAnInstanceOfBitcoin(Testbench testbench)
       : base(testbench)
     { }
 
-    public override bool TryRun(out string message)
+    internal override bool TryRun(out string message)
     {
       Testbench.TokenBitcoin = new TokenBitcoin(Testbench);
 
@@ -40,11 +40,11 @@ public partial class Testbench
 
   class MakeAnInstanceOfBToken : Test_Testbench
   {
-    public MakeAnInstanceOfBToken(Testbench testbench)
+    internal MakeAnInstanceOfBToken(Testbench testbench)
       : base(testbench)
     { }
 
-    public override bool TryRun(out string message)
+    internal override bool TryRun(out string message)
     {
       Testbench.TokenBToken = new TokenBToken(Testbench, Testbench.TokenBitcoin);
 
@@ -55,44 +55,52 @@ public partial class Testbench
 
   class StartBitcoin : Test_Testbench
   {
-    public StartBitcoin(Testbench testbench)
+    internal StartBitcoin(Testbench testbench)
       : base(testbench)
     { }
 
-    public override bool TryRun(out string message)
+    internal override bool TryRun(out string message)
     {
-      message = "";
-
       Testbench.TokenBitcoin.Start();
 
-      foreach (List<string> logsSendMessage in Testbench.TokenBitcoin.Network.GetLogsSendMessage())
+      foreach (Peer peer in Testbench.TokenBitcoin.Network.Peers)
       {
-        if (logsSendMessage[0] != "version")
-          message = "Did not initiate version message when starting Bitcoin.";
+        SocketTest socket = peer.SocketCommunication as SocketTest;
+
+        if (socket.LogsSendMessage[0] != "version")
+        {
+          message = $"Bitcoin peer did not initiate version message when starting BToken.";
+          return false;
+        }
       }
 
+      message = "";
       return true;
     }
   }
 
   class StartBToken : Test_Testbench
   {
-    public StartBToken(Testbench testbench)
+    internal StartBToken(Testbench testbench)
       : base(testbench)
     { }
 
-    public override bool TryRun(out string message)
+    internal override bool TryRun(out string message)
     {
-      message = "";
-
       Testbench.TokenBToken.Start();
 
-      foreach(List<string> logsSendMessage in Testbench.TokenBToken.Network.GetLogsSendMessage())
+      foreach (Peer peer in Testbench.TokenBToken.Network.Peers)
       {
-        if (logsSendMessage[0] != "version")
-          message = "Did not initiate version message when starting BToken.";
+        SocketTest socket = peer.SocketCommunication as SocketTest;
+
+        if (socket.LogsSendMessage[0] != "version")
+        {
+          message = $"BToken peer did not initiate version message when starting BToken.";
+          return false;
+        }
       }
 
+      message = "";
       return true;
     }
   }

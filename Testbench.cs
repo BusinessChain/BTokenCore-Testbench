@@ -10,7 +10,7 @@ using BTokenCore;
 
 namespace BTokenCore_Testbench;
 
-partial class Testbench : IEnvironment
+internal partial class Testbench : IEnvironment
 {
   List<Test_Testbench> Tests;
 
@@ -18,7 +18,7 @@ partial class Testbench : IEnvironment
   TokenBToken TokenBToken;
 
 
-  public Testbench()
+  internal Testbench()
   {
     Tests = new()
     {
@@ -54,7 +54,7 @@ partial class Testbench : IEnvironment
     return new SocketTCP(tcpClient);
   }
 
-  public void Start()
+  internal void Start()
   {
     bool resultIsSuccess = false;
     string message = "";

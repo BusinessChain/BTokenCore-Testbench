@@ -5,11 +5,12 @@ using BTokenCore;
 
 namespace BTokenCore_Testbench;
 
-public class SocketTest : ISocketCommunication
+internal class SocketTest : ISocketCommunication
 {
-  string ID;
+  internal string ID;
+  internal List<string> LogsSendMessage = new();
 
-  public SocketTest(string id)
+  internal SocketTest(string id)
   {
     ID = id;
   }
@@ -19,10 +20,9 @@ public class SocketTest : ISocketCommunication
 
   }
 
-  public List<string> LogSendMessage = new();
   public async Task SendMessage(string commandString, int lengthDataPayload, byte[] payload)
   {
-    LogSendMessage.Add(commandString);
+    LogsSendMessage.Add(commandString);
   }
 
   public async Task<string> ReceiveCommandMessageNext()
