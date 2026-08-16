@@ -10,7 +10,7 @@ using BTokenCore;
 
 namespace BTokenCore_Testbench;
 
-internal partial class Testbench : IEnvironment
+internal partial class Testbench : IEnvironment, IToken
 {
   List<Test_Testbench> Tests;
 
@@ -25,7 +25,8 @@ internal partial class Testbench : IEnvironment
       new MakeAnInstanceOfBitcoin(this),
       new MakeAnInstanceOfBToken(this),
       new StartBitcoin(this),
-      new StartBToken(this)
+      new StartBToken(this),
+      new TestBlockchainObject(this)
     };
   }
 

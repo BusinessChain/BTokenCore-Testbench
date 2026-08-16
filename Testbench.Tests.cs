@@ -104,4 +104,20 @@ internal partial class Testbench
       return true;
     }
   }
+
+
+  class TestBlockchainObject : Test_Testbench
+  {
+    internal TestBlockchainObject(Testbench testbench)
+      : base(testbench)
+    { }
+
+    internal override bool TryRun(out string message)
+    {
+      Blockchain blockchain = new(Testbench);
+
+      message = "";
+      return true;
+    }
+  }
 }
