@@ -114,7 +114,7 @@ internal partial class Testbench
 
     internal override bool TryRun(out string message)
     {
-      Blockchain blockchain = new(Testbench);
+      Blockchain blockchain = new(Testbench, Testbench.CreateHeaderGenesis());
 
       blockchain.LoadFromDisk();
 
