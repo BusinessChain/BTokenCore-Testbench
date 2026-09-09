@@ -27,7 +27,7 @@ internal partial class Testbench : IToken
     return null;
   }
 
-  public void ReverseBlock(Block block)
+  public void RollBack(Block block)
   {
 
   }
