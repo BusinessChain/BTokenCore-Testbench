@@ -116,8 +116,6 @@ internal partial class Testbench
     {
       Blockchain blockchain = new(Testbench.CreateHeaderGenesis());
 
-      blockchain.LoadFromDisk();
-
       message = "";
       return true;
     }
