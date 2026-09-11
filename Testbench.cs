@@ -1,9 +1,4 @@
-﻿using System;
-using System.Linq;
-using System.Text;
-using System.Net;
-using System.Net.Sockets;
-using System.Diagnostics;
+﻿using System.Diagnostics;
 
 using BTokenCore;
 
@@ -26,7 +21,7 @@ internal partial class Testbench
       new MakeAnInstanceOfBToken(this),
       new StartBitcoin(this),
       new StartBToken(this),
-      new TestBlockchainObject(this)
+      new TestModuleBlockchain(this)
     };
   }
 
