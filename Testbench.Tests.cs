@@ -176,7 +176,7 @@ internal partial class Testbench
 
       Blockchain chain = Blockchain.TryExtendHeaderchain(header737857);
 
-      if(Blockchain.HeaderRoot.HeaderNext != header737857
+      if (Blockchain.HeaderRoot.HeaderNext != header737857
         || header737857.HeaderNext != header737858
         || header737858.HeaderNext != header737859)
       {
