@@ -4,3 +4,4 @@
 - Language: English for chat and for code comments. Translate existing German comments to English when editing the surrounding code.
 - Git: never commit, push, or run any other git command that changes the repository (branches, merges, resets, stash, tags). Version control is solely the user's job. Read-only git commands (status, diff, log) are allowed.
 - Never add or change code on your own, including tests. First present each refactoring, with its purpose and all affected locations (files, methods, other scopes), and wait for approval before inserting any code. A refactoring may span several files; approval is per refactoring, not line by line.
+- Long sessions: warn me unprompted when the conversation may have become long enough to affect answer quality, and always right after a context compaction has happened. Suggest /compact or /clear, and say what should be saved first (e.g. to memory) so nothing important is lost.
