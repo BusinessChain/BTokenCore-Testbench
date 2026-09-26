@@ -174,7 +174,7 @@ internal partial class Testbench
         return false;
       }
 
-      Blockchain chain = Blockchain.TryExtendHeaderchain(header737857);
+      //Blockchain chain = Blockchain.TryExtendHeaderchain(header737857);
 
       if (Blockchain.HeaderRoot.HeaderNext != header737857
         || header737857.HeaderNext != header737858
