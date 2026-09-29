@@ -5,6 +5,7 @@
 - Git: never commit, push, or run any other git command that changes the repository (branches, merges, resets, stash, tags). Version control is solely the user's job. Read-only git commands (status, diff, log) are allowed.
 - Never add or change code on your own, including tests. First present each refactoring, with its purpose and all affected locations (files, methods, other scopes), and wait for approval before inserting any code. A refactoring may span several files; approval is per refactoring, not line by line.
 - Long sessions: warn me unprompted when the conversation may have become long enough to affect answer quality, and always right after a context compaction has happened. Suggest /compact or /clear, and say what should be saved first (e.g. to memory) so nothing important is lost.
+- Before fixing a broken mechanism, question whether it should exist at all or whether its underlying assumption is wrong. Prefer removing or redefining it over building a fix on top of it.
 
 Consensus In BToken (proof-of-transaction):
 A BToken block becomes eligible only when its hash is anchored in a Bitcoin block by a TXOutputTokenAnchor carrying the BToken IDToken. Per Bitcoin block, the first anchor for that IDToken wins the slot. If the winning anchor references a block that is invalid or never published or if there is no anchor at all, BToken simply misses that slot and honest miners keep mining on the current BToken tip.
