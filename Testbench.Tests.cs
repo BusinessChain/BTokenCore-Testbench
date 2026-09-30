@@ -77,7 +77,7 @@ internal partial class Testbench
 
   class TestModuleBlockchain : Test_Testbench
   {
-    Blockchain Blockchain;
+    Branch Blockchain;
 
     internal TestModuleBlockchain(Testbench testbench)
       : base(testbench)
