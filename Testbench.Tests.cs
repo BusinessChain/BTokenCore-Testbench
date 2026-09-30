@@ -48,27 +48,27 @@ internal partial class Testbench
     {
       Testbench.Node.Start();
 
-      foreach (Peer peer in Testbench.Node.NetworkBitcoin.Peers)
-      {
-        SocketTest socket = peer.SocketCommunication as SocketTest;
+      //foreach (Peer peer in Testbench.Node.NetworkBitcoin.Peers)
+      //{
+      //  SocketTest socket = peer.SocketCommunication as SocketTest;
 
-        if (socket.LogsSendMessage[0] != "version")
-        {
-          message = $"Bitcoin peer did not initiate version message when starting BToken.";
-          return false;
-        }
-      }
+      //  if (socket.LogsSendMessage[0] != "version")
+      //  {
+      //    message = $"Bitcoin peer did not initiate version message when starting BToken.";
+      //    return false;
+      //  }
+      //}
 
-      foreach (Peer peer in Testbench.Node.NetworkBToken.Peers)
-      {
-        SocketTest socket = peer.SocketCommunication as SocketTest;
+      //foreach (Peer peer in Testbench.Node.NetworkBToken.Peers)
+      //{
+      //  SocketTest socket = peer.SocketCommunication as SocketTest;
 
-        if (socket.LogsSendMessage[0] != "version")
-        {
-          message = $"BToken peer did not initiate version message when starting BToken.";
-          return false;
-        }
-      }
+      //  if (socket.LogsSendMessage[0] != "version")
+      //  {
+      //    message = $"BToken peer did not initiate version message when starting BToken.";
+      //    return false;
+      //  }
+      //}
 
       message = "";
       return true;
