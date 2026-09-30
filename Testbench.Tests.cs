@@ -23,47 +23,32 @@ internal partial class Testbench
     internal abstract bool TryRun(out string message);
   }
 
-  class MakeAnInstanceOfBitcoin : Test_Testbench
+  class MakeAnInstanceOfNode : Test_Testbench
   {
-    internal MakeAnInstanceOfBitcoin(Testbench testbench)
+    internal MakeAnInstanceOfNode(Testbench testbench)
       : base(testbench)
     { }
 
     internal override bool TryRun(out string message)
     {
-      Testbench.TokenBitcoin = new TokenBitcoin(Testbench);
+      Testbench.Node = new Node(Testbench);
 
       message = "";
       return true;
     }
   }
 
-  class MakeAnInstanceOfBToken : Test_Testbench
+  class StartNode : Test_Testbench
   {
-    internal MakeAnInstanceOfBToken(Testbench testbench)
+    internal StartNode(Testbench testbench)
       : base(testbench)
     { }
 
     internal override bool TryRun(out string message)
     {
-      Testbench.TokenBToken = new TokenBToken(Testbench, Testbench.TokenBitcoin);
+      Testbench.Node.Start();
 
-      message = "";
-      return true;
-    }
-  }
-
-  class StartBitcoin : Test_Testbench
-  {
-    internal StartBitcoin(Testbench testbench)
-      : base(testbench)
-    { }
-
-    internal override bool TryRun(out string message)
-    {
-      Testbench.TokenBitcoin.Start();
-
-      foreach (Peer peer in Testbench.TokenBitcoin.Network.Peers)
+      foreach (Peer peer in Testbench.Node.NetworkBitcoin.Peers)
       {
         SocketTest socket = peer.SocketCommunication as SocketTest;
 
@@ -74,22 +59,7 @@ internal partial class Testbench
         }
       }
 
-      message = "";
-      return true;
-    }
-  }
-
-  class StartBToken : Test_Testbench
-  {
-    internal StartBToken(Testbench testbench)
-      : base(testbench)
-    { }
-
-    internal override bool TryRun(out string message)
-    {
-      Testbench.TokenBToken.Start();
-
-      foreach (Peer peer in Testbench.TokenBToken.Network.Peers)
+      foreach (Peer peer in Testbench.Node.NetworkBToken.Peers)
       {
         SocketTest socket = peer.SocketCommunication as SocketTest;
 

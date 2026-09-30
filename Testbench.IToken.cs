@@ -18,7 +18,8 @@ internal partial class Testbench : IToken
 
   public Header CreateHeaderGenesis()
   {
-    return TokenBitcoin.CreateHeaderGenesis();
+    throw new NotImplementedException();
+    //return TokenBitcoin.CreateHeaderGenesis();
   }
 
   public Block MineBlock(int height, out TXOutputTokenAnchor anchorToken)

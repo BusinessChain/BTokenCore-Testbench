@@ -9,18 +9,15 @@ internal partial class Testbench
 {
   List<Test_Testbench> Tests;
 
-  TokenBitcoin TokenBitcoin;
-  TokenBToken TokenBToken;
+  Node Node;
 
 
   internal Testbench()
   {
     Tests = new()
     {
-      new MakeAnInstanceOfBitcoin(this),
-      new MakeAnInstanceOfBToken(this),
-      new StartBitcoin(this),
-      new StartBToken(this),
+      new MakeAnInstanceOfNode(this),
+      new StartNode(this),
       new TestModuleBlockchain(this)
     };
   }
