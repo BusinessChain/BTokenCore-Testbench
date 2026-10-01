@@ -1,10 +1,8 @@
 - If I tell you to delete everything or a large portion of something, or give you other profound instructions that may have serious repercussions, always ask me at least twice before you do it.
 - The code under test lives in the sibling repo `..\BTokenCore` (a separate git repository). You may edit both repositories, this testbench and BTokenCore, whenever a task requires it.
 - Project: BToken is a blockchain with its own token (BToken), like Bitcoin, but it replaces proof-of-work with proof-of-transaction: a miner declares the hash of the next BToken block by putting an anchor transaction (`TXOutputTokenAnchor`) into a block of the parent chain, Bitcoin. If several anchors are in the same Bitcoin block, the first one in the list wins. Status: prototype. Bold refactorings are welcome, and compatibility with existing data is not a concern.
-- Language: English for chat and for code comments. Translate existing German comments to English when editing the surrounding code.
+- Language: English for chat and for code comments.
 - Git: never commit, push, or run any other git command that changes the repository (branches, merges, resets, stash, tags). Version control is solely the user's job. Read-only git commands (status, diff, log) are allowed.
-- Never add or change code on your own, including tests. First present each refactoring, with its purpose and all affected locations (files, methods, other scopes), and wait for approval before inserting any code. A refactoring may span several files; approval is per refactoring, not line by line.
-- Long sessions: warn me unprompted when the conversation may have become long enough to affect answer quality, and always right after a context compaction has happened. Suggest /compact or /clear, and say what should be saved first (e.g. to memory) so nothing important is lost.
 - Before fixing a broken mechanism, question whether it should exist at all or whether its underlying assumption is wrong. Prefer removing or redefining it over building a fix on top of it.
 
 Consensus In BToken (proof-of-transaction):
