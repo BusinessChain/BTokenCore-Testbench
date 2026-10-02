@@ -31,7 +31,7 @@ internal class SocketTest : ISocketCommunication
     return "test";
   }
 
-  public async Task LoadMessageNext(MessageNetworkProtocol message)
+  public async Task LoadMessageNext(NetworkMessage message)
   {
 
   }
