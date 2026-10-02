@@ -31,9 +31,9 @@ internal class SocketTest : ISocketCommunication
     return "test";
   }
 
-  public async Task LoadMessageNext(NetworkMessage message)
+  public async Task<int> ReceivePayloadNext(byte[] buffer)
   {
-
+    return 0;
   }
 
   public void Dispose()
