@@ -22,12 +22,12 @@ internal partial class Testbench : ICommunication
     return new SocketTCP(tcpClient);
   }
 
-  //public ISocketCommunication GetSocketCommunication(Token token, string address)
+  //public ISocketCommunication GetSocketCommunication(int port, string address)
   //{
-  //  return new NetworkAdapterTCP(address, token.Port);
+  //  return new NetworkAdapterTCP(address, port);
   //}
 
-  public ISocketCommunication GetSocketCommunication(Token token, string address)
+  public ISocketCommunication GetSocketCommunication(int port, string address)
   {
     return new SocketTest(address);
   }
