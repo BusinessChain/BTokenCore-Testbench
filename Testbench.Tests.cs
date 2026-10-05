@@ -110,10 +110,10 @@ internal partial class Testbench
 
       try
       {
-        header737858.AppendToHeader(header737857);
+        header737858.TryAppendToHeader(header737857);
         header737857.HeaderNext = header737858;
 
-        header737859.AppendToHeader(header737858);
+        header737859.TryAppendToHeader(header737858);
         header737858.HeaderNext = header737859;
       }
       catch (Exception ex)
