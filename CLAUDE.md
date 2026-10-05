@@ -11,3 +11,6 @@
 
 ## Protocol
 6. BToken anchor winner rule: in each Bitcoin block the first anchor per IDToken wins unconditionally, whatever block it builds on. So the BToken header chain can be a branched tree even when the Bitcoin chain has no forks, and BToken needs its own fork choice. Forks are the recovery path: a withheld or invalid tip block only burns its slot, and honest miners' fork grows and wins.
+
+## Testing
+7. Never run the Testbench or any other test unless the user explicitly asks for it. Building (`dotnet build`) is allowed.
