@@ -432,3 +432,4 @@ FodyWeavers.xsd
 .claude/
 /.claude/plans/No-Headerchain-Sync-BToken.md
 /.claude/plans/No-Headerchain-Sync-BToken.md
+/.claude/settings.local.json
