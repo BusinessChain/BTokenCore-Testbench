@@ -429,7 +429,9 @@ FodyWeavers.xsd
 *.msp
 
 # Claude Code
-.claude/
+.claude/*
+!.claude/CLAUDE.md
+!.claude/Bugs.md
 /.claude/plans/No-Headerchain-Sync-BToken.md
 /.claude/plans/No-Headerchain-Sync-BToken.md
 /.claude/settings.local.json
