@@ -1,45 +1,45 @@
-﻿using BTokenCore;
-using System.Security.Cryptography;
+﻿//using BTokenCore;
+//using System.Security.Cryptography;
 
 
-namespace BTokenCore_Testbench;
+//namespace BTokenCore_Testbench;
 
-internal partial class Testbench : IToken
-{
-  public int GetSizeBlockBuffer()
-  {
-    return 1;
-  }
+//internal partial class Testbench : IToken
+//{
+//  public int GetSizeBlockBuffer()
+//  {
+//    return 1;
+//  }
 
-  public void InsertBlock(Block block)
-  {
+//  public void InsertBlock(Block block)
+//  {
 
-  }
+//  }
 
-  public Header CreateHeaderGenesis()
-  {
-    throw new NotImplementedException();
-    //return TokenBitcoin.CreateHeaderGenesis();
-  }
+//  public Header CreateHeaderGenesis()
+//  {
+//    throw new NotImplementedException();
+//    //return TokenBitcoin.CreateHeaderGenesis();
+//  }
 
-  public Block MineBlock(int height, out TXOutputTokenAnchor anchorToken)
-  {
-    anchorToken = null;
-    return null;
-  }
+//  public Block MineBlock(int height, out TXOutputTokenAnchor anchorToken)
+//  {
+//    anchorToken = null;
+//    return null;
+//  }
 
-  public void RollBack(Block block)
-  {
+//  public void RollBack(Block block)
+//  {
 
-  }
+//  }
 
-  public Header ParseHeader(byte[] buffer, ref int startIndex, SHA256 sha256)
-  {
-    return null;
-  }
+//  public Header ParseHeader(byte[] buffer, ref int startIndex, SHA256 sha256)
+//  {
+//    return null;
+//  }
 
-  public TX ParseTX(byte[] buffer, ref int startIndex, SHA256 sha256, bool flagIsCoinbase)
-  {
-    return null;
-  }
-}
+//  public TX ParseTX(byte[] buffer, ref int startIndex, SHA256 sha256, bool flagIsCoinbase)
+//  {
+//    return null;
+//  }
+//}
