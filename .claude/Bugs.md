@@ -13,7 +13,6 @@ Class names as of 2026-10-08: `Blockchain` (chain + persistence, `Blockchain\Blo
 54. Pool half-updated on a failed removal (found 2026-10-20): `PoolTXBToken.RemoveTXs`, the `OnBlockInserted` listener, removes a confirmed TX from `TXsByHash` before checking that it is its sender's first waiting TX in `TXsByIDAccountSource`. When the check throws, `AnnounceBlock` logs it, the TX stays in `TXsByIDAccountSource` and `OutputValuesByIDAccount` without its `TXsByHash` entry, and the block's later TXs stay in the pool. The block and the accounts are unaffected.
 
 **Messages**
-12. `PongMessage.Run` sets `peer.ProtocolStateMachine = null` (Pong isn't registered, so dormant, but wrong).
 15. Sender-side tx throttling: per-peer outgoing byte bucket (~90% of `TXMessage` limit, fee-rate ordered queue) in `Network.Broadcast` / `Miner.MineBlockNext`, so we never break our own DoS rule. Re-verified 2026-10-29: premature, BToken has no TX relay yet (`TXMessage.Run` is empty, TXs are only sent on getdata), see stalled plan "BToken TX Relay".
 
 **Network**
