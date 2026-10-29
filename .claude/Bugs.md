@@ -23,6 +23,7 @@ Class names as of 2026-10-08: `Blockchain` (chain + persistence, `Blockchain\Blo
 
 **Network**
 17. `COUNT_MAX_OUTBOUND_CONNECTIONS = 1` and hard-coded IP in `Network.GetPeer` (used by both the Bitcoin and the BToken network).
+56. Own TXs never delivered (found 2026-10-29): `Network.Broadcast` only sends an `inv` with `tX.Hash`, and the peer's `getdata` is answered through `Token.TryGetTX`, which always returns false in `TokenBitcoin` and `TokenBToken`. So the anchor TX from `Miner.MineTokenAnchor` never reaches the Bitcoin network. Older code once got TXs accepted by Bitcoin, probably by sending the raw TX directly in a `tx` message.
 
 **Mining** (`InsertBlockMined` currently commented out in `Miner`)
 23. No re-mine when the BToken tip changes: `Miner.OnBlockBitcoinInserted` mines right after the Bitcoin block is applied, before the newest placeholder's block has been announced and downloaded → it mines on the previous BToken tip. Re-mine once the newest block is inserted.
