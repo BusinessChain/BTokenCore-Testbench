@@ -14,6 +14,7 @@ Class names as of 2026-10-08: `Blockchain` (chain + persistence, `Blockchain\Blo
 
 **Messages**
 15. Sender-side tx throttling: per-peer outgoing byte bucket (~90% of `TXMessage` limit, fee-rate ordered queue) in `Network.Broadcast` / `Miner.MineBlockNext`, so we never break our own DoS rule. Re-verified 2026-10-29: premature, BToken has no TX relay yet (`TXMessage.Run` is empty, TXs are only sent on getdata), see stalled plan "BToken TX Relay".
+55. Free repeated chain download (found 2026-10-30): `GetDataMessage.Run` refunds the getdata count (`DOSMonitor.Decrement(1)`) for a served block higher than `HeightBlockDownloadedLast`, but overwrites `HeightBlockDownloadedLast` with every served block's height, also a lower one. A peer pays 1 to request block 1 and then re-downloads the whole chain for free, as often as it likes. Fix idea: keep the maximum height instead of overwriting.
 
 **Network**
 17. `COUNT_MAX_OUTBOUND_CONNECTIONS = 1` and hard-coded IP in `Network.GetPeer` (used by both the Bitcoin and the BToken network). The BToken network has no `SeedAddresses`, so it has no peer discovery at all. `AddressMessage` is never registered in `Network.CreateStateMachineProtocol`, so a received "addr" lands in `UnknownMessage` (10 KB buffer, larger payloads drop the peer); its `Run` is empty and its parsing sits in a constructor the receive path never calls. Low priority (user, 2026-10-29).
