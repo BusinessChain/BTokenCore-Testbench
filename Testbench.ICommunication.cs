@@ -29,6 +29,7 @@ internal partial class Testbench : ICommunication
 
   public ISocketCommunication GetSocketCommunication(int port, string address)
   {
-    return new SocketTest(address);
+    //return new SocketTest(address);
+    return null;
   }
 }
