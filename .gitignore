@@ -431,3 +431,4 @@ FodyWeavers.xsd
 # Claude Code
 /.claude/
 /TextFile1.txt
+/Docs
