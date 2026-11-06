@@ -17,3 +17,20 @@
 
 ## Testing
 10. Never run the Testbench or any other test unless the user explicitly asks for it. Building (`dotnet build`) is allowed.
+
+## Rating
+11. When the user asks for a rating of a concern in this project, rate its risk and its severity from 0 to 10 on this scale, and show the table beside the rating:
+
+| Score | Risk: how likely it happens | Severity: damage when it happens |
+|---|---|---|
+| 0 | Impossible | None |
+| 1 | Needs an extraordinary event, such as storage corruption | Brief delay of one node, which recovers by itself |
+| 2 | Needs a rare coincidence of honest events | One node stalls for minutes and recovers by itself |
+| 3 | Possible, but the attacker gains nothing | One node degraded for hours or needs its operator |
+| 4 | Attacker gains less than it costs | Several nodes degraded, recover by themselves |
+| 5 | Attacker gains about what it costs | One node holds wrong state |
+| 6 | Profitable for a well-funded attacker | Several nodes hold wrong state and need a resync |
+| 7 | Profitable for any motivated attacker | A merchant or user loses real value |
+| 8 | Cheap and profitable, expected now and then | Many users lose value, or the network partly stalls |
+| 9 | Happens regularly | Network stalls or splits and needs coordinated action |
+| 10 | Happens in normal operation | Consensus broken, funds created or lost network-wide |
