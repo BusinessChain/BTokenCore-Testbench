@@ -34,3 +34,5 @@
 | 8 | Cheap and profitable, expected now and then | Many users lose value, or the network partly stalls |
 | 9 | Happens regularly | Network stalls or splits and needs coordinated action |
 | 10 | Happens in normal operation | Consensus broken, funds created or lost network-wide |
+
+12. A problem counts as a bug only when it rates higher than 3 in both risk and severity, or higher than 5 in severity. Every other problem is dismissed as irrelevant and is neither reported nor listed in `.claude\Bugs.md`.
