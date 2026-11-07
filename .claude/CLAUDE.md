@@ -13,7 +13,7 @@
 8. The open bugs are listed in `.claude\Bugs.md`. When asked for the next bug, pick the one whose fix has the biggest scope in the code and re-verify it against the current code before proposing the fix. Reason: smaller bugs often disappear or change shape once the big ones are fixed.
 
 ## Protocol
-9. BToken anchor winner rule: in each Bitcoin block the first anchor per IDToken wins unconditionally, whatever block it builds on. So the BToken header chain can be a branched tree even when the Bitcoin chain has no forks, and BToken needs its own fork choice. Forks are the recovery path: a withheld or invalid tip block only burns its slot, and honest miners' fork grows and wins.
+9. BToken anchor winner rule: in each Bitcoin block the anchor per IDToken with the smallest SHA256 over the Bitcoin block hash and its HashBlockReferenced wins unconditionally, whatever block it builds on. So the BToken header chain can be a branched tree even when the Bitcoin chain has no forks, and BToken needs its own fork choice. Forks are the recovery path: a withheld or invalid tip block only burns its slot, and honest miners' fork grows and wins.
 
 ## Testing
 10. Never run the Testbench or any other test unless the user explicitly asks for it. Building (`dotnet build`) is allowed.
