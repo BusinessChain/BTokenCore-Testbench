@@ -19,20 +19,22 @@
 10. Never run the Testbench or any other test unless the user explicitly asks for it. Building (`dotnet build`) is allowed.
 
 ## Rating
-11. When the user asks for a rating of a concern in this project, rate its risk and its severity from 0 to 10 on this scale, and show the table beside the rating:
+11. When the user asks for a rating of a concern in this project, rate its risk, its severity and its fix effort from 0 to 10 on this scale, and show the table beside the rating:
 
-| Score | Risk: how likely it happens | Severity: damage when it happens |
-|---|---|---|
-| 0 | Impossible | None |
-| 1 | Needs an extraordinary event, such as storage corruption | Brief delay of one node, which recovers by itself |
-| 2 | Needs a rare coincidence of honest events | One node stalls for minutes and recovers by itself |
-| 3 | Possible, but the attacker gains nothing | One node degraded for hours or needs its operator |
-| 4 | Attacker gains less than it costs | Several nodes degraded, recover by themselves |
-| 5 | Attacker gains about what it costs | One node holds wrong state |
-| 6 | Profitable for a well-funded attacker | Several nodes hold wrong state and need a resync |
-| 7 | Profitable for any motivated attacker | A merchant or user loses real value |
-| 8 | Cheap and profitable, expected now and then | Many users lose value, or the network partly stalls |
-| 9 | Happens regularly | Network stalls or splits and needs coordinated action |
-| 10 | Happens in normal operation | Consensus broken, funds created or lost network-wide |
+| Score | Risk: how likely it happens | Severity: damage when it happens | Fix effort: decisions the fix needs |
+|---|---|---|---|
+| 0 | Impossible | None | Code can be deleted |
+| 1 | Needs an extraordinary event, such as storage corruption | Brief delay of one node, which recovers by itself | Nothing has to be done |
+| 2 | Needs a rare coincidence of honest events | One node stalls for minutes and recovers by itself | 1 decision |
+| 3 | Possible, but the attacker gains nothing | One node degraded for hours or needs its operator | 2 decisions |
+| 4 | Attacker gains less than it costs | Several nodes degraded, recover by themselves | 3 decisions |
+| 5 | Attacker gains about what it costs | One node holds wrong state | Up to 5 decisions |
+| 6 | Profitable for a well-funded attacker | Several nodes hold wrong state and need a resync | Up to 8 decisions |
+| 7 | Profitable for any motivated attacker | A merchant or user loses real value | Up to 12 decisions |
+| 8 | Cheap and profitable, expected now and then | Many users lose value, or the network partly stalls | Up to 20 decisions |
+| 9 | Happens regularly | Network stalls or splits and needs coordinated action | Up to 30 decisions |
+| 10 | Happens in normal operation | Consensus broken, funds created or lost network-wide | More than 30 decisions, a redesign |
 
-12. A problem counts as a bug only when it rates higher than 3 in both risk and severity, or higher than 5 in severity. Every other problem is dismissed as irrelevant and is neither reported nor listed in `.claude\Bugs.md`.
+Fix effort counts only decisions. Mechanical edits that follow from a decision, such as moving code or adapting callers, count as none.
+
+12. A problem counts as a bug only when it rates higher than 3 in both risk and severity, or higher than 5 in severity. A problem that is no bug but rates at least 1 in both risk and severity and at most 2 in fix effort is a cheap fix: report it as such so the user can decide to fix it, but don't list it in `.claude\Bugs.md`. Every other problem is dismissed as irrelevant and is neither reported nor listed.
