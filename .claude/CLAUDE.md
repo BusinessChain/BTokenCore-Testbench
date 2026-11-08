@@ -19,7 +19,7 @@
 10. Never run the Testbench or any other test unless the user explicitly asks for it. Building (`dotnet build`) is allowed.
 
 ## Rating
-11. When the user asks for a rating of a concern in this project, rate its risk, its severity and its fix effort from 0 to 10 on this scale, and show the table beside the rating:
+11. When the user asks for a rating of a concern in this project, rate its risk, its severity and its fix effort from 0 to 10 on this scale:
 
 | Score | Risk: how likely it happens | Severity: damage when it happens | Fix effort: decisions the fix needs |
 |---|---|---|---|
