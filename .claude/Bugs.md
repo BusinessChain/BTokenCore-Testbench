@@ -11,5 +11,3 @@ Class names as of 2026-10-30: `Blockchain` (chain + persistence, `Blockchain\Blo
 
 ## Open
 
-- **TX replay after an account is deleted and recreated in the same block.** WriteAccount deletes an account whose balance reaches 0, and ChangeBalance recreates a missing account through LoadAccount with the block's height as HeightAccountCreated and Nonce 0. So when in block k an account is created by a credit, spent to exactly 0 by its TX with HeightAccountCreated k and Nonce 0, and then credited again in the same block, it reappears with HeightAccountCreated k and Nonce 0, and Account.SpendTX accepts the same signed TX again, later in that block or in a later block, as long as the new balance covers it. Anyone who saw the TX can replay it and send the new credit to that TX's outputs again. Found 2026-11-06 by the review of the plan "Hash Accounts in Segments".
-
