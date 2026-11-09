@@ -10,7 +10,7 @@
 5. The code under test lives in the sibling repo `..\BTokenCore` (a separate git repository). You may edit both repositories, this testbench and BTokenCore, whenever a task requires it.
 6. Ignore the Testbench code unless an instruction or the user says otherwise: work and reason only on BTokenCore code, and skip the Testbench code when searching, renaming, analyzing or answering, without reporting on it. Instructions about the Testbench, such as the rule to comment out Testbench code broken by a BTokenCore refactoring, still apply.
 7. A plan-mode session file only points to the repo plan; all lasting changes (step details, statuses, review results) go into the repo plan, and plan work starts by reading it, not old session files.
-8. The open bugs are listed in `.claude\Bugs.md`. When asked for the next bug, pick the one whose fix has the biggest scope in the code and re-verify it against the current code before proposing the fix. Reason: smaller bugs often disappear or change shape once the big ones are fixed.
+8. The todo list `.claude\Todos.md` holds the open bugs and the improvements the user decided to note for later. When asked for the next bug, pick the one whose fix has the biggest scope in the code and re-verify it against the current code before proposing the fix. Reason: smaller bugs often disappear or change shape once the big ones are fixed.
 
 ## Protocol
 9. BToken anchor winner rule: in each Bitcoin block the anchor per IDToken with the smallest SHA256 over the Bitcoin block hash, its HashBlockReferenced and its HashBlockPreviousReferenced wins unconditionally, whatever block it builds on. So the BToken header chain can be a branched tree even when the Bitcoin chain has no forks, and BToken needs its own fork choice. Forks are the recovery path: a withheld or invalid tip block only burns its slot, and honest miners' fork grows and wins.
@@ -37,4 +37,4 @@
 
 Fix effort counts only decisions. Mechanical edits that follow from a decision, such as moving code or adapting callers, count as none.
 
-12. A problem counts as a bug only when it rates higher than 3 in both risk and severity, or higher than 5 in severity. A problem that is no bug but rates at least 1 in both risk and severity and at most 2 in fix effort is a cheap fix: report it as such so the user can decide to fix it, but don't list it in `.claude\Bugs.md`. Every other problem is dismissed as irrelevant and is neither reported nor listed.
+12. A problem counts as a bug only when it rates higher than 3 in both risk and severity, or higher than 5 in severity. A problem that is no bug but rates at least 1 in both risk and severity and at most 2 in fix effort is a cheap fix: report it as such so the user can decide to fix it, but don't list it in the todo list unless the user asks. Every other problem is dismissed as irrelevant and is neither reported nor listed.
