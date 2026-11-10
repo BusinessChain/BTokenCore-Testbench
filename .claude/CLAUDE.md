@@ -36,5 +36,3 @@
 | 10 | Happens in normal operation | Consensus broken, funds created or lost network-wide | More than 30 decisions, a redesign |
 
 Fix effort counts only decisions. Mechanical edits that follow from a decision, such as moving code or adapting callers, count as none.
-
-12. A problem counts as a bug only when it rates higher than 3 in both risk and severity, or higher than 5 in severity. A problem that is no bug but rates at least 1 in both risk and severity and at most 2 in fix effort is a cheap fix: report it as such so the user can decide to fix it, but don't list it in the todo list unless the user asks. Every other problem is dismissed as irrelevant and is neither reported nor listed.
