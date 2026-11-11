@@ -6,7 +6,7 @@
 3. If a BTokenCore refactoring breaks Testbench code, comment out the broken code in the Testbench and move on, without asking for approval. Never comment out or adapt BTokenCore code to keep the Testbench working. Mention in one line what was commented out. This rule can be deleted once the Testbench code is updated.
 
 ## Project
-4. We are currently in the prototyping stage. The code base is not yet operational.
+4. We are currently in the prototyping stage. The code base is not yet operational. So no existing node databases or stored data formats need migrating or deleting after a change, and compatibility with old data is no concern in designs or reviews.
 5. The code under test lives in the sibling repo `..\BTokenCore` (a separate git repository). You may edit both repositories, this testbench and BTokenCore, whenever a task requires it.
 6. Ignore the Testbench code unless an instruction or the user says otherwise: work and reason only on BTokenCore code, and skip the Testbench code when searching, renaming, analyzing or answering, without reporting on it. Instructions about the Testbench, such as the rule to comment out Testbench code broken by a BTokenCore refactoring, still apply.
 7. A plan-mode session file only points to the repo plan; all lasting changes (step details, statuses, review results) go into the repo plan, and plan work starts by reading it, not old session files.
