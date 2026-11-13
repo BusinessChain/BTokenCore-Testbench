@@ -20,7 +20,8 @@ internal partial class Testbench
 
       return BlockchainSynchronizing.TestFreshStart(Testbench.Wallet, ref message)
         && BlockchainSynchronizing.TestRollbackAtTip(Testbench.Wallet, ref message)
-        && BlockchainSynchronizing.TestRestartRollback(Testbench.Wallet, ref message);
+        && BlockchainSynchronizing.TestRestartRollback(Testbench.Wallet, ref message)
+        && BlockchainSynchronizing.TestReplayFromRoot(Testbench.Wallet, ref message);
     }
 
     class BlockchainSynchronizing : BlockchainTestbench
@@ -104,6 +105,28 @@ internal partial class Testbench
         blockchainRestarted.InsertBlocks(ledger.GetBlocksInserted().Where(b => b.Header.Height > 3).ToList());
 
         return blockchainRestarted.IsSynchronized("blocks above height 3 inserted again after the restart", 6, ref message);
+      }
+
+      internal static bool TestReplayFromRoot(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  4. Replay From Root: Replay all stored blocks after dropped or unknown accounts.");
+
+        if (!TryCreateLedger(wallet, out Ledger ledger, ref message))
+          return false;
+
+        BlockchainSynchronizing blockchain = StartNode(CreateLiteDatabase(), int.MaxValue);
+        blockchain.InsertBlocks(ledger.GetBlocksInserted());
+        blockchain.Synchronizer.Drop();
+
+        BlockchainSynchronizing blockchainRestarted = StartNode(blockchain.LiteDatabase, int.MaxValue);
+
+        if (!blockchainRestarted.IsSynchronized("restart after the account database was dropped", 6, ref message))
+          return false;
+
+        blockchainRestarted.BlocksStored.Delete(6);
+
+        return StartNode(blockchainRestarted.LiteDatabase, int.MaxValue)
+          .IsSynchronized("restart without the stored block the accounts applied last", 5, ref message);
       }
 
       static bool TryCreateLedger(Wallet wallet, out Ledger ledger, ref string message)
