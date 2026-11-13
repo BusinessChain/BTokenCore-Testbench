@@ -6,7 +6,7 @@ namespace BTokenCore_Testbench;
 
 internal partial class Testbench
 {
-  abstract class Test_Testbench
+  abstract partial class Test_Testbench
   {
     protected Testbench Testbench;
 
@@ -125,6 +125,49 @@ internal partial class Testbench
 
       message = $"{nameParser}: field {nameField} is {parsed} after parsing, expected {expected}.";
       return false;
+    }
+
+    protected const int SIZE_BLOCK_MAX = 1 << 20;
+
+    protected static BlockchainBToken.TXBToken ParseTXRaw(byte[] tXRaw)
+    {
+      int index = 0;
+      return new BlockchainBToken.TXBToken(tXRaw, ref index, isCoinbase: false, verifySignatures: true);
+    }
+
+    protected static bool IsRejected(string nameRule, Action action, ref string message)
+    {
+      try
+      {
+        action();
+      }
+      catch (ProtocolException)
+      {
+        return true;
+      }
+      catch (Exception exception)
+      {
+        message = $"{nameRule}: threw {exception.GetType().Name} instead of rejecting with ProtocolException: {exception.Message}";
+        return false;
+      }
+
+      message = $"{nameRule}: accepted the invalid case.";
+      return false;
+    }
+
+    protected static bool IsAccepted(string nameRule, Action action, ref string message)
+    {
+      try
+      {
+        action();
+      }
+      catch (Exception exception)
+      {
+        message = $"{nameRule}: rejected the valid case with {exception.GetType().Name}: {exception.Message}";
+        return false;
+      }
+
+      return true;
     }
   }
 }

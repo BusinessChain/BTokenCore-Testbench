@@ -4,9 +4,25 @@ namespace BTokenCore_Testbench;
 
 internal partial class Testbench
 {
-  partial class TestConsensusRules
+  class TestTXPool : Test_Testbench
   {
-    abstract partial class BlockchainAccounts
+    internal TestTXPool(Testbench testbench)
+      : base(testbench)
+    { }
+
+    internal override bool TryRun(out string message)
+    {
+      message = "";
+
+      return BlockchainTXPool.TestSpendAdmission(Testbench.Wallet, ref message)
+        && BlockchainTXPool.TestCreationAdmission(Testbench.Wallet, ref message)
+        && BlockchainTXPool.TestBundleRanking(Testbench.Wallet, ref message)
+        && BlockchainTXPool.TestPoolEviction(Testbench.Wallet, ref message)
+        && BlockchainTXPool.TestBlockInsertion(Testbench.Wallet, ref message)
+        && BlockchainTXPool.TestBlockRollback(Testbench.Wallet, ref message);
+    }
+
+    abstract class BlockchainTXPool : BlockchainTestbench
     {
       const int COUNT_TXS_MAX_ACCOUNT = 25;
       const long COUNT_BYTES_MAX_POOL = 100 * SIZE_BLOCK_MAX;
@@ -16,7 +32,7 @@ internal partial class Testbench
 
       internal static bool TestSpendAdmission(Wallet wallet, ref string message)
       {
-        Console.WriteLine("  22. Spend Admission: Admit TXs by LockTime, sweep, Nonce, Balance and count.");
+        Console.WriteLine("  1. Spend Admission: Admit TXs by LockTime, sweep, Nonce, Balance and count.");
 
         Ledger ledger = new(heightRoot: 0);
 
@@ -62,7 +78,7 @@ internal partial class Testbench
 
       internal static bool TestCreationAdmission(Wallet wallet, ref string message)
       {
-        Console.WriteLine("  23. Creation Admission: Count pending account creations against CountAccountsMax and sweeps.");
+        Console.WriteLine("  2. Creation Admission: Count pending account creations against CountAccountsMax and sweeps.");
 
         Ledger ledger = new(heightRoot: 0);
 
@@ -93,7 +109,7 @@ internal partial class Testbench
 
       internal static bool TestBundleRanking(Wallet wallet, ref string message)
       {
-        Console.WriteLine("  24. Bundle Ranking: Merge bundles, rank by fee per byte, select by size.");
+        Console.WriteLine("  3. Bundle Ranking: Merge bundles, rank by fee per byte, select by size.");
 
         Ledger ledger = new(heightRoot: 0);
 
@@ -132,7 +148,7 @@ internal partial class Testbench
 
       internal static bool TestPoolEviction(Wallet wallet, ref string message)
       {
-        Console.WriteLine("  25. Pool Eviction: Reject low bids, evict worst bundles, report minimum fee.");
+        Console.WriteLine("  4. Pool Eviction: Reject low bids, evict worst bundles, report minimum fee.");
 
         Ledger ledger = new(heightRoot: 0);
 
@@ -194,7 +210,7 @@ internal partial class Testbench
 
       internal static bool TestBlockInsertion(Wallet wallet, ref string message)
       {
-        Console.WriteLine("  26. Block Insertion: Drop confirmed, expired, conflicting, swept and over-limit TXs.");
+        Console.WriteLine("  5. Block Insertion: Drop confirmed, expired, conflicting, swept and over-limit TXs.");
 
         const long BALANCE_WALLET_SWEPT = 100000;
 
@@ -263,7 +279,7 @@ internal partial class Testbench
 
       internal static bool TestBlockRollback(Wallet wallet, ref string message)
       {
-        Console.WriteLine("  27. Block Rollback: Return rolled-back TXs in front, drop expired anchors.");
+        Console.WriteLine("  6. Block Rollback: Return rolled-back TXs in front, drop expired anchors.");
 
         Ledger ledger = new(heightRoot: 0);
 
@@ -375,31 +391,6 @@ internal partial class Testbench
           return IsAccepted(nameRule, () => pool.AddTX(ParseTXRaw(tX.TXRaw)), ref message);
 
         return IsRejected(nameRule, () => pool.AddTX(ParseTXRaw(tX.TXRaw)), ref message);
-      }
-
-      partial class Ledger
-      {
-        PoolTXBToken TXPool;
-
-        internal PoolTXBToken CreateTXPool(long countBytesMaxPool)
-        {
-          TXPool = new PoolTXBToken(Accounts, countBytesMaxPool);
-
-          return TXPool;
-        }
-
-        internal bool TryInsertBlockFromPool(string nameCase, PoolTXBToken pool, Wallet wallet, byte[] iDMiner, int countTXsExpected, ref string message)
-        {
-          List<TXBToken> tXs = pool.GetTXs(SIZE_BLOCK_MAX).Cast<TXBToken>().ToList();
-
-          if (tXs.Count != countTXsExpected)
-          {
-            message = $"TX pool, {nameCase}: GetTXs selects {tXs.Count} TXs, expected {countTXsExpected}.";
-            return false;
-          }
-
-          return TryInsertBlock(nameCase, [CreateCoinbase(wallet, iDMiner, tXs.Sum(t => t.Fee)), .. tXs], isValidExpected: true, null, ref message);
-        }
       }
     }
   }
