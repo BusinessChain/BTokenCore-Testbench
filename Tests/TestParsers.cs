@@ -143,6 +143,7 @@ internal partial class Testbench
 
       BlockchainBToken.TXBToken tXCoinbase = CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic);
       tXCoinbase.Nonce = 0;
+      tXCoinbase.TXOutputs.RemoveAll(o => o is TXOutputTokenAnchor);
       tXCoinbase.SerializeUnsigned();
 
       BlockchainBToken.TXBToken tX = CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic);
@@ -179,6 +180,18 @@ internal partial class Testbench
       for (int i = 0; i < block.TXs.Count; i++)
         if (!AreTXsBTokenEqual($"{nameParser}, TXs[{i}]", (BlockchainBToken.TXBToken)block.TXs[i], (BlockchainBToken.TXBToken)blockParsed.TXs[i], ref message))
           return false;
+
+      TXOutputTokenAnchor anchorParsed = blockParsed.TXs[1].TXOutputs.OfType<TXOutputTokenAnchor>().Single();
+
+      if (!IsFieldEqual(nameParser, "AnchorsWinner.Count", 1, blockParsed.Header.AnchorsWinner.Count, ref message))
+        return false;
+
+      if (!blockParsed.Header.AnchorsWinner.TryGetValue(anchorParsed.IDToken, out TXOutputTokenAnchor anchorWinner)
+        || anchorWinner != anchorParsed)
+      {
+        message = $"{nameParser}: the anchor of TXs[1] is not the anchor winner of IDToken {anchorParsed.IDToken.ToHexString()}.";
+        return false;
+      }
 
       return true;
     }
