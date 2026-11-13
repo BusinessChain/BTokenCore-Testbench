@@ -31,13 +31,9 @@ internal partial class Testbench
       const string NAME_TOKEN = "TestAnchoring";
       const int COUNT_MAX_BLOCKS_STORED = COUNT_SEGMENTS + BITCOIN_REORG_MARGIN;
 
-      BlockchainParentFake ParentFake;
-
       BlockchainAnchoring(LiteDatabase liteDatabase, BlockchainParentFake blockchainParent)
         : base(NAME_TOKEN, liteDatabase, blockchainParent)
-      {
-        ParentFake = blockchainParent;
-      }
+      { }
 
       // Counter-tested 2026-11-13 19:05
       internal static bool TestAnchoredFollow(Wallet wallet, ref string message)

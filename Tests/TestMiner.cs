@@ -36,18 +36,13 @@ internal partial class Testbench
     class BlockchainMining : BlockchainTestbench
     {
       const string NAME_TOKEN = "TestMiner";
-      const long VALUE_FUNDING = 100_000;
-      const long FEE_ANCHOR = 1000;
       const int LENGTH_ANCHOR = 10 + 148 + 9 + TXOutputTokenAnchor.LENGTH_SCRIPT_ANCHOR_TOKEN + 34;
 
-      BlockchainParentFake ParentFake;
       BlockchainBitcoin.TXBitcoin TXFunding;
 
       BlockchainMining(LiteDatabase liteDatabase, BlockchainParentFake blockchainParent)
         : base(NAME_TOKEN, liteDatabase, blockchainParent)
-      {
-        ParentFake = blockchainParent;
-      }
+      { }
 
       internal static bool TestMineCoinbase(Wallet wallet, ref string message)
       {
@@ -537,12 +532,6 @@ internal partial class Testbench
         return false;
       }
 
-      void SetFeeAnchor()
-      {
-        StartMining(1, FEE_ANCHOR);
-        StopMining();
-      }
-
       bool IsAnchorSpending(string nameCase, BlockchainBitcoin.TXBitcoin tXAnchor, byte[] tXIDExpected, int indexExpected, long feeExpected, ref string message)
       {
         if (tXAnchor.Inputs.Count != 1
@@ -629,25 +618,6 @@ internal partial class Testbench
 
         return TryMineAnchor(nameCase, MinerBlockchain.MineBlock, out BlockchainBitcoin.TXBitcoin tXAnchor, ref message)
           && TryInsertAnchored(nameCase, tXAnchor, out block, ref message);
-      }
-
-      bool TryMineAnchor(string nameCase, Action mine, out BlockchainBitcoin.TXBitcoin tXAnchor, ref string message)
-      {
-        tXAnchor = null;
-
-        if (!IsAccepted($"{nameCase}, mining", mine, ref message))
-          return false;
-
-        List<byte[]> hashesAnchor = ParentFake.GetHashesTXOwnedUnconfirmed();
-
-        if (hashesAnchor.Count == 1 && ParentFake.GetTX(hashesAnchor[0]) is BlockchainBitcoin.TXBitcoin tXOwned)
-        {
-          tXAnchor = tXOwned;
-          return true;
-        }
-
-        message = $"{nameCase}: mining left {hashesAnchor.Count} anchors at the Bitcoin tip, expected one.";
-        return false;
       }
 
       bool TryInsertAnchored(string nameCase, BlockchainBitcoin.TXBitcoin tXAnchor, out Block block, ref string message)

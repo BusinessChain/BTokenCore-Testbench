@@ -98,7 +98,81 @@ internal partial class Testbench
         && TestLocatorLimit(ref message)
         && TestHeadersInsertion(ref message)
         && TestReturnIdle(ref message)
-        && TestEndToEnd(blocksWindow, spendsWindow[0], ref message);
+        && TestEndToEnd(blocksWindow, spendsWindow[0], ref message)
+        && TestNetworkRecovery(Testbench.Wallet, ref message);
+    }
+
+    static bool TestNetworkRecovery(Wallet wallet, ref string message)
+    {
+      Console.WriteLine("  39. Network Recovery: A second node adopts the replacement after a burnt slot.");
+
+      const string NAME_CASE = "Network recovery";
+      const string IP_FOLLOWER = "10.0.6.2";
+
+      if (!BlockchainNetwork.TryCreateBlocks(wallet, [], out List<Block> blocks, out _, ref message))
+        return false;
+
+      CommunicationFake communicationMiner = new();
+      CommunicationFake communicationFollower = new();
+      communicationFollower.LinkOutbound(communicationMiner, IP_FOLLOWER);
+
+      NetworkTestbench networkMiner = BlockchainNetwork.StartNode(
+        communicationMiner,
+        prepare: b => b.AnchorAndDeliver(blocks),
+        prepareParent: p => p.Fund(BlockchainNetwork.VALUE_FUNDING));
+
+      NetworkTestbench networkFollower = BlockchainNetwork.StartNode(
+        communicationFollower,
+        prepareParent: p =>
+        {
+          p.MineAnchors(blocks);
+          p.MineBlock([]);
+        });
+
+      BlockchainNetwork blockchainMiner = (BlockchainNetwork)networkMiner.Blockchain;
+      BlockchainNetwork blockchainFollower = (BlockchainNetwork)networkFollower.Blockchain;
+      int heightTip = blocks[^1].Header.Height;
+
+      if (!IsAtHeight($"{NAME_CASE}, follower synchronized", networkFollower, heightTip, ref message)
+        || !blockchainFollower.IsAccountsSynchronized($"{NAME_CASE}, follower synchronized", SECONDS_TIMEOUT_REQUEST, ref message))
+        return false;
+
+      blockchainMiner.RunLocked(blockchainMiner.SetFeeAnchor).Wait();
+
+      TXOutputTokenAnchor anchorWithheld = BlockchainParentFake.CreateAnchor(RandomNumberGenerator.GetBytes(32), blocks[^1].Header.Hash);
+
+      if (!blockchainMiner.TryMineAnchorLocked(NAME_CASE, isReplacingAnchorsMissed: false, out _, ref message))
+        return false;
+
+      MineBitcoinBlock(blockchainMiner, blockchainFollower, [], anchorWithheld);
+
+      string nameCaseWithheld = $"{NAME_CASE}, slot won by the withheld block";
+
+      if (!IsAtHeight($"{nameCaseWithheld}, miner", networkMiner, heightTip, ref message)
+        || !IsAtHeight($"{nameCaseWithheld}, follower", networkFollower, heightTip, ref message)
+        || !blockchainMiner.TryMineAnchorLocked($"{NAME_CASE}, replacement anchor", isReplacingAnchorsMissed: true, out BlockchainBitcoin.TXBitcoin tXReplacement, ref message))
+        return false;
+
+      MineBitcoinBlock(blockchainMiner, blockchainFollower, [tXReplacement], tXReplacement.TXOutputs.OfType<TXOutputTokenAnchor>().Single());
+
+      string nameCaseReplaced = $"{NAME_CASE}, slot won by the replacement";
+
+      if (!IsAtHeight($"{nameCaseReplaced}, miner", networkMiner, heightTip + 1, ref message)
+        || !IsAtHeight($"{nameCaseReplaced}, follower", networkFollower, heightTip + 1, ref message)
+        || !blockchainFollower.IsAccountsSynchronized($"{nameCaseReplaced}, follower", SECONDS_TIMEOUT_REQUEST, ref message))
+        return false;
+
+      if (networkMiner.IsPeerListed(IP_FOLLOWER))
+        return true;
+
+      message = $"{nameCaseReplaced}: the miner lost the follower as peer.";
+      return false;
+    }
+
+    static void MineBitcoinBlock(BlockchainNetwork blockchainMiner, BlockchainNetwork blockchainFollower, List<BlockchainBitcoin.TXBitcoin> tXsMiner, TXOutputTokenAnchor anchorWinner)
+    {
+      blockchainMiner.RunLocked(() => blockchainMiner.ParentFake.MineBlock(tXsMiner, anchorWinner)).Wait();
+      blockchainFollower.RunLocked(() => blockchainFollower.ParentFake.MineBlock([], anchorWinner)).Wait();
     }
 
     static bool TestEndToEnd(List<Block> blocksWindow, BlockchainBToken.TXBToken spend, ref string message)
@@ -1858,13 +1932,22 @@ internal partial class Testbench
     {
       const string NAME_TOKEN = "TestNetwork";
 
-      internal BlockchainParentFake ParentFake;
-
-
       BlockchainNetwork(LiteDatabase liteDatabase, BlockchainParentFake blockchainParent)
         : base(NAME_TOKEN, liteDatabase, blockchainParent)
+      { }
+
+      internal bool TryMineAnchorLocked(string nameCase, bool isReplacingAnchorsMissed, out BlockchainBitcoin.TXBitcoin tXAnchor, ref string message)
       {
-        ParentFake = blockchainParent;
+        string messageMining = message;
+        BlockchainBitcoin.TXBitcoin tXMined = null;
+        Action mine = isReplacingAnchorsMissed ? MinerBlockchain.ReplaceAnchorsMissed : MinerBlockchain.MineBlock;
+
+        bool isMined = RunLocked(() => TryMineAnchor(nameCase, mine, out tXMined, ref messageMining)).Result;
+
+        tXAnchor = tXMined;
+        message = messageMining;
+
+        return isMined;
       }
 
       internal static bool TryCreateBlocks(Wallet wallet, List<Action<TXBToken>> altersSpend, out List<Block> blocks, out List<TXBToken> spends, ref string message, int heightTip = 0)

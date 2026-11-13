@@ -19,8 +19,12 @@ internal partial class Testbench
       protected const int PERIOD_HALVING = 52_500;
       protected const long FEE = 1000;
       protected const long VALUE_SPEND = 50000;
+      internal const long VALUE_FUNDING = 100_000;
+      internal const long FEE_ANCHOR = 1000;
 
       static readonly Comparer<byte[]> ComparerID = Comparer<byte[]>.Create((a, b) => a.AsSpan().SequenceCompareTo(b));
+
+      internal BlockchainParentFake ParentFake;
 
       protected BlockchainTestbench()
         : base(null, null, null, null, null)
@@ -28,7 +32,34 @@ internal partial class Testbench
 
       protected BlockchainTestbench(string nameToken, LiteDatabase liteDatabase, Blockchain blockchainParent)
         : base(nameToken, liteDatabase, "BTK", blockchainParent, new SemaphoreSlim(1))
-      { }
+      {
+        ParentFake = blockchainParent as BlockchainParentFake;
+      }
+
+      internal void SetFeeAnchor()
+      {
+        StartMining(1, FEE_ANCHOR);
+        StopMining();
+      }
+
+      internal bool TryMineAnchor(string nameCase, Action mine, out BlockchainBitcoin.TXBitcoin tXAnchor, ref string message)
+      {
+        tXAnchor = null;
+
+        if (!IsAccepted($"{nameCase}, mining", mine, ref message))
+          return false;
+
+        List<byte[]> hashesAnchor = ParentFake.GetHashesTXOwnedUnconfirmed();
+
+        if (hashesAnchor.Count == 1 && ParentFake.GetTX(hashesAnchor[0]) is BlockchainBitcoin.TXBitcoin tXOwned)
+        {
+          tXAnchor = tXOwned;
+          return true;
+        }
+
+        message = $"{nameCase}: mining left {hashesAnchor.Count} anchors at the Bitcoin tip, expected one.";
+        return false;
+      }
 
       protected void DeliverBlocks(List<Block> blocksLedger)
       {
