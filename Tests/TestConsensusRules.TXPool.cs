@@ -9,6 +9,7 @@ internal partial class Testbench
     abstract partial class BlockchainAccounts
     {
       const int COUNT_TXS_MAX_ACCOUNT = 25;
+      const long COUNT_BYTES_MAX_POOL = 100 * SIZE_BLOCK_MAX;
 
       internal static bool TestSpendAdmission(Wallet wallet, ref string message)
       {
@@ -22,7 +23,7 @@ internal partial class Testbench
         if (!ledger.TryInsertBlock("coinbase creating the wallet account", [ledger.CreateCoinbase(wallet, wallet.Hash160PKeyPublic, 0)], isValidExpected: true, null, ref message))
           return false;
 
-        PoolTXBToken poolCount = ledger.CreateTXPool();
+        PoolTXBToken poolCount = ledger.CreateTXPool(COUNT_BYTES_MAX_POOL);
 
         for (int i = 0; i <= COUNT_TXS_MAX_ACCOUNT; i++)
           if (!IsAdmitted($"spend number {i + 1} of one account", poolCount, ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => t.Nonce += i), i < COUNT_TXS_MAX_ACCOUNT, ref message))
@@ -31,7 +32,7 @@ internal partial class Testbench
         int heightTip = ledger.GetHeightTip();
         long balanceLeft = ledger.GetBalanceNext(wallet.Hash160PKeyPublic) - 2 * (VALUE_SPEND + FEE);
 
-        PoolTXBToken pool = ledger.CreateTXPool();
+        PoolTXBToken pool = ledger.CreateTXPool(COUNT_BYTES_MAX_POOL);
 
         if (!IsAdmitted("anchor TX with LockTime below the tip height", pool, ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => AddAnchor(t, heightTip - 1)), false, ref message)
           || !IsAdmitted("anchor TX with LockTime above the tip height", pool, ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => AddAnchor(t, heightTip + 1)), false, ref message)
@@ -73,7 +74,7 @@ internal partial class Testbench
           || !ledger.TryInsertBlock("coinbase creating 99 accounts in one segment", [CreateCoinbaseAccounts(ledger, wallet, indexSegmentCreation, 99)], isValidExpected: true, null, ref message))
           return false;
 
-        PoolTXBToken pool = ledger.CreateTXPool();
+        PoolTXBToken pool = ledger.CreateTXPool(COUNT_BYTES_MAX_POOL);
 
         if (!IsAdmitted("spend creating two accounts in a segment with room for one", pool, ledger.CreateTXSpend(wallet, iDCreatedPending, VALUE_SPEND, t => t.TXOutputs.Add(new TXOutputP2PKH(VALUE_SPEND, iDCreatedOverLimit))), false, ref message)
           || !IsAdmitted("spend creating one account in a segment with room for one", pool, ledger.CreateTXSpend(wallet, iDCreatedPending, VALUE_SPEND, t => { }), true, ref message)
@@ -84,7 +85,7 @@ internal partial class Testbench
           || !TryInsertCoinbasesUpTo(ledger, wallet, iDMiner, indexSegmentCreation - 1, ref message))
           return false;
 
-        return IsAdmitted("spend creating two accounts in a full segment the next sweep empties", ledger.CreateTXPool(), ledger.CreateTXSpend(wallet, iDCreatedOverLimit, VALUE_SPEND, t => t.TXOutputs.Add(new TXOutputP2PKH(VALUE_SPEND, iDCreatedAfterSweep))), true, ref message);
+        return IsAdmitted("spend creating two accounts in a full segment the next sweep empties", ledger.CreateTXPool(COUNT_BYTES_MAX_POOL), ledger.CreateTXSpend(wallet, iDCreatedOverLimit, VALUE_SPEND, t => t.TXOutputs.Add(new TXOutputP2PKH(VALUE_SPEND, iDCreatedAfterSweep))), true, ref message);
       }
 
       static bool IsAdmittedBeforeSweep(Wallet wallet, byte[] iDMiner, byte[] iDReceiver, int heightRoot, long balanceWallet, bool isAdmittedExpected, ref string message)
@@ -92,7 +93,7 @@ internal partial class Testbench
         Ledger ledger = new(heightRoot);
 
         return ledger.TryInsertBlock($"coinbase creating the wallet account with Balance {balanceWallet} before its sweep", [ledger.CreateCoinbase(wallet, iDMiner, 0, new TXOutputP2PKH(balanceWallet, wallet.Hash160PKeyPublic))], isValidExpected: true, null, ref message)
-          && IsAdmitted($"spend of 1 from the wallet account with Balance {balanceWallet} before its sweep", ledger.CreateTXPool(), ledger.CreateTXSpend(wallet, iDReceiver, 1, t => t.Fee = 0), isAdmittedExpected, ref message);
+          && IsAdmitted($"spend of 1 from the wallet account with Balance {balanceWallet} before its sweep", ledger.CreateTXPool(COUNT_BYTES_MAX_POOL), ledger.CreateTXSpend(wallet, iDReceiver, 1, t => t.Fee = 0), isAdmittedExpected, ref message);
       }
 
       static bool IsAdmitted(string nameCase, PoolTXBToken pool, TXBToken tX, bool isAdmittedExpected, ref string message)
@@ -107,9 +108,9 @@ internal partial class Testbench
 
       partial class Ledger
       {
-        internal PoolTXBToken CreateTXPool()
+        internal PoolTXBToken CreateTXPool(long countBytesMaxPool)
         {
-          return new PoolTXBToken(Accounts);
+          return new PoolTXBToken(Accounts, countBytesMaxPool);
         }
 
         internal bool TryInsertBlockFromPool(string nameCase, PoolTXBToken pool, Wallet wallet, byte[] iDMiner, int countTXsExpected, ref string message)
