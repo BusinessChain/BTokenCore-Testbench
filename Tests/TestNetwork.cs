@@ -54,7 +54,8 @@ internal partial class Testbench
         && TestAddressPort(ref message)
         && TestAddressDOS(ref message)
         && TestBlockDownload(Testbench.Wallet, ref message)
-        && TestBlockRefusal(Testbench.Wallet, ref message);
+        && TestBlockRefusal(Testbench.Wallet, ref message)
+        && TestUnrequestedBlock(ref message);
     }
 
     static bool TestHandshakeOutbound(ref string message)
@@ -491,6 +492,31 @@ internal partial class Testbench
         SendBlock(socketPeer, blockRefused);
 
         return IsAtHeight(NAME_CASE, network, blocks[^2].Header.Height, ref message);
+      }
+      finally
+      {
+        socketPeer.Dispose();
+      }
+    }
+
+    static bool TestUnrequestedBlock(ref string message)
+    {
+      Console.WriteLine("  13. Unrequested Block: Disconnect a peer that sends a block unasked.");
+
+      const string NAME_CASE = "Unrequested block";
+
+      CommunicationFake communication = new();
+      BlockchainNetwork.StartNode(communication);
+      SocketFake socketPeer = communication.ConnectInbound(IP_PEER);
+
+      try
+      {
+        if (!TryHandshakeInbound(NAME_CASE, socketPeer, ref message))
+          return false;
+
+        socketPeer.SendMessage(COMMAND_BLOCK, 1, [0x00]).Wait();
+
+        return socketPeer.IsDisconnected(NAME_CASE, ref message);
       }
       finally
       {
