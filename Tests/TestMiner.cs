@@ -364,7 +364,7 @@ internal partial class Testbench
             t.TXOutputs.AddRange(Enumerable.Range(0, countOutputsAdded).Select(_ => new TXOutputP2PKH(1, iDReceiver)));
           });
 
-          if (!IsAccepted($"{nameCase}, spend {i} added to the pool", () => AddTX(tX), ref message))
+          if (!IsAccepted($"{nameCase}, spend {i} added to the pool", () => AddTX(ParseTXRaw(tX.TXRaw)), ref message))
             return false;
 
           hashesTX.Add(tX.Hash);
