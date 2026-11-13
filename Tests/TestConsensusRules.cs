@@ -33,7 +33,8 @@ internal partial class Testbench
         && BlockchainChain.TestKnownHeaders(ref message)
         && BlockchainChain.TestHeaderPlaceholders(ref message)
         && BlockchainChain.TestForkPruning(ref message)
-        && Test_BlockSize(ref message);
+        && Test_BlockSize(ref message)
+        && BlockchainAccounts.TestSingleRollbacks(Testbench.Wallet, ref message);
     }
 
     const int SIZE_BLOCK_MAX = 1 << 20;
@@ -149,7 +150,6 @@ internal partial class Testbench
         : base(null, null, null, null)
       { }
 
-      // Counter-tested 2026-11-13
       internal static bool TestSpendingRules(Wallet wallet, ref string message)
       {
         Console.WriteLine("  4. Reject spends with wrong Nonce or HeightAccountCreated, too little Balance, unknown or emptied account, replays and wrong HashAccounts.");
@@ -188,7 +188,6 @@ internal partial class Testbench
           && ledger.TryInsertBlock("spend of the whole Balance", [ledger.CreateCoinbase(wallet, iDMiner, FEE), tXSpendBalance], isValidExpected: true, null, ref message);
       }
 
-      // Counter-tested 2026-11-13
       internal static bool TestCoinbaseRules(Wallet wallet, ref string message)
       {
         Console.WriteLine("  5. Check the coinbase against block reward, fees and rent, including the halving.");
@@ -247,7 +246,6 @@ internal partial class Testbench
           && ledgerHalvingLast.TryInsertBlock("coinbase paying no block reward after 64 halvings", [ledgerHalvingLast.CreateCoinbase(wallet, iDMiner, 0)], isValidExpected: true, null, ref message);
       }
 
-      // Counter-tested 2026-11-13
       internal static bool TestBlockLimits(Wallet wallet, ref string message)
       {
         Console.WriteLine("  6. Reject anchor TXs with wrong LockTime and new accounts above CountAccountsMax of a segment.");
@@ -268,6 +266,71 @@ internal partial class Testbench
           && ledger.TryInsertBlock("anchor TX with LockTime of the height before the block", [ledger.CreateCoinbase(wallet, iDMiner, FEE), ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => AddAnchor(t, lockTimeValid))], isValidExpected: true, null, ref message)
           && ledger.TryInsertBlock("coinbase creating 101 accounts in one segment", [CreateCoinbaseAccounts(ledger, wallet, indexSegmentAccounts, 101)], isValidExpected: false, null, ref message)
           && ledger.TryInsertBlock("coinbase creating 100 accounts in one segment", [CreateCoinbaseAccounts(ledger, wallet, indexSegmentAccounts, 100)], isValidExpected: true, null, ref message);
+      }
+
+      internal static bool TestSingleRollbacks(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  13. Roll back blocks one by one to the root, compare all accounts after each, and insert them again.");
+
+        Ledger ledger = new(heightRoot: 0);
+
+        int indexSegmentWallet = GetIndexSegment(wallet.Hash160PKeyPublic);
+        int indexSegmentRent = indexSegmentWallet == 3 ? 4 : 3;
+        byte[] iDMiner = CreateIDAccount(1000, 1);
+        byte[] iDReceiver = CreateIDAccount(1001, 2);
+        byte[] iDRentPaying = CreateIDAccount(indexSegmentRent, 3);
+        byte[] iDRentSwept = CreateIDAccount(indexSegmentRent, 4);
+        byte[] iDRentSweptExactly = CreateIDAccount(indexSegmentRent, 5);
+
+        TXBToken tXCoinbaseRentAccounts = ledger.CreateCoinbase(wallet, wallet.Hash160PKeyPublic, 0);
+        ((TXOutputP2PKH)tXCoinbaseRentAccounts.TXOutputs[0]).Value -= 100 + 20 + RENT_SWEEP;
+        tXCoinbaseRentAccounts.TXOutputs.Add(new TXOutputP2PKH(100, iDRentPaying));
+        tXCoinbaseRentAccounts.TXOutputs.Add(new TXOutputP2PKH(20, iDRentSwept));
+        tXCoinbaseRentAccounts.TXOutputs.Add(new TXOutputP2PKH(RENT_SWEEP, iDRentSweptExactly));
+        tXCoinbaseRentAccounts.SerializeUnsigned();
+
+        if (!ledger.TryInsertBlock("coinbase creating the wallet account and three accounts in a rent segment", [tXCoinbaseRentAccounts], isValidExpected: true, null, ref message)
+          || !ledger.TryInsertBlock("spend and TX paying only a Fee", [
+            ledger.CreateCoinbase(wallet, iDMiner, 2 * FEE),
+            ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => { }),
+            ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t =>
+            {
+              t.Nonce += 1;
+              t.TXOutputs.Clear();
+            })], isValidExpected: true, null, ref message))
+          return false;
+
+        while (ledger.GetHeightTip() < indexSegmentRent - 1)
+          if (!ledger.TryInsertBlock("coinbase before the sweep", [ledger.CreateCoinbase(wallet, iDMiner, 0)], isValidExpected: true, null, ref message))
+            return false;
+
+        TXBToken tXCoinbaseRecreating = ledger.CreateCoinbase(wallet, iDMiner, 0);
+        ((TXOutputP2PKH)tXCoinbaseRecreating.TXOutputs[0]).Value -= 50;
+        tXCoinbaseRecreating.TXOutputs.Add(new TXOutputP2PKH(50, iDRentSwept));
+        tXCoinbaseRecreating.SerializeUnsigned();
+
+        if (!ledger.TryInsertBlock("sweep recreating a swept account", [tXCoinbaseRecreating], isValidExpected: true, null, ref message)
+          || !ledger.TryInsertBlock("output to and spend from the wallet account", [ledger.CreateCoinbase(wallet, wallet.Hash160PKeyPublic, FEE), ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => { })], isValidExpected: true, null, ref message))
+          return false;
+
+        if (!ledger.TryInsertBlock("spend of the whole Balance", [ledger.CreateCoinbase(wallet, iDMiner, FEE), ledger.CreateTXSpend(wallet, iDReceiver, ledger.GetBalanceNext(wallet.Hash160PKeyPublic) - FEE, t => { })], isValidExpected: true, null, ref message))
+          return false;
+
+        List<List<TXBToken>> tXsRolledBack = [];
+
+        while (ledger.GetHeightTip() > 0)
+        {
+          if (!ledger.TryRollBack("single rollbacks", out List<TXBToken> tXs, ref message))
+            return false;
+
+          tXsRolledBack.Insert(0, tXs);
+        }
+
+        foreach (List<TXBToken> tXs in tXsRolledBack)
+          if (!ledger.TryInsertBlock("block inserted again after rolling back to the root", tXs, isValidExpected: true, null, ref message))
+            return false;
+
+        return true;
       }
 
       static void AddAnchor(TXBToken tX, int lockTime)
@@ -319,7 +382,9 @@ internal partial class Testbench
         DatabaseAccounts Accounts = new();
         Dictionary<byte[], Account> AccountsReference = new(new EqualityComparerByteArray());
         HashSet<byte[]> IDsAccountSeen = new(new EqualityComparerByteArray());
+        List<(Header header, List<TXBToken> tXs, Dictionary<byte[], Account> accountsBefore)> BlocksInserted = [];
         int HeightTip;
+        byte[] HashTip = new byte[32];
 
 
         internal Ledger(int heightRoot)
@@ -380,6 +445,7 @@ internal partial class Testbench
           Block block = CreateBlock(tXs);
           HeaderBToken header = (HeaderBToken)block.Header;
           header.Height = height;
+          header.HashPrevious = HashTip;
           header.HashAccounts = ComputeHashAccounts(accountsAfter, height);
           header.ComputeHash();
 
@@ -407,24 +473,59 @@ internal partial class Testbench
 
           IDsAccountSeen.UnionWith(accountsAfter.Keys);
 
+          if (!AreAccountsStoredCorrect($"{nameCase}, after the block at height {height}", accountsAfter, ref message))
+            return false;
+
+          BlocksInserted.Add((blockParsed.Header, tXs, AccountsReference));
+          AccountsReference = accountsAfter;
+          HeightTip = height;
+          HashTip = blockParsed.Header.Hash;
+
+          return true;
+        }
+
+        internal bool TryRollBack(string nameCase, out List<TXBToken> tXsRolledBack, ref string message)
+        {
+          (Header header, tXsRolledBack, Dictionary<byte[], Account> accountsBefore) = BlocksInserted[^1];
+          BlocksInserted.RemoveAt(BlocksInserted.Count - 1);
+
+          LiteDatabase.RunTransaction(() => Accounts.RollBack(header));
+
+          AccountsReference = accountsBefore;
+          HeightTip = header.Height - 1;
+          HashTip = header.HashPrevious;
+
+          string nameCaseRollBack = $"{nameCase}, after the rollback of the block at height {header.Height}";
+
+          if (!AreAccountsStoredCorrect(nameCaseRollBack, accountsBefore, ref message))
+            return false;
+
+          if (!Accounts.GetHashBlockAppliedLast().IsAllBytesEqual(HashTip))
+          {
+            message = $"Account rules, {nameCaseRollBack}: the last applied block is {Accounts.GetHashBlockAppliedLast().ToHexString()}, expected {HashTip.ToHexString()}.";
+            return false;
+          }
+
+          return true;
+        }
+
+        bool AreAccountsStoredCorrect(string nameCase, Dictionary<byte[], Account> accountsExpected, ref string message)
+        {
           foreach (byte[] iDAccount in IDsAccountSeen)
           {
             Account accountStored = Accounts.LoadAccount(iDAccount, heightAccountCreated: 0);
-            Account accountExpected = accountsAfter.GetValueOrDefault(iDAccount) ?? new Account();
+            Account accountExpected = accountsExpected.GetValueOrDefault(iDAccount) ?? new Account();
 
             if (accountStored.HeightAccountCreated != accountExpected.HeightAccountCreated
               || accountStored.Nonce != accountExpected.Nonce
               || accountStored.Balance != accountExpected.Balance)
             {
-              message = $"Account rules, {nameCase}: after the block at height {height} account {iDAccount.ToHexString()} holds " +
+              message = $"Account rules, {nameCase}: account {iDAccount.ToHexString()} holds " +
                 $"HeightAccountCreated {accountStored.HeightAccountCreated}, Nonce {accountStored.Nonce}, Balance {accountStored.Balance}, " +
                 $"expected {accountExpected.HeightAccountCreated}, {accountExpected.Nonce}, {accountExpected.Balance}.";
               return false;
             }
           }
-
-          AccountsReference = accountsAfter;
-          HeightTip = height;
 
           return true;
         }
