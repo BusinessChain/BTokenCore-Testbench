@@ -101,7 +101,65 @@ internal partial class Testbench
         && TestReturnIdle(ref message)
         && TestEndToEnd(blocksWindow, spendsWindow[0], ref message)
         && TestNetworkRecovery(Testbench.Wallet, ref message)
-        && TestPoolConvergence(Testbench.Wallet, ref message);
+        && TestPoolConvergence(Testbench.Wallet, ref message)
+        && TestAnnounceReopened(Testbench.Wallet, ref message);
+    }
+
+    static bool TestAnnounceReopened(Wallet wallet, ref string message)
+    {
+      Console.WriteLine("  41. Announce Reopened: Announce an own TX again after its rollback.");
+
+      const string NAME_CASE = "Announce reopened";
+      const int MILLISECONDS_HEARTBEATS_PASSED = 2500;
+
+      if (!BlockchainNetwork.TryCreateBlocks(wallet, [t => { }], out List<Block> blocks, out List<BlockchainBToken.TXBToken> spends, ref message, isSpendFirstConfirmed: true))
+        return false;
+
+      BlockchainBToken.TXBToken spend = spends[0];
+      Block blockConfirming = blocks[^1];
+      int heightTip = blockConfirming.Header.Height - 1;
+
+      NetworkTestbench network = StartNodeWithTwoPeers(blocks[..^1], out SocketFake socketPeer, out SocketFake socketOther);
+      BlockchainNetwork blockchain = (BlockchainNetwork)network.Blockchain;
+
+      try
+      {
+        if (!TryHandshakeTwoPeers(NAME_CASE, network, socketPeer, socketOther, ref message))
+          return false;
+
+        blockchain.RunLocked(() => blockchain.SubmitTX(spend.TXRaw)).Wait();
+
+        foreach (SocketFake socket in new[] { socketPeer, socketOther })
+          if (!IsTXAnnounced($"{NAME_CASE}, spend submitted", socket, spend.Hash, ref message))
+            return false;
+
+        blockchain.RunLocked(() => blockchain.AnchorAndDeliver([blockConfirming])).Wait();
+
+        if (!IsAtHeight($"{NAME_CASE}, block confirming the spend", network, heightTip + 1, ref message))
+          return false;
+
+        Thread.Sleep(MILLISECONDS_HEARTBEATS_PASSED);
+
+        blockchain.RunLocked(() => blockchain.ParentFake.RollBackTo(blockchain.ParentFake.GetHeight() - 1)).Wait();
+
+        if (!IsAtHeight($"{NAME_CASE}, rollback of the confirming block", network, heightTip, ref message))
+          return false;
+
+        foreach (SocketFake socket in new[] { socketPeer, socketOther })
+          if (!IsTXAnnounced($"{NAME_CASE}, spend reopened by the rollback", socket, spend.Hash, ref message))
+            return false;
+
+        if (IsNoTXAnnounced(socketPeer) && IsNoTXAnnounced(socketOther))
+          return true;
+
+        message = $"{NAME_CASE}: the node announces the reopened spend more than once.";
+        return false;
+      }
+      finally
+      {
+        socketPeer.Dispose();
+        socketOther.Dispose();
+      }
     }
 
     static bool TestNetworkRecovery(Wallet wallet, ref string message)
@@ -1992,17 +2050,24 @@ internal partial class Testbench
         return isMined;
       }
 
-      internal static bool TryCreateBlocks(Wallet wallet, List<Action<TXBToken>> altersSpend, out List<Block> blocks, out List<TXBToken> spends, ref string message, int heightTip = 0)
+      internal static bool TryCreateBlocks(Wallet wallet, List<Action<TXBToken>> altersSpend, out List<Block> blocks, out List<TXBToken> spends, ref string message, int heightTip = 0, bool isSpendFirstConfirmed = false)
       {
         blocks = null;
         spends = null;
 
+        byte[] iDMiner = CreateIDAccount(1000, 1);
+
         if (!TryCreateLedger(wallet, out Ledger ledger, ref message)
-          || !TryInsertCoinbasesUpTo(ledger, wallet, CreateIDAccount(1000, 1), heightTip, ref message))
+          || !TryInsertCoinbasesUpTo(ledger, wallet, iDMiner, heightTip, ref message))
+          return false;
+
+        spends = altersSpend.Select(a => ledger.CreateTXSpend(wallet, CreateIDAccount(1001, 2), VALUE_SPEND, a)).ToList();
+
+        if (isSpendFirstConfirmed
+          && !ledger.TryInsertBlock("block confirming the first spend", [ledger.CreateCoinbase(wallet, iDMiner, spends[0].Fee), spends[0]], isValidExpected: true, null, ref message))
           return false;
 
         blocks = ledger.GetBlocksInserted();
-        spends = altersSpend.Select(a => ledger.CreateTXSpend(wallet, CreateIDAccount(1001, 2), VALUE_SPEND, a)).ToList();
         return true;
       }
 
