@@ -9,16 +9,12 @@ internal partial class Testbench
 {
   List<Test_Testbench> Tests;
 
-  Node Node;
-
 
   internal Testbench()
   {
     Tests = new()
     {
       new TestParsers(this),
-      new MakeAnInstanceOfNode(this),
-      new StartNode(this),
       new TestModuleBlockchain(this)
     };
   }

@@ -33,7 +33,15 @@ internal partial class Testbench
     {
       message = "";
 
-      return Test_HeaderBToken(ref message);
+      return Test_HeaderBToken(ref message)
+        && Test_TXBToken(ref message);
+    }
+
+    const int COUNT_BYTES_LEADING = 7;
+
+    static byte[] EmbedInBuffer(byte[] data)
+    {
+      return [0xff, 0xfe, 0xfd, 0xfc, 0xfb, 0xfa, 0xf9, .. data, 0xf8];
     }
 
     bool Test_HeaderBToken(ref string message)
@@ -50,10 +58,8 @@ internal partial class Testbench
 
       byte[] headerSerialized = header.Serialize();
 
-      byte[] bufferWithOffset = [0xff, 0xfe, 0xfd, 0xfc, 0xfb, 0xfa, 0xf9, .. headerSerialized, 0xf8];
-
       return IsHeaderBTokenParsedEqual(header, headerSerialized, 0, ref message)
-        && IsHeaderBTokenParsedEqual(header, bufferWithOffset, 7, ref message);
+        && IsHeaderBTokenParsedEqual(header, EmbedInBuffer(headerSerialized), COUNT_BYTES_LEADING, ref message);
     }
 
     static bool IsHeaderBTokenParsedEqual(HeaderBToken header, byte[] buffer, int indexStart, ref string message)
@@ -73,6 +79,112 @@ internal partial class Testbench
         && IsFieldEqual(nameParser, "index after parsing", indexStart + HeaderBToken.COUNT_HEADER_BYTES, index, ref message);
     }
 
+    bool Test_TXBToken(ref string message)
+    {
+      string pathWallet = Path.GetTempFileName();
+
+      try
+      {
+        File.WriteAllText(pathWallet, Crypto.GenerateKeyPrivate());
+
+        Wallet wallet = new(pathWallet);
+
+        BlockchainBToken.TXBToken tX = CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic);
+        tX.Serialize(wallet);
+
+        return IsTXBTokenParsedEqual(tX, tX.TXRaw, 0, isCoinbase: false, ref message)
+          && IsTXBTokenParsedEqual(tX, EmbedInBuffer(tX.TXRaw), COUNT_BYTES_LEADING, isCoinbase: false, ref message);
+      }
+      finally
+      {
+        File.Delete(pathWallet);
+      }
+    }
+
+    static BlockchainBToken.TXBToken CreateTXBToken(byte[] keyPublic, byte[] iDAccountReceiving)
+    {
+      TXOutputTokenAnchor tXOutputTokenAnchor = new()
+      {
+        IDToken = [0x01, 0x02, 0x03, 0x04],
+        HashBlockReferenced = "0000000000000000000735fc64773067fd0175461148902c97c494ffa3ca9306".ToBinary(),
+        HashBlockPreviousReferenced = "0000000000000000000230d9bb1db81e56916b0c2c7363231e75b82b24714482".ToBinary()
+      };
+
+      tXOutputTokenAnchor.Serialize();
+
+      BlockchainBToken.TXBToken tX = new()
+      {
+        KeyPublic = keyPublic,
+        HeightAccountCreated = 1234,
+        Nonce = 5,
+        Fee = 1000,
+        LockTime = 737857
+      };
+
+      tX.TXOutputs.Add(new TXOutputP2PKH(50000, iDAccountReceiving));
+      tX.TXOutputs.Add(tXOutputTokenAnchor);
+
+      return tX;
+    }
+
+    static bool IsTXBTokenParsedEqual(BlockchainBToken.TXBToken tX, byte[] buffer, int indexStart, bool isCoinbase, ref string message)
+    {
+      int index = indexStart;
+
+      BlockchainBToken.TXBToken tXParsed = new(buffer, ref index, isCoinbase, verifySignatures: true);
+
+      string nameParser = $"{nameof(BlockchainBToken.TXBToken)} parsed from index {indexStart}";
+
+      return IsFieldEqual(nameParser, nameof(tX.KeyPublic), tX.KeyPublic, tXParsed.KeyPublic, ref message)
+        && IsFieldEqual(nameParser, nameof(tX.IDAccountSource), Crypto.ComputeHash160(tX.KeyPublic), tXParsed.IDAccountSource, ref message)
+        && IsFieldEqual(nameParser, nameof(tX.HeightAccountCreated), tX.HeightAccountCreated, tXParsed.HeightAccountCreated, ref message)
+        && IsFieldEqual(nameParser, nameof(tX.Nonce), tX.Nonce, tXParsed.Nonce, ref message)
+        && IsFieldEqual(nameParser, nameof(tX.Fee), tX.Fee, tXParsed.Fee, ref message)
+        && IsFieldEqual(nameParser, nameof(tX.LockTime), tX.LockTime, tXParsed.LockTime, ref message)
+        && IsFieldEqual(nameParser, nameof(tX.Hash), tX.Hash, tXParsed.Hash, ref message)
+        && IsFieldEqual(nameParser, nameof(tX.TXRaw), tX.TXRaw, tXParsed.TXRaw, ref message)
+        && IsFieldEqual(nameParser, nameof(tX.CountBytes), tX.TXRaw.Length, tXParsed.CountBytes, ref message)
+        && AreTXOutputsParsedEqual(nameParser, tX.TXOutputs, tXParsed.TXOutputs, ref message)
+        && IsFieldEqual(nameParser, "index after parsing", indexStart + tX.TXRaw.Length, index, ref message);
+    }
+
+    static bool AreTXOutputsParsedEqual(string nameParser, List<TXOutput> tXOutputs, List<TXOutput> tXOutputsParsed, ref string message)
+    {
+      if (!IsFieldEqual(nameParser, "TXOutputs.Count", tXOutputs.Count, tXOutputsParsed.Count, ref message))
+        return false;
+
+      for (int i = 0; i < tXOutputs.Count; i++)
+      {
+        string nameOutput = $"TXOutputs[{i}]";
+
+        if (tXOutputs[i].GetType() != tXOutputsParsed[i].GetType())
+        {
+          message = $"{nameParser}: {nameOutput} is {tXOutputsParsed[i].GetType().Name} after parsing, expected {tXOutputs[i].GetType().Name}.";
+          return false;
+        }
+
+        if (tXOutputs[i] is TXOutputP2PKH outputP2PKH)
+        {
+          TXOutputP2PKH outputP2PKHParsed = (TXOutputP2PKH)tXOutputsParsed[i];
+
+          if (!IsFieldEqual(nameParser, $"{nameOutput}.Value", outputP2PKH.Value, outputP2PKHParsed.Value, ref message)
+            || !IsFieldEqual(nameParser, $"{nameOutput}.IDAccount", outputP2PKH.IDAccount, outputP2PKHParsed.IDAccount, ref message))
+            return false;
+        }
+        else if (tXOutputs[i] is TXOutputTokenAnchor outputAnchor)
+        {
+          TXOutputTokenAnchor outputAnchorParsed = (TXOutputTokenAnchor)tXOutputsParsed[i];
+
+          if (!IsFieldEqual(nameParser, $"{nameOutput}.IDToken", outputAnchor.IDToken, outputAnchorParsed.IDToken, ref message)
+            || !IsFieldEqual(nameParser, $"{nameOutput}.HashBlockReferenced", outputAnchor.HashBlockReferenced, outputAnchorParsed.HashBlockReferenced, ref message)
+            || !IsFieldEqual(nameParser, $"{nameOutput}.HashBlockPreviousReferenced", outputAnchor.HashBlockPreviousReferenced, outputAnchorParsed.HashBlockPreviousReferenced, ref message))
+            return false;
+        }
+      }
+
+      return true;
+    }
+
     static bool IsFieldEqual(string nameParser, string nameField, byte[] expected, byte[] parsed, ref string message)
     {
       if (expected.AsSpan().SequenceEqual(parsed))
@@ -90,36 +202,6 @@ internal partial class Testbench
 
       message = $"{nameParser}: field {nameField} is {parsed} after parsing, expected {expected}.";
       return false;
-    }
-  }
-
-  class MakeAnInstanceOfNode : Test_Testbench
-  {
-    internal MakeAnInstanceOfNode(Testbench testbench)
-      : base(testbench)
-    { }
-
-    internal override bool TryRun(out string message)
-    {
-      Testbench.Node = new Node(Testbench);
-
-      message = "";
-      return true;
-    }
-  }
-
-  class StartNode : Test_Testbench
-  {
-    internal StartNode(Testbench testbench)
-      : base(testbench)
-    { }
-
-    internal override bool TryRun(out string message)
-    {
-      Testbench.Node.Start();
-            
-      message = "";
-      return true;
     }
   }
 
