@@ -39,7 +39,8 @@ internal partial class Testbench
         && TestServicesMissing(ref message)
         && TestHandshakeTimeout(ref message)
         && TestOutboundLimit(ref message)
-        && TestOutboundFailure(ref message);
+        && TestOutboundFailure(ref message)
+        && TestInboundDuplicate(ref message);
     }
 
     static bool TestHandshakeOutbound(ref string message)
@@ -219,6 +220,41 @@ internal partial class Testbench
       finally
       {
         socketSeed.Dispose();
+      }
+    }
+
+    static bool TestInboundDuplicate(ref string message)
+    {
+      Console.WriteLine("  7. Inbound Duplicate: Reject a second inbound connection from one IP.");
+
+      const string NAME_CASE = "Inbound duplicate";
+
+      CommunicationFake communication = new();
+      NetworkTestbench network = BlockchainNetwork.StartNode(communication);
+      SocketFake socketPeer = communication.ConnectInbound(IP_PEER);
+      SocketFake socketDuplicate = null;
+
+      try
+      {
+        if (!TryHandshakeInbound(NAME_CASE, socketPeer, ref message)
+          || !IsPeerListed(NAME_CASE, network, IP_PEER, ref message))
+          return false;
+
+        socketDuplicate = communication.ConnectInbound(IP_PEER);
+
+        if (!socketDuplicate.IsDisconnected(NAME_CASE, ref message))
+          return false;
+
+        if (network.IsPeerListed(IP_PEER))
+          return true;
+
+        message = $"{NAME_CASE}: the node dropped the first peer {IP_PEER} when rejecting the duplicate.";
+        return false;
+      }
+      finally
+      {
+        socketPeer.Dispose();
+        socketDuplicate?.Dispose();
       }
     }
 
