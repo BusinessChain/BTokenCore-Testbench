@@ -25,7 +25,7 @@ internal partial class Testbench
       // Counter-tested 2026-11-13 14:03
       internal static bool TestForkPermutations(ref string message)
       {
-        Console.WriteLine("  7. Choose the strongest fork in every permutation of BToken header trees with up to three forks.");
+        Console.WriteLine("  7. Fork Permutations: Choose strongest fork in every BToken header tree permutation.");
 
         for (int countBlocksMain = 0; countBlocksMain <= COUNT_HEADERS_MAIN; countBlocksMain++)
           if (!TryForkPermutations(countBlocksMain, [], COUNT_FORKS_MAX, IsForkChoiceCorrect, ref message))
@@ -37,7 +37,7 @@ internal partial class Testbench
       // Counter-tested 2026-11-13 14:03
       internal static bool TestForkPruning(ref string message)
       {
-        Console.WriteLine("  11. Check DropForksDeep and ReRoot at every height on every permutation of BToken header trees with up to two forks.");
+        Console.WriteLine("  11. Fork Pruning: Check DropForksDeep and ReRoot at every height.");
 
         for (int countBlocksMain = 0; countBlocksMain <= COUNT_HEADERS_MAIN; countBlocksMain++)
           if (!TryForkPermutations(countBlocksMain, [], COUNT_FORKS_PRUNING_MAX, IsPruningCorrect, ref message))
@@ -105,7 +105,7 @@ internal partial class Testbench
       // Counter-tested 2026-11-13 14:03
       internal static bool TestKnownHeaders(ref string message)
       {
-        Console.WriteLine("  9. Insert known, partly known, unconnected and too deep headers.");
+        Console.WriteLine("  9. Known Headers: Insert known, partly known, unconnected and too deep headers.");
 
         HeaderBToken headerRoot = CreateHeaderBToken(new byte[32]);
         Chain chainRoot = new(headerRoot);
@@ -153,7 +153,7 @@ internal partial class Testbench
       // Counter-tested 2026-11-13 14:03
       internal static bool TestHeaderPlaceholders(ref string message)
       {
-        Console.WriteLine("  10. Insert, find and cut off header placeholders in the main chain and in forks.");
+        Console.WriteLine("  10. Header Placeholders: Insert, find and cut off placeholders in all branches.");
 
         HeaderBToken headerRoot = CreateHeaderBToken(new byte[32]);
         Chain chainRoot = new(headerRoot);
@@ -313,7 +313,7 @@ internal partial class Testbench
       // Counter-tested 2026-11-13 14:03
       internal static bool TestAlternatingSwitches(ref string message)
       {
-        Console.WriteLine("  8. Switch two competing branches back and forth.");
+        Console.WriteLine("  8. Alternating Switches: Switch two competing branches back and forth.");
 
         HeaderBToken headerRoot = CreateHeaderBToken(new byte[32]);
         Chain chainRoot = new(headerRoot);

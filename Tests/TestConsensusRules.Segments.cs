@@ -12,7 +12,7 @@ internal partial class Testbench
     {
       internal static bool TestServedSegments(Wallet wallet, ref string message)
       {
-        Console.WriteLine("  17. Serve the segment of every block within the retained undo records as it was right after that block.");
+        Console.WriteLine("  17. Served Segments: Serve each block's segment as it was after that block.");
 
         const int COUNT_MAX_BLOCKS_STORED = COUNT_SEGMENTS + BITCOIN_REORG_MARGIN;
 
@@ -48,7 +48,7 @@ internal partial class Testbench
 
       static bool TestHeightGuards(Ledger ledgerServing, Wallet wallet, byte[] iDMiner, ref string message)
       {
-        Console.WriteLine("  18. Serve no segment above the tip, below the retained undo records or below the installed height.");
+        Console.WriteLine("  18. Height Guards: Serve nothing above tip, below undo records or installation.");
 
         Ledger ledgerInstalled = new(heightRoot: 10);
 
@@ -63,7 +63,7 @@ internal partial class Testbench
 
       internal static bool TestMalformedSegments(ref string message)
       {
-        Console.WriteLine("  19. Accept well-formed segments and reject segments with wrong length, count, segment index or order of IDs.");
+        Console.WriteLine("  19. Malformed Segments: Reject segments with wrong length, count, segment or order.");
 
         byte[] iDFirst = CreateIDAccount(INDEX_SEGMENT, 1);
         byte[] iDSecond = CreateIDAccount(INDEX_SEGMENT, 2);
@@ -133,7 +133,7 @@ internal partial class Testbench
 
       internal static bool TestInstalledAccounts(Wallet wallet, ref string message)
       {
-        Console.WriteLine("  20. Install the served segments into a fresh database and compare all accounts and account counts.");
+        Console.WriteLine("  20. Installed Accounts: Install served segments, compare all accounts and account counts.");
 
         const int HEIGHT_INSTALLED = COUNT_SEGMENTS + BITCOIN_REORG_MARGIN;
 
@@ -164,7 +164,7 @@ internal partial class Testbench
 
       static bool TestContinuedBlocks(Ledger ledgerServing, Ledger ledgerInstalled, ref string message)
       {
-        Console.WriteLine("  21. Insert the blocks above the installed height into the installed database and compare all accounts after each.");
+        Console.WriteLine("  21. Continued Blocks: Insert later blocks into installed database, comparing accounts.");
 
         return ledgerInstalled.TryInsertBlocksAbove(ledgerServing, ref message);
       }

@@ -41,7 +41,7 @@ internal partial class Testbench
     // Counter-tested 2026-11-13 14:03
     bool Test_HeaderBToken(ref string message)
     {
-      Console.WriteLine("  1. Round-trip HeaderBToken at two offsets.");
+      Console.WriteLine("  1. HeaderBToken Round-Trip: Serialize and parse HeaderBToken at two buffer offsets.");
 
       HeaderBToken header = CreateHeaderBToken("5a38043063d4da8309c3cbb2ffd20db190d74bdce1dec3f716d2ffc553864717".ToBinary());
 
@@ -76,7 +76,7 @@ internal partial class Testbench
     // Counter-tested 2026-11-13 14:03
     bool Test_HeaderBitcoin(ref string message)
     {
-      Console.WriteLine("  2. Parse mainnet HeaderBitcoin of block 737857.");
+      Console.WriteLine("  2. HeaderBitcoin Parsing: Parse mainnet HeaderBitcoin of block 737857.");
 
       byte[] headerRaw = Convert.FromHexString(HEADER_BITCOIN_737857);
 
@@ -100,7 +100,7 @@ internal partial class Testbench
     // Counter-tested 2026-11-13 14:03
     bool Test_TXBToken(Wallet wallet, ref string message)
     {
-      Console.WriteLine("  3. Round-trip signed and coinbase TXBToken.");
+      Console.WriteLine("  3. TXBToken Round-Trip: Serialize and parse signed and coinbase TXBToken.");
 
       TXOutputTokenAnchor tXOutputTokenAnchor = CreateTXOutputTokenAnchor(ID_TOKEN, 0);
 
@@ -119,7 +119,7 @@ internal partial class Testbench
     // Counter-tested 2026-11-13 14:03
     bool Test_Block(Wallet wallet, ref string message)
     {
-      Console.WriteLine("  4. Round-trip BToken block with anchor winner.");
+      Console.WriteLine("  4. Block Round-Trip: Serialize and parse BToken block with anchor winner.");
 
       BlockchainBToken.TXBToken tXCoinbase = CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic);
       tXCoinbase.SerializeUnsigned();
@@ -149,7 +149,7 @@ internal partial class Testbench
     // Counter-tested 2026-11-13 14:03
     bool Test_AnchorsWinner(Wallet wallet, ref string message)
     {
-      Console.WriteLine("  5. Draw anchor winners of two IDTokens at two block hashes, ignoring anchors with LockTime before and after the eligible one.");
+      Console.WriteLine("  5. Anchor Winners: Draw winners of two IDTokens, ignoring anchors with ineligible LockTime.");
 
       byte[] iDTokenSecond = [0x05, 0x06, 0x07, 0x08];
 

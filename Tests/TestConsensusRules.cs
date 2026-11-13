@@ -49,7 +49,7 @@ internal partial class Testbench
     // Counter-tested 2026-11-13 14:03
     bool Test_BlockSize(ref string message)
     {
-      Console.WriteLine("  12. Receive a block payload of SizeBlockMax and reject a longer one and a negative length.");
+      Console.WriteLine("  12. Block Size: Receive SizeBlockMax payload, reject longer and negative lengths.");
 
       byte[] payload = new byte[SIZE_BLOCK_MAX + 1];
       Random.Shared.NextBytes(payload);
@@ -158,7 +158,7 @@ internal partial class Testbench
 
       internal static bool TestSpendingRules(Wallet wallet, ref string message)
       {
-        Console.WriteLine("  4. Reject spends with wrong Nonce or HeightAccountCreated, too little Balance, unknown or emptied account, replays and wrong HashAccounts.");
+        Console.WriteLine("  4. Spending Rules: Reject wrong Nonce, low Balance, unknown accounts, replays, wrong HashAccounts.");
 
         Ledger ledger = new(heightRoot: 0);
 
@@ -196,7 +196,7 @@ internal partial class Testbench
 
       internal static bool TestCoinbaseRules(Wallet wallet, ref string message)
       {
-        Console.WriteLine("  5. Check the coinbase against block reward, fees and rent, including the halving.");
+        Console.WriteLine("  5. Coinbase Rules: Check coinbase against block reward, fees, rent and halving.");
 
         Ledger ledger = new(heightRoot: 0);
 
@@ -247,7 +247,7 @@ internal partial class Testbench
 
       internal static bool TestBlockLimits(Wallet wallet, ref string message)
       {
-        Console.WriteLine("  6. Reject anchor TXs with wrong LockTime and new accounts above CountAccountsMax of a segment.");
+        Console.WriteLine("  6. Block Limits: Reject wrong anchor LockTime and accounts above CountAccountsMax.");
 
         Ledger ledger = new(heightRoot: 0);
 
@@ -269,7 +269,7 @@ internal partial class Testbench
 
       internal static bool TestSingleRollbacks(Wallet wallet, ref string message)
       {
-        Console.WriteLine("  13. Roll back blocks one by one to the root, compare all accounts after each, and insert them again.");
+        Console.WriteLine("  13. Single Rollbacks: Roll back to root comparing accounts, then reinsert blocks.");
 
         Ledger ledger = new(heightRoot: 0);
 
@@ -308,7 +308,7 @@ internal partial class Testbench
 
       internal static bool TestRetentionWindow(Wallet wallet, ref string message)
       {
-        Console.WriteLine("  16. Roll back all blocks whose undo records are kept, across two sweeps of a segment, and insert them again.");
+        Console.WriteLine("  16. Retention Window: Roll back all blocks with undo records, then reinsert.");
 
         const int COUNT_MAX_BLOCKS_STORED = COUNT_SEGMENTS + BITCOIN_REORG_MARGIN;
 
@@ -334,7 +334,7 @@ internal partial class Testbench
 
       internal static bool TestCountRestoration(Wallet wallet, ref string message)
       {
-        Console.WriteLine("  14. Restore the account count of a segment when rolling back a block that created accounts or swept them.");
+        Console.WriteLine("  14. Count Restoration: Restore segment account counts when rolling back creations or sweeps.");
 
         Ledger ledger = new(heightRoot: 0);
 
@@ -358,7 +358,7 @@ internal partial class Testbench
 
       internal static bool TestForkReplacement(Wallet wallet, ref string message)
       {
-        Console.WriteLine("  15. Roll back two blocks, reject a block of the rolled-back fork, and insert two other blocks at the same heights.");
+        Console.WriteLine("  15. Fork Replacement: Replace two rolled-back blocks, rejecting the old fork's spend.");
 
         Ledger ledger = new(heightRoot: 0);
 
@@ -694,7 +694,7 @@ internal partial class Testbench
     // Counter-tested 2026-11-13 14:03
     bool Test_HeaderBitcoinRules(ref string message)
     {
-      Console.WriteLine("  3. Reject HeaderBitcoin with premature timestamp, failed proof of work, wrong HashPrevious, time below median or wrong NBits.");
+      Console.WriteLine("  3. HeaderBitcoin Rules: Reject bad timestamp, proof of work, HashPrevious or NBits.");
 
       uint unixTimeNow = (uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
@@ -870,7 +870,7 @@ internal partial class Testbench
     // Counter-tested 2026-11-13 14:03
     bool Test_TXRules(Wallet wallet, ref string message)
     {
-      Console.WriteLine("  2. Reject TXs with invalid Fee, Value, script, signature or count of outputs, and check IsLockTimeValid.");
+      Console.WriteLine("  2. TX Rules: Reject invalid Fee, Value, script, signature, outputs; check IsLockTimeValid.");
 
       byte[] tXRawSignatureFlipped = CreateTXRawSigned(wallet, t => { });
       tXRawSignatureFlipped[^1] ^= 0x01;
@@ -964,7 +964,7 @@ internal partial class Testbench
     // Counter-tested 2026-11-13 14:03
     bool Test_BlockRules(Wallet wallet, ref string message)
     {
-      Console.WriteLine("  1. Reject blocks with unexpected header, without TXs, with a TX twice, mutated or with wrong MerkleRoot.");
+      Console.WriteLine("  1. Block Rules: Reject unexpected header, missing or repeated TXs, wrong MerkleRoot.");
 
       BlockchainBToken.TXBToken tXCoinbase = CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic);
       tXCoinbase.Nonce = 0;
