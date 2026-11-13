@@ -34,7 +34,8 @@ internal partial class Testbench
         && BlockchainChain.TestHeaderPlaceholders(ref message)
         && BlockchainChain.TestForkPruning(ref message)
         && Test_BlockSize(ref message)
-        && BlockchainAccounts.TestSingleRollbacks(Testbench.Wallet, ref message);
+        && BlockchainAccounts.TestSingleRollbacks(Testbench.Wallet, ref message)
+        && BlockchainAccounts.TestCountRestoration(Testbench.Wallet, ref message);
     }
 
     const int SIZE_BLOCK_MAX = 1 << 20;
@@ -331,6 +332,33 @@ internal partial class Testbench
             return false;
 
         return true;
+      }
+
+      internal static bool TestCountRestoration(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  14. Restore the account count of a segment when rolling back a block that created accounts or swept them.");
+
+        Ledger ledger = new(heightRoot: 0);
+
+        int indexSegmentAccounts = GetIndexSegment(wallet.Hash160PKeyPublic) == 4 ? 5 : 4;
+        byte[] iDMiner = CreateIDAccount(1000, 1);
+
+        if (!ledger.TryInsertBlock("coinbase creating the wallet account", [ledger.CreateCoinbase(wallet, wallet.Hash160PKeyPublic, 0)], isValidExpected: true, null, ref message)
+          || !ledger.TryInsertBlock("coinbase creating 100 accounts in one segment", [CreateCoinbaseAccounts(ledger, wallet, indexSegmentAccounts, 100)], isValidExpected: true, null, ref message)
+          || !ledger.TryRollBack("count restoration", out _, ref message)
+          || !ledger.TryInsertBlock("coinbase creating 101 accounts in one segment after rolling back the creation of 100", [CreateCoinbaseAccounts(ledger, wallet, indexSegmentAccounts, 101)], isValidExpected: false, null, ref message)
+          || !ledger.TryInsertBlock("coinbase creating 100 accounts in one segment after rolling back their creation", [CreateCoinbaseAccounts(ledger, wallet, indexSegmentAccounts, 100)], isValidExpected: true, null, ref message))
+          return false;
+
+        while (ledger.GetHeightTip() < indexSegmentAccounts - 1)
+          if (!ledger.TryInsertBlock("coinbase before the sweep", [ledger.CreateCoinbase(wallet, iDMiner, 0)], isValidExpected: true, null, ref message))
+            return false;
+
+        return ledger.TryInsertBlock("sweep deleting 99 accounts", [ledger.CreateCoinbase(wallet, iDMiner, 0)], isValidExpected: true, null, ref message)
+          && ledger.TryRollBack("count restoration", out _, ref message)
+          && ledger.TryRollBack("count restoration", out _, ref message)
+          && ledger.TryInsertBlock("coinbase creating a 101st account in a segment whose sweep was rolled back", [CreateCoinbaseAccounts(ledger, wallet, indexSegmentAccounts, 101)], isValidExpected: false, null, ref message)
+          && ledger.TryInsertBlock("coinbase paying the 100 accounts restored by rolling back their sweep", [CreateCoinbaseAccounts(ledger, wallet, indexSegmentAccounts, 100)], isValidExpected: true, null, ref message);
       }
 
       static void AddAnchor(TXBToken tX, int lockTime)
