@@ -23,7 +23,8 @@ internal partial class Testbench
         && Test_TXRules(Testbench.Wallet, ref message)
         && Test_HeaderBitcoinRules(ref message)
         && BlockchainAccounts.TestSpendingRules(Testbench.Wallet, ref message)
-        && BlockchainAccounts.TestCoinbaseRules(Testbench.Wallet, ref message);
+        && BlockchainAccounts.TestCoinbaseRules(Testbench.Wallet, ref message)
+        && BlockchainAccounts.TestBlockLimits(Testbench.Wallet, ref message);
     }
 
     abstract class BlockchainAccounts : BlockchainBToken
@@ -126,6 +127,47 @@ internal partial class Testbench
 
         return ledgerHalving.TryInsertBlock("coinbase paying the block reward before the halving", [ledgerHalving.CreateCoinbase(wallet, iDMiner, BLOCK_REWARD_INITIAL / 2)], isValidExpected: false, null, ref message)
           && ledgerHalving.TryInsertBlock("coinbase paying the halved block reward", [ledgerHalving.CreateCoinbase(wallet, iDMiner, 0)], isValidExpected: true, null, ref message);
+      }
+
+      internal static bool TestBlockLimits(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  6. Reject anchor TXs with wrong LockTime and new accounts above CountAccountsMax of a segment.");
+
+        Ledger ledger = new(heightRoot: 0);
+
+        byte[] iDMiner = CreateIDAccount(1000, 1);
+        byte[] iDReceiver = CreateIDAccount(1001, 2);
+
+        if (!ledger.TryInsertBlock("coinbase creating the wallet account", [ledger.CreateCoinbase(wallet, wallet.Hash160PKeyPublic, 0)], isValidExpected: true, null, ref message))
+          return false;
+
+        int lockTimeValid = ledger.GetHeightTip();
+        int indexSegmentAccounts = GetIndexSegment(wallet.Hash160PKeyPublic) == 1500 ? 1501 : 1500;
+
+        return ledger.TryInsertBlock("anchor TX with LockTime below the height before the block", [ledger.CreateCoinbase(wallet, iDMiner, FEE), ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => AddAnchor(t, lockTimeValid - 1))], isValidExpected: false, null, ref message)
+          && ledger.TryInsertBlock("anchor TX with LockTime of the block height", [ledger.CreateCoinbase(wallet, iDMiner, FEE), ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => AddAnchor(t, lockTimeValid + 1))], isValidExpected: false, null, ref message)
+          && ledger.TryInsertBlock("anchor TX with LockTime of the height before the block", [ledger.CreateCoinbase(wallet, iDMiner, FEE), ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => AddAnchor(t, lockTimeValid))], isValidExpected: true, null, ref message)
+          && ledger.TryInsertBlock("coinbase creating 101 accounts in one segment", [CreateCoinbaseAccounts(ledger, wallet, indexSegmentAccounts, 101)], isValidExpected: false, null, ref message)
+          && ledger.TryInsertBlock("coinbase creating 100 accounts in one segment", [CreateCoinbaseAccounts(ledger, wallet, indexSegmentAccounts, 100)], isValidExpected: true, null, ref message);
+      }
+
+      static void AddAnchor(TXBToken tX, int lockTime)
+      {
+        tX.TXOutputs.Add(CreateTXOutputTokenAnchor(ID_TOKEN, 0));
+        tX.LockTime = lockTime;
+      }
+
+      static TXBToken CreateCoinbaseAccounts(Ledger ledger, Wallet wallet, int indexSegment, int countAccounts)
+      {
+        TXBToken tX = ledger.CreateCoinbase(wallet, CreateIDAccount(indexSegment, 0), 0);
+        ((TXOutputP2PKH)tX.TXOutputs[0]).Value -= countAccounts - 1;
+
+        for (int i = 1; i < countAccounts; i++)
+          tX.TXOutputs.Add(new TXOutputP2PKH(1, CreateIDAccount(indexSegment, (byte)i)));
+
+        tX.SerializeUnsigned();
+
+        return tX;
       }
 
       static int GetIndexSegment(byte[] iDAccount)
