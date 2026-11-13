@@ -51,6 +51,10 @@ internal partial class Testbench
 
     protected static readonly byte[] ID_TOKEN = [0x01, 0x02, 0x03, 0x04];
 
+    protected const string HEADER_BITCOIN_737857 =
+      "0080d121824471242bb8751e2363732c0c6b91561eb81dbbd9300200000000000000000017478653c5ffd216f7c3dee1dc4bd790" +
+      "b10dd2ffb2cbc30983dad4633004385a85458e62206a0917627da442";
+
     protected static TXOutputTokenAnchor CreateTXOutputTokenAnchor(byte[] iDToken, byte seedHashBlockReferenced)
     {
       TXOutputTokenAnchor tXOutputTokenAnchor = new()

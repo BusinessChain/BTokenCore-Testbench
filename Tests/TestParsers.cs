@@ -76,9 +76,7 @@ internal partial class Testbench
     {
       Console.WriteLine("  2. Parse mainnet HeaderBitcoin of block 737857.");
 
-      byte[] headerRaw = Convert.FromHexString(
-        "0080d121824471242bb8751e2363732c0c6b91561eb81dbbd9300200000000000000000017478653c5ffd216f7c3dee1dc4bd790" +
-        "b10dd2ffb2cbc30983dad4633004385a85458e62206a0917627da442");
+      byte[] headerRaw = Convert.FromHexString(HEADER_BITCOIN_737857);
 
       int index = 0;
 
