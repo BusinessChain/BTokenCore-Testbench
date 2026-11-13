@@ -195,22 +195,6 @@ internal partial class Testbench
         && IsAnchorWinnerLowestScore(nameParser, blockParsed.Header, anchorsSecond, ref message);
     }
 
-    static readonly byte[] ID_TOKEN = [0x01, 0x02, 0x03, 0x04];
-
-    static TXOutputTokenAnchor CreateTXOutputTokenAnchor(byte[] iDToken, byte seedHashBlockReferenced)
-    {
-      TXOutputTokenAnchor tXOutputTokenAnchor = new()
-      {
-        IDToken = iDToken,
-        HashBlockReferenced = SHA256.HashData([seedHashBlockReferenced]),
-        HashBlockPreviousReferenced = "0000000000000000000230d9bb1db81e56916b0c2c7363231e75b82b24714482".ToBinary()
-      };
-
-      tXOutputTokenAnchor.Serialize();
-
-      return tXOutputTokenAnchor;
-    }
-
     static string ComputeScoreAnchor(byte[] hashBlock, TXOutputTokenAnchor tXOutputTokenAnchor)
     {
       return Convert.ToHexString(SHA256.HashData(

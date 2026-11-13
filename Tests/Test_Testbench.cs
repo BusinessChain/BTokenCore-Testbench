@@ -1,4 +1,6 @@
-﻿using BTokenCore;
+﻿using System.Security.Cryptography;
+
+using BTokenCore;
 
 namespace BTokenCore_Testbench;
 
@@ -45,6 +47,22 @@ internal partial class Testbench
       tX.TXOutputs.AddRange(tXOutputsTokenAnchor);
 
       return tX;
+    }
+
+    protected static readonly byte[] ID_TOKEN = [0x01, 0x02, 0x03, 0x04];
+
+    protected static TXOutputTokenAnchor CreateTXOutputTokenAnchor(byte[] iDToken, byte seedHashBlockReferenced)
+    {
+      TXOutputTokenAnchor tXOutputTokenAnchor = new()
+      {
+        IDToken = iDToken,
+        HashBlockReferenced = SHA256.HashData([seedHashBlockReferenced]),
+        HashBlockPreviousReferenced = "0000000000000000000230d9bb1db81e56916b0c2c7363231e75b82b24714482".ToBinary()
+      };
+
+      tXOutputTokenAnchor.Serialize();
+
+      return tXOutputTokenAnchor;
     }
 
     protected static Block CreateBlock(List<BlockchainBToken.TXBToken> tXs)
