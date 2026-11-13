@@ -18,7 +18,12 @@ internal partial class Testbench
 
       Console.WriteLine("  1. Choose the strongest fork in every permutation of BToken header trees with up to three forks.");
 
-      return BlockchainForkChoice.RunTests(ref message);
+      if (!BlockchainForkChoice.TestForkPermutations(ref message))
+        return false;
+
+      Console.WriteLine("  2. Switch two competing branches back and forth.");
+
+      return BlockchainForkChoice.TestAlternatingSwitches(ref message);
     }
 
     abstract class BlockchainForkChoice : Blockchain
@@ -26,16 +31,91 @@ internal partial class Testbench
       const int COUNT_HEADERS_MAIN = 4;
       const int COUNT_HEADERS_FORK_MAX = 3;
       const int COUNT_FORKS_MAX = 3;
+      const int COUNT_ROUNDS_SWITCH = 6;
 
       BlockchainForkChoice()
         : base(null, 0, null, null, null)
       { }
 
-      internal static bool RunTests(ref string message)
+      internal static bool TestForkPermutations(ref string message)
       {
         for (int countBlocksMain = 0; countBlocksMain <= COUNT_HEADERS_MAIN; countBlocksMain++)
           if (!TryForkPermutations(countBlocksMain, [], ref message))
             return false;
+
+        return true;
+      }
+
+      internal static bool TestAlternatingSwitches(ref string message)
+      {
+        HeaderBToken headerRoot = CreateHeaderBToken(new byte[32]);
+        Chain chainRoot = new(headerRoot);
+
+        List<Header> headersMain = CreateHeaders(headerRoot, COUNT_HEADERS_MAIN, nonceBranch: 0);
+
+        foreach (Header header in headersMain)
+          chainRoot.AppendHeader(header);
+
+        chainRoot.HeaderTipBlockchain = chainRoot.HeaderTip;
+
+        HashSet<Header> headersExpected = [headerRoot, .. headersMain];
+        HashSet<Header> headersHeldExpected = [.. headersExpected];
+
+        Header[] headersTipBranch = [chainRoot.HeaderTip, headersMain[0]];
+
+        for (int round = 1; round <= COUNT_ROUNDS_SWITCH; round++)
+        {
+          int indexBranchWeak = chainRoot.HeaderTip == headersTipBranch[0] ? 1 : 0;
+          int heightTipBlockchainExpected = chainRoot.HeaderTipBlockchain.Height + 1;
+
+          List<Header> headersNew = CreateHeaders(
+            headersTipBranch[indexBranchWeak],
+            heightTipBlockchainExpected - headersTipBranch[indexBranchWeak].Height + 1,
+            nonceBranch: (uint)round);
+
+          chainRoot.InsertHeadersInTree([.. headersNew], heightBlockStoredOldest: 0, out _);
+          headersExpected.UnionWith(headersNew);
+          headersTipBranch[indexBranchWeak] = headersNew[^1];
+
+          Chain chainWeak = chainRoot.FindInTree(c => c.HeaderTip == headersNew[^1] ? c : null);
+
+          if (chainWeak == null || chainWeak == chainRoot)
+          {
+            message = $"Alternating switches, round {round}: the extended branch isn't a fork.";
+            return false;
+          }
+
+          int heightTipBlockchainWeak = chainWeak.HeaderTipBlockchain?.Height ?? chainWeak.HeaderRoot.Height - 1;
+
+          for (Header header = headersNew[^1]; header.Height > heightTipBlockchainWeak; header = header.HeaderPrevious)
+            if (header.Height <= heightTipBlockchainExpected)
+            {
+              chainWeak.BlocksQueued.Add(header.Height, new Block(0) { Header = header });
+              headersHeldExpected.Add(header);
+            }
+
+          chainWeak.AdvanceTipBlockchain();
+
+          Header headerTipBlockchainExpected = headersNew[^1].HeaderPrevious;
+
+          if (!TryReorgToForkStrongest(chainRoot) || TryReorgToForkStrongest(chainRoot))
+          {
+            message = $"Alternating switches, round {round}: the reorg to the stronger branch doesn't happen exactly once.";
+            return false;
+          }
+
+          if (chainRoot.HeaderTipBlockchain != headerTipBlockchainExpected)
+          {
+            message = $"Alternating switches, round {round}: the main chain holds blocks up to height {chainRoot.HeaderTipBlockchain.Height}, expected {heightTipBlockchainExpected}.";
+            return false;
+          }
+
+          if (!IsTreeConsistent(chainRoot, headerRoot, headersExpected, headersHeldExpected, out string error))
+          {
+            message = $"Alternating switches, round {round}: {error}";
+            return false;
+          }
+        }
 
         return true;
       }
