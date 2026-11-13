@@ -128,6 +128,15 @@ internal partial class Testbench
         return false;
       }
 
+      protected bool IsRequestingBlock(string nameCase, byte[] hashExpected, ref string message)
+      {
+        if (FetchHeaderBlockMissingNext(h => true) is Header headerRequested && headerRequested.Hash.IsAllBytesEqual(hashExpected))
+          return true;
+
+        message = $"{nameCase}: the block {hashExpected.ToHexString()} is not requested.";
+        return false;
+      }
+
       protected bool IsSynchronized(Ledger ledger, string nameCase, int heightExpected, ref string message)
       {
         if (!IsAtHeight(nameCase, heightExpected, ref message))

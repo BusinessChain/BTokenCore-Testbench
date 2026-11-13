@@ -79,20 +79,15 @@ internal partial class Testbench
       internal void MineAnchors(List<Block> blocksLedger)
       {
         foreach (Block blockLedger in blocksLedger)
-          MineBlock([], new TXOutputTokenAnchor
-          {
-            IDToken = ID_TOKEN_BTOKEN,
-            HashBlockReferenced = blockLedger.Header.Hash,
-            HashBlockPreviousReferenced = blockLedger.Header.HashPrevious
-          });
+          MineBlock([], CreateAnchor(blockLedger.Header.Hash, blockLedger.Header.HashPrevious));
       }
 
-      internal static TXOutputTokenAnchor CreateAnchorWithheld(byte[] hashBlockPrevious)
+      internal static TXOutputTokenAnchor CreateAnchor(byte[] hashBlock, byte[] hashBlockPrevious)
       {
         return new TXOutputTokenAnchor
         {
           IDToken = ID_TOKEN_BTOKEN,
-          HashBlockReferenced = RandomNumberGenerator.GetBytes(32),
+          HashBlockReferenced = hashBlock,
           HashBlockPreviousReferenced = hashBlockPrevious
         };
       }

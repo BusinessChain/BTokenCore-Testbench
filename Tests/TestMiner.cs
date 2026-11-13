@@ -1,4 +1,6 @@
-﻿using BTokenCore;
+﻿using System.Security.Cryptography;
+
+using BTokenCore;
 
 using LiteDB;
 
@@ -25,7 +27,8 @@ internal partial class Testbench
         && BlockchainMining.TestInsertedRemoval(Testbench.Wallet, ref message)
         && BlockchainMining.TestBurntSlot(Testbench.Wallet, ref message)
         && BlockchainMining.TestLosingAnchor(Testbench.Wallet, ref message)
-        && BlockchainMining.TestWithheldRun(Testbench.Wallet, ref message);
+        && BlockchainMining.TestWithheldRun(Testbench.Wallet, ref message)
+        && BlockchainMining.TestLateTie(Testbench.Wallet, ref message);
     }
 
     class BlockchainMining : BlockchainTestbench
@@ -322,33 +325,63 @@ internal partial class Testbench
 
         blockchain.SetFeeAnchor();
 
-        int heightTip = blockchain.GetHeight();
-        TXOutputTokenAnchor anchorWithheld = BlockchainParentFake.CreateAnchorWithheld(blockchain.ChainRoot.HeaderTipBlockchain.Hash);
+        TXOutputTokenAnchor anchorWithheld = BlockchainParentFake.CreateAnchor(RandomNumberGenerator.GetBytes(32), blockchain.ChainRoot.HeaderTipBlockchain.Hash);
 
-        if (!blockchain.TryMineAnchor(NAME_CASE, blockchain.MinerBlockchain.MineBlock, out _, ref message)
-          || !blockchain.TryMissAnchor(NAME_CASE, [], 1, ref message, anchorWithheld))
+        return blockchain.TryWinSlotAfterWithheld(NAME_CASE, ledger, anchorWithheld, ref message)
+          && blockchain.TryMineBlock($"{NAME_CASE}, block mined on the replacement", out _, ref message);
+      }
+
+      internal static bool TestLateTie(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  11. Late Tie: Keep the honest tip when the withheld block arrives.");
+
+        const string NAME_CASE = "Late tie";
+
+        if (!TryStartNode(wallet, NAME_CASE, VALUE_FUNDING, out BlockchainMining blockchain, out Ledger ledger, ref message)
+          || !TryCreateBlockWithheld(NAME_CASE, ledger, wallet, out Block blockWithheld, ref message))
           return false;
 
-        string nameCaseWithheld = $"{NAME_CASE}, slot won by the withheld block";
+        blockchain.SetFeeAnchor();
 
-        if (!blockchain.IsAtHeight(nameCaseWithheld, heightTip, ref message))
+        TXOutputTokenAnchor anchorWithheld = BlockchainParentFake.CreateAnchor(blockWithheld.Header.Hash, blockWithheld.Header.HashPrevious);
+
+        if (!blockchain.TryWinSlotAfterWithheld(NAME_CASE, ledger, anchorWithheld, ref message))
           return false;
 
-        if (blockchain.FetchHeaderBlockMissingNext(h => true) is not Header headerRequested
-          || !headerRequested.Hash.IsAllBytesEqual(anchorWithheld.HashBlockReferenced))
-        {
-          message = $"{nameCaseWithheld}: the withheld block is not requested.";
+        blockchain.ReceiveBlock(blockWithheld);
+
+        string nameCaseLate = $"{NAME_CASE}, withheld block arrived after the replacement";
+
+        return blockchain.IsSynchronized(ledger, nameCaseLate, ledger.GetHeightTip(), ref message)
+          && blockchain.IsRequestingNoBlock(nameCaseLate, ref message)
+          && blockchain.TryMineBlock($"{NAME_CASE}, block mined on the replacement", out _, ref message);
+      }
+
+      bool TryWinSlotAfterWithheld(string nameCase, Ledger ledger, TXOutputTokenAnchor anchorWithheld, ref string message)
+      {
+        int heightTip = GetHeight();
+        string nameCaseWithheld = $"{nameCase}, slot won by the withheld block";
+        string nameCaseReplaced = $"{nameCase}, replacement anchor";
+
+        return TryMineAnchor(nameCase, MinerBlockchain.MineBlock, out _, ref message)
+          && TryMissAnchor(nameCaseWithheld, [], 1, ref message, anchorWithheld)
+          && IsAtHeight(nameCaseWithheld, heightTip, ref message)
+          && IsRequestingBlock(nameCaseWithheld, anchorWithheld.HashBlockReferenced, ref message)
+          && TryMineAnchor(nameCaseReplaced, MinerBlockchain.ReplaceAnchorsMissed, out BlockchainBitcoin.TXBitcoin tXReplacement, ref message)
+          && TryInsertAnchoredSynchronized(nameCaseReplaced, ledger, tXReplacement, ref message)
+          && IsRequestingNoBlock(nameCaseReplaced, ref message);
+      }
+
+      static bool TryCreateBlockWithheld(string nameCase, Ledger ledger, Wallet wallet, out Block blockWithheld, ref string message)
+      {
+        blockWithheld = null;
+
+        if (!ledger.TryInsertBlock($"{nameCase}, withheld block", [ledger.CreateCoinbase(wallet, CreateIDAccount(1003, 4), 0)], isValidExpected: true, null, ref message))
           return false;
-        }
 
-        string nameCaseReplaced = $"{NAME_CASE}, replacement anchor";
+        blockWithheld = ledger.GetBlocksInserted()[^1];
 
-        if (!blockchain.TryMineAnchor(nameCaseReplaced, blockchain.MinerBlockchain.ReplaceAnchorsMissed, out BlockchainBitcoin.TXBitcoin tXReplacement, ref message)
-          || !blockchain.TryInsertAnchoredSynchronized(nameCaseReplaced, ledger, tXReplacement, ref message)
-          || !blockchain.IsRequestingNoBlock(nameCaseReplaced, ref message))
-          return false;
-
-        return blockchain.TryMineBlock($"{NAME_CASE}, block mined on the replacement", out _, ref message);
+        return ledger.TryRollBack($"{nameCase}, withheld block removed from the Ledger", out _, ref message);
       }
 
       internal static bool TestLosingAnchor(Wallet wallet, ref string message)
@@ -363,7 +396,7 @@ internal partial class Testbench
         blockchain.SetFeeAnchor();
 
         int heightTip = blockchain.GetHeight();
-        TXOutputTokenAnchor anchorWithheld = BlockchainParentFake.CreateAnchorWithheld(blockchain.ChainRoot.HeaderTipBlockchain.Hash);
+        TXOutputTokenAnchor anchorWithheld = BlockchainParentFake.CreateAnchor(RandomNumberGenerator.GetBytes(32), blockchain.ChainRoot.HeaderTipBlockchain.Hash);
 
         if (!blockchain.TryMineAnchor(NAME_CASE, blockchain.MinerBlockchain.MineBlock, out BlockchainBitcoin.TXBitcoin tXLosing, ref message)
           || !blockchain.TryMissAnchor(NAME_CASE, [tXLosing], 0, ref message, anchorWithheld)
@@ -396,8 +429,8 @@ internal partial class Testbench
         blockchain.SetFeeAnchor();
 
         int heightTip = blockchain.GetHeight();
-        TXOutputTokenAnchor anchorWithheldFirst = BlockchainParentFake.CreateAnchorWithheld(blockchain.ChainRoot.HeaderTipBlockchain.Hash);
-        TXOutputTokenAnchor anchorWithheldSecond = BlockchainParentFake.CreateAnchorWithheld(anchorWithheldFirst.HashBlockReferenced);
+        TXOutputTokenAnchor anchorWithheldFirst = BlockchainParentFake.CreateAnchor(RandomNumberGenerator.GetBytes(32), blockchain.ChainRoot.HeaderTipBlockchain.Hash);
+        TXOutputTokenAnchor anchorWithheldSecond = BlockchainParentFake.CreateAnchor(RandomNumberGenerator.GetBytes(32), anchorWithheldFirst.HashBlockReferenced);
 
         if (!blockchain.TryMineAnchor(NAME_CASE, blockchain.MinerBlockchain.MineBlock, out _, ref message)
           || !blockchain.TryMissAnchor($"{NAME_CASE}, first withheld slot", [], 1, ref message, anchorWithheldFirst)
@@ -408,15 +441,9 @@ internal partial class Testbench
         string nameCaseReplaced = $"{NAME_CASE}, replacement anchor";
 
         if (!blockchain.TryMineAnchor(nameCaseReplaced, blockchain.MinerBlockchain.ReplaceAnchorsMissed, out BlockchainBitcoin.TXBitcoin tXReplacement, ref message)
-          || !blockchain.TryInsertAnchoredSynchronized(nameCaseReplaced, ledger, tXReplacement, ref message))
+          || !blockchain.TryInsertAnchoredSynchronized(nameCaseReplaced, ledger, tXReplacement, ref message)
+          || !blockchain.IsRequestingBlock($"{nameCaseReplaced}, taller placeholder fork", anchorWithheldFirst.HashBlockReferenced, ref message))
           return false;
-
-        if (blockchain.FetchHeaderBlockMissingNext(h => true) is not Header headerRequested
-          || !headerRequested.Hash.IsAllBytesEqual(anchorWithheldFirst.HashBlockReferenced))
-        {
-          message = $"{nameCaseReplaced}: the first withheld block of the taller placeholder fork is not requested.";
-          return false;
-        }
 
         string nameCaseNext = $"{NAME_CASE}, next block as tall as the placeholder fork";
 
