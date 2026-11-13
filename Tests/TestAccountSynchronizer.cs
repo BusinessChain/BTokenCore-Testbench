@@ -21,12 +21,15 @@ internal partial class Testbench
       return BlockchainSynchronizing.TestFreshStart(Testbench.Wallet, ref message)
         && BlockchainSynchronizing.TestRollbackAtTip(Testbench.Wallet, ref message)
         && BlockchainSynchronizing.TestRestartRollback(Testbench.Wallet, ref message)
-        && BlockchainSynchronizing.TestReplayFromRoot(Testbench.Wallet, ref message);
+        && BlockchainSynchronizing.TestReplayFromRoot(Testbench.Wallet, ref message)
+        && BlockchainSynchronizing.TestSegmentInstallation(Testbench.Wallet, ref message);
     }
 
     class BlockchainSynchronizing : BlockchainTestbench
     {
       const string NAME_TOKEN = "TestSynchronizer";
+      const int HEIGHT_TIP_WINDOW = 2060;
+      const int HEIGHT_INSTALLED = HEIGHT_TIP_WINDOW - BITCOIN_REORG_MARGIN;
 
       int HeightAnchored;
 
@@ -129,6 +132,95 @@ internal partial class Testbench
           .IsSynchronized("restart without the stored block the accounts applied last", 5, ref message);
       }
 
+      internal static bool TestSegmentInstallation(Wallet wallet, ref string message)
+      {
+        return TryCreateServer(wallet, out Ledger ledger, out BlockchainSynchronizing server, ref message)
+          && TestSegmentDownload(ledger, server, ref message);
+      }
+
+      static bool TestSegmentDownload(Ledger ledger, BlockchainSynchronizing server, ref string message)
+      {
+        Console.WriteLine("  5. Segment Download: Install downloaded segments, reinstall after rolling back below installation.");
+
+        Func<Header, byte[]> getSegmentServed = GetSegmentServed(ledger, server);
+
+        BlockchainSynchronizing blockchain = StartNodeWithoutAccounts(ledger.GetBlocksInserted());
+
+        Header headerInstalled = blockchain.ChainRoot.HeaderTipBlockchain.GetHeaderAncestor(HEIGHT_INSTALLED);
+        byte[] segmentBelow = getSegmentServed(headerInstalled.HeaderPrevious);
+
+        if (!blockchain.IsWithoutAccounts("download before any segment", HEIGHT_TIP_WINDOW, ref message)
+          || !IsRejected($"Account synchronizer, segment of height {HEIGHT_INSTALLED - 1} for the block at height {HEIGHT_INSTALLED}", () => blockchain.AddSegmentDownload(headerInstalled.Hash, segmentBelow, segmentBelow.Length), ref message))
+          return false;
+
+        blockchain.DownloadSegments(getSegmentServed);
+
+        if (!blockchain.IsSynchronized("segments downloaded and installed", HEIGHT_TIP_WINDOW, ref message))
+          return false;
+
+        blockchain.RollBackTo(HEIGHT_INSTALLED - 1);
+
+        if (!blockchain.IsWithoutAccounts("rollback below the installed height", HEIGHT_INSTALLED - 1, ref message))
+          return false;
+
+        blockchain.InsertBlocks(ledger.GetBlocksInserted().Where(b => b.Header.Height >= HEIGHT_INSTALLED).ToList());
+        blockchain.DownloadSegments(getSegmentServed);
+
+        return blockchain.IsSynchronized("segments downloaded again after the rollback below the installed height", HEIGHT_TIP_WINDOW, ref message);
+      }
+
+      static bool TryCreateServer(Wallet wallet, out Ledger ledger, out BlockchainSynchronizing server, ref string message)
+      {
+        ledger = new(heightRoot: 0);
+        server = null;
+
+        byte[] iDMiner = CreateIDAccount(1000, 1);
+        byte[] iDReceiver = CreateIDAccount(1001, 2);
+
+        if (!ledger.TryInsertBlock("coinbase creating the wallet account", [ledger.CreateCoinbase(wallet, wallet.Hash160PKeyPublic, 0)], isValidExpected: true, null, ref message))
+          return false;
+
+        foreach (int heightSpend in new[] { 100, 1000, 2000, 2052 })
+          if (!TryInsertCoinbasesUpTo(ledger, wallet, iDMiner, heightSpend - 1, ref message)
+            || !ledger.TryInsertBlock($"spend at height {heightSpend}", [ledger.CreateCoinbase(wallet, iDMiner, FEE), ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => { })], isValidExpected: true, null, ref message))
+            return false;
+
+        if (!TryInsertCoinbasesUpTo(ledger, wallet, iDMiner, HEIGHT_TIP_WINDOW, ref message))
+          return false;
+
+        server = StartNode(CreateLiteDatabase(), int.MaxValue);
+        server.InsertBlocks(ledger.GetBlocksInserted());
+
+        return server.IsSynchronized("serving node", HEIGHT_TIP_WINDOW, ref message);
+      }
+
+      static Func<Header, byte[]> GetSegmentServed(Ledger ledger, BlockchainSynchronizing server)
+      {
+        Dictionary<int, byte[]> hashesBlock = ledger.GetBlocksInserted().ToDictionary(b => b.Header.Height, b => b.Header.Hash);
+
+        return header => server.GetSegmentSweptByBlock(hashesBlock[header.Height]);
+      }
+
+      static BlockchainSynchronizing StartNodeWithoutAccounts(List<Block> blocksLedger)
+      {
+        BlockchainSynchronizing blockchain = StartNode(CreateLiteDatabase(), int.MaxValue);
+
+        blockchain.Synchronizer.Drop();
+        blockchain.InsertBlocks(blocksLedger);
+
+        return blockchain;
+      }
+
+      void DownloadSegments(Func<Header, byte[]> getSegment)
+      {
+        while (FetchHeaderSweepMissingNext(h => true) is Header header)
+        {
+          byte[] segment = getSegment(header);
+
+          AddSegmentDownload(header.Hash, segment, segment.Length);
+        }
+      }
+
       static bool TryCreateLedger(Wallet wallet, out Ledger ledger, ref string message)
       {
         ledger = new(heightRoot: 0);
@@ -213,13 +305,31 @@ internal partial class Testbench
         UpdateTipBlockchain(ChainRoot);
       }
 
+      bool IsWithoutAccounts(string nameCase, int heightExpected, ref string message)
+      {
+        if (!IsAtHeight(nameCase, heightExpected, ref message))
+          return false;
+
+        if (!Synchronizer.IsAccountsAtTip())
+          return true;
+
+        message = $"Account synchronizer, {nameCase}: the accounts are at the tip without a database download.";
+        return false;
+      }
+
+      bool IsAtHeight(string nameCase, int heightExpected, ref string message)
+      {
+        if (GetHeight() == heightExpected)
+          return true;
+
+        message = $"Account synchronizer, {nameCase}: the tip is at height {GetHeight()}, expected {heightExpected}.";
+        return false;
+      }
+
       bool IsSynchronized(string nameCase, int heightExpected, ref string message)
       {
-        if (GetHeight() != heightExpected)
-        {
-          message = $"Account synchronizer, {nameCase}: the tip is at height {GetHeight()}, expected {heightExpected}.";
+        if (!IsAtHeight(nameCase, heightExpected, ref message))
           return false;
-        }
 
         if (!Synchronizer.IsAccountsAtTip())
         {
@@ -227,7 +337,7 @@ internal partial class Testbench
           return false;
         }
 
-        for (Header header = ChainRoot.HeaderRoot.HeaderNext; header != null; header = header.HeaderNext)
+        for (Header header = ChainRoot.HeaderTipBlockchain; header.Height > 0 && header.Height >= heightExpected - BITCOIN_REORG_MARGIN; header = header.HeaderPrevious)
         {
           byte[] segment = GetSegmentSweptByBlock(header.Hash);
 
