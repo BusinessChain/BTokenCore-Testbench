@@ -32,7 +32,7 @@ internal partial class Testbench
 
       internal static bool TestSpendAdmission(Wallet wallet, ref string message)
       {
-        Console.WriteLine("  1. Spend Admission: Admit TXs by LockTime, sweep, Nonce, Balance and count.");
+        Console.WriteLine("  1. Spend Admission: Admit by LockTime, sweep, Nonce, Balance, count; load pending accounts.");
 
         Ledger ledger = new(heightRoot: 0);
 
@@ -49,16 +49,19 @@ internal partial class Testbench
             return false;
 
         int heightTip = ledger.GetHeightTip();
-        long balanceLeft = ledger.GetBalanceNext(wallet.Hash160PKeyPublic) - 2 * (VALUE_SPEND + FEE);
+        long balanceNext = ledger.GetBalanceNext(wallet.Hash160PKeyPublic);
+        long balanceLeft = balanceNext - 2 * (VALUE_SPEND + FEE);
 
         PoolTXBToken pool = ledger.CreateTXPool(COUNT_BYTES_MAX_POOL);
 
-        if (!IsAdmitted("anchor TX with LockTime below the tip height", pool, ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => AddAnchor(t, heightTip - 1)), false, ref message)
+        if (!IsAccountPendingCorrect("account without pooled TXs", pool, wallet.Hash160PKeyPublic, 0, balanceNext, ref message)
+          || !IsAdmitted("anchor TX with LockTime below the tip height", pool, ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => AddAnchor(t, heightTip - 1)), false, ref message)
           || !IsAdmitted("anchor TX with LockTime above the tip height", pool, ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => AddAnchor(t, heightTip + 1)), false, ref message)
           || !IsAdmitted("anchor TX with LockTime of the tip height", pool, ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => AddAnchor(t, heightTip)), true, ref message)
           || !IsAdmitted("spend with the Nonce of the pooled anchor TX", pool, ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => { }), false, ref message)
           || !IsAdmitted("spend with a Nonce leaving a gap", pool, ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => t.Nonce += 2), false, ref message)
           || !IsAdmitted("spend with the Nonce after the pooled anchor TX", pool, ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => t.Nonce += 1), true, ref message)
+          || !IsAccountPendingCorrect("account after two pooled TXs", pool, wallet.Hash160PKeyPublic, 2, balanceLeft, ref message)
           || !IsAdmitted("spend of one more than the Balance left after the pooled TXs", pool, ledger.CreateTXSpend(wallet, iDReceiver, balanceLeft - FEE + 1, t => t.Nonce += 2), false, ref message)
           || !IsAdmitted("spend of the Balance left after the pooled TXs", pool, ledger.CreateTXSpend(wallet, iDReceiver, balanceLeft - FEE, t => t.Nonce += 2), true, ref message)
           || !IsAdmitted("TX paying nothing from the account spent to zero in the pool", pool, ledger.CreateTXSpend(wallet, iDReceiver, 0, t =>
@@ -78,7 +81,7 @@ internal partial class Testbench
 
       internal static bool TestCreationAdmission(Wallet wallet, ref string message)
       {
-        Console.WriteLine("  2. Creation Admission: Count pending account creations against CountAccountsMax and sweeps.");
+        Console.WriteLine("  2. Creation Admission: Count pending creations against CountAccountsMax and sweeps, check CanReceive.");
 
         Ledger ledger = new(heightRoot: 0);
 
@@ -95,8 +98,12 @@ internal partial class Testbench
 
         PoolTXBToken pool = ledger.CreateTXPool(COUNT_BYTES_MAX_POOL);
 
-        if (!IsAdmitted("spend creating two accounts in a segment with room for one", pool, ledger.CreateTXSpend(wallet, iDCreatedPending, VALUE_SPEND, t => t.TXOutputs.Add(new TXOutputP2PKH(VALUE_SPEND, iDCreatedOverLimit))), false, ref message)
+        if (!IsReceivingExpected("new account in a segment with room for one", pool, iDCreatedOverLimit, true, ref message)
+          || !IsAdmitted("spend creating two accounts in a segment with room for one", pool, ledger.CreateTXSpend(wallet, iDCreatedPending, VALUE_SPEND, t => t.TXOutputs.Add(new TXOutputP2PKH(VALUE_SPEND, iDCreatedOverLimit))), false, ref message)
           || !IsAdmitted("spend creating one account in a segment with room for one", pool, ledger.CreateTXSpend(wallet, iDCreatedPending, VALUE_SPEND, t => { }), true, ref message)
+          || !IsReceivingExpected("account of a pending creation", pool, iDCreatedPending, true, ref message)
+          || !IsReceivingExpected("new account beside a pending creation", pool, iDCreatedOverLimit, false, ref message)
+          || !IsReceivingExpected("existing account in the full segment", pool, iDExisting, true, ref message)
           || !IsAdmitted("spend creating a second account beside a pending creation", pool, ledger.CreateTXSpend(wallet, iDCreatedOverLimit, VALUE_SPEND, t => t.Nonce += 1), false, ref message)
           || !IsAdmitted("spend to the account of a pending creation", pool, ledger.CreateTXSpend(wallet, iDCreatedPending, VALUE_SPEND, t => t.Nonce += 1), true, ref message)
           || !IsAdmitted("spend to an existing account in the full segment", pool, ledger.CreateTXSpend(wallet, iDExisting, VALUE_SPEND, t => t.Nonce += 2), true, ref message)
@@ -104,7 +111,10 @@ internal partial class Testbench
           || !TryInsertCoinbasesUpTo(ledger, wallet, iDMiner, indexSegmentCreation - 1, ref message))
           return false;
 
-        return IsAdmitted("spend creating two accounts in a full segment the next sweep empties", ledger.CreateTXPool(COUNT_BYTES_MAX_POOL), ledger.CreateTXSpend(wallet, iDCreatedOverLimit, VALUE_SPEND, t => t.TXOutputs.Add(new TXOutputP2PKH(VALUE_SPEND, iDCreatedAfterSweep))), true, ref message);
+        PoolTXBToken poolBeforeSweep = ledger.CreateTXPool(COUNT_BYTES_MAX_POOL);
+
+        return IsReceivingExpected("new account in a full segment the next sweep empties", poolBeforeSweep, iDCreatedAfterSweep, true, ref message)
+          && IsAdmitted("spend creating two accounts in a full segment the next sweep empties", poolBeforeSweep, ledger.CreateTXSpend(wallet, iDCreatedOverLimit, VALUE_SPEND, t => t.TXOutputs.Add(new TXOutputP2PKH(VALUE_SPEND, iDCreatedAfterSweep))), true, ref message);
       }
 
       internal static bool TestBundleRanking(Wallet wallet, ref string message)
@@ -381,6 +391,27 @@ internal partial class Testbench
 
         return ledger.TryInsertBlock($"coinbase creating the wallet account with Balance {balanceWallet} before its sweep", [ledger.CreateCoinbase(wallet, iDMiner, 0, new TXOutputP2PKH(balanceWallet, wallet.Hash160PKeyPublic))], isValidExpected: true, null, ref message)
           && IsAdmitted($"spend of 1 from the wallet account with Balance {balanceWallet} before its sweep", ledger.CreateTXPool(COUNT_BYTES_MAX_POOL), ledger.CreateTXSpend(wallet, iDReceiver, 1, t => t.Fee = 0), isAdmittedExpected, ref message);
+      }
+
+      static bool IsAccountPendingCorrect(string nameCase, PoolTXBToken pool, byte[] iDAccount, int nonceExpected, long balanceExpected, ref string message)
+      {
+        Account account = pool.LoadAccountPending(iDAccount);
+
+        if (account != null && account.Nonce == nonceExpected && account.Balance == balanceExpected)
+          return true;
+
+        message = $"TX pool, {nameCase}: LoadAccountPending returns {(account == null ? "no account" : $"Nonce {account.Nonce} and Balance {account.Balance}")}, " +
+          $"expected Nonce {nonceExpected} and Balance {balanceExpected}.";
+        return false;
+      }
+
+      static bool IsReceivingExpected(string nameCase, PoolTXBToken pool, byte[] iDAccount, bool canReceiveExpected, ref string message)
+      {
+        if (pool.CanReceive(iDAccount) == canReceiveExpected)
+          return true;
+
+        message = $"TX pool, {nameCase}: CanReceive returns {!canReceiveExpected}, expected {canReceiveExpected}.";
+        return false;
       }
 
       static bool IsAdmitted(string nameCase, PoolTXBToken pool, TXBToken tX, bool isAdmittedExpected, ref string message)
