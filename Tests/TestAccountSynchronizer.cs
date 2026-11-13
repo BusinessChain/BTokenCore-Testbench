@@ -29,7 +29,8 @@ internal partial class Testbench
         && BlockchainSynchronizing.TestConfirmReopen(Testbench.Wallet, ref message)
         && BlockchainSynchronizing.TestPruneConfirmed(Testbench.Wallet, ref message)
         && BlockchainSynchronizing.TestRestartReload(Testbench.Wallet, ref message)
-        && BlockchainSynchronizing.TestReplayConfirmation(Testbench.Wallet, ref message);
+        && BlockchainSynchronizing.TestReplayConfirmation(Testbench.Wallet, ref message)
+        && BlockchainSynchronizing.TestRejectionReopen(Testbench.Wallet, ref message);
     }
 
     class BlockchainSynchronizing : BlockchainTestbench
@@ -394,6 +395,44 @@ internal partial class Testbench
 
         return blockchainRestarted.IsSynchronized(ledger, "Own TX lifecycle, replay of the confirming block after the restart", 6, ref message)
           && blockchainRestarted.IsTXOwnedAtHeight("replay of the confirming block after the restart", tXSpend.Hash, 2, ref message);
+      }
+
+      internal static bool TestRejectionReopen(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  16. Rejection Reopen: Reopen own TX confirmed by a block rejected in replay.");
+
+        const int HEIGHT_FORGED = 2;
+
+        if (!TryCreateLedger(wallet, out Ledger ledger, ref message))
+          return false;
+
+        List<Block> blocksLedger = ledger.GetBlocksInserted();
+        TXBToken tXSpend = (TXBToken)blocksLedger.Single(b => b.Header.Height == HEIGHT_FORGED).TXs[1];
+        TXBToken tXSpendInvalid = ledger.CreateTXSpend(wallet, CreateIDAccount(1001, 2), VALUE_SPEND, t => t.Nonce = 99);
+
+        BlockchainSynchronizing blockchain = StartNode(CreateLiteDatabase(), int.MaxValue);
+        blockchain.InsertBlocks(blocksLedger.Where(b => b.Header.Height < HEIGHT_FORGED).ToList());
+
+        if (!IsAccepted("Own TX lifecycle, spend submitted at height 1", () => blockchain.SubmitTX(tXSpend.TXRaw), ref message))
+          return false;
+
+        blockchain.Synchronizer.Drop();
+        blockchain.InsertBlocks(ForgeBlocks(blocksLedger, HEIGHT_FORGED, (tXs, header) => tXs.Add(tXSpendInvalid)));
+
+        if (!blockchain.IsWithoutAccounts("Own TX lifecycle, forged blocks stored without accounts", 6, ref message)
+          || !blockchain.IsTXOwnedAtHeight("forged block confirming the spend", tXSpend.Hash, HEIGHT_FORGED, ref message))
+          return false;
+
+        BlockchainSynchronizing blockchainRestarted = StartNode(blockchain.LiteDatabase, int.MaxValue);
+
+        if (!blockchainRestarted.IsSynchronized(ledger, $"Own TX lifecycle, replay rejecting the forged block at height {HEIGHT_FORGED}", HEIGHT_FORGED - 1, ref message)
+          || !blockchainRestarted.IsTXOwnedAtHeight($"replay rejecting the forged block at height {HEIGHT_FORGED}", tXSpend.Hash, 0, ref message))
+          return false;
+
+        blockchainRestarted.InsertBlocks(blocksLedger.Where(b => b.Header.Height >= HEIGHT_FORGED).ToList());
+
+        return blockchainRestarted.IsSynchronized(ledger, "Own TX lifecycle, Ledger blocks inserted after the rejected block", 6, ref message)
+          && blockchainRestarted.IsTXOwnedAtHeight("Ledger blocks inserted after the rejected block", tXSpend.Hash, HEIGHT_FORGED, ref message);
       }
 
       bool IsTXOwnedAtHeight(string nameCase, byte[] hashTX, int? heightConfirmedExpected, ref string message)
