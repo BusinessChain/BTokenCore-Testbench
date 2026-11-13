@@ -1,4 +1,6 @@
-﻿using BTokenCore;
+﻿using System.Security.Cryptography;
+
+using BTokenCore;
 
 using LiteDB;
 
@@ -18,7 +20,8 @@ internal partial class Testbench
 
       return BlockchainAnchoring.TestAnchoredFollow(Testbench.Wallet, ref message)
         && BlockchainAnchoring.TestAwaitingAnchor(Testbench.Wallet, ref message)
-        && BlockchainAnchoring.TestAnchorExpiry(Testbench.Wallet, ref message);
+        && BlockchainAnchoring.TestAnchorExpiry(Testbench.Wallet, ref message)
+        && BlockchainAnchoring.TestParentRollback(Testbench.Wallet, ref message);
     }
 
     class BlockchainBitcoinTestbench : BlockchainBitcoin
@@ -46,7 +49,7 @@ internal partial class Testbench
           headerHash: null,
           version: 0x20000000,
           hashPrevious: headerTip.Hash,
-          merkleRootHash: new byte[32],
+          merkleRootHash: RandomNumberGenerator.GetBytes(32),
           unixTimeSeconds: headerTip.UnixTimeSeconds + SECONDS_BLOCK,
           nBits: headerTip.NBits,
           nonce: 0);
@@ -59,6 +62,16 @@ internal partial class Testbench
 
         ChainRoot.AppendHeader(header);
         ChainRoot.BlocksQueued.Add(header.Height, new Block(0) { Header = header });
+
+        UpdateTipBlockchain(ChainRoot);
+      }
+
+      internal void RollBackTo(int height)
+      {
+        Header headerCutOff = ChainRoot.HeaderTipBlockchain.GetHeaderAncestor(height + 1);
+
+        RollBack(height);
+        ChainRoot.CutOff(headerCutOff);
 
         UpdateTipBlockchain(ChainRoot);
       }
@@ -176,6 +189,43 @@ internal partial class Testbench
         blockchain.ReceiveBlock(blocksLedger[1]);
 
         return blockchain.IsSynchronized(ledger, $"{nameCaseDropped}, received after the request", 2, ref message);
+      }
+
+      internal static bool TestParentRollback(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  4. Parent Rollback: Roll back with Bitcoin, re-anchor rolled-back blocks from the store.");
+
+        if (!TryCreateLedger(wallet, out Ledger ledger, ref message))
+          return false;
+
+        List<Block> blocksLedger = ledger.GetBlocksInserted();
+        BlockchainAnchoring blockchain = StartNode();
+
+        foreach (Block blockLedger in blocksLedger)
+          blockchain.BlockchainParentBitcoin.MineBlock(CreateAnchor(blockLedger));
+
+        blockchain.DeliverBlocks(blocksLedger);
+
+        if (!blockchain.IsSynchronized(ledger, "Parent rollback, Ledger blocks anchored before the rollback", 6, ref message))
+          return false;
+
+        blockchain.BlockchainParentBitcoin.RollBackTo(blockchain.BlockchainParentBitcoin.GetHeight() - 3);
+
+        if (!blockchain.IsSynchronized(ledger, "Parent rollback, Bitcoin chain rolled back by three blocks", 3, ref message))
+          return false;
+
+        blockchain.BlockchainParentBitcoin.MineBlock();
+
+        if (!blockchain.IsAtHeight("Parent rollback, replacing Bitcoin block without anchor", 3, ref message))
+          return false;
+
+        foreach (Block blockLedger in blocksLedger.Where(b => b.Header.Height > 3))
+          blockchain.BlockchainParentBitcoin.MineBlock(CreateAnchor(blockLedger));
+
+        string nameCaseReanchored = "Parent rollback, rolled-back blocks anchored again by replacing Bitcoin blocks";
+
+        return blockchain.IsSynchronized(ledger, nameCaseReanchored, 6, ref message)
+          && blockchain.IsRequestingNoBlock(nameCaseReanchored, ref message);
       }
 
       bool IsRequestingNoBlock(string nameCase, ref string message)
