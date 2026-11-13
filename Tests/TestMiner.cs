@@ -20,7 +20,8 @@ internal partial class Testbench
         && BlockchainMining.TestMinePoolTXs(Testbench.Wallet, ref message)
         && BlockchainMining.TestFillBlock(Testbench.Wallet, ref message)
         && BlockchainMining.TestAnchorFunding(Testbench.Wallet, ref message)
-        && BlockchainMining.TestMissedReplacement(Testbench.Wallet, ref message);
+        && BlockchainMining.TestMissedReplacement(Testbench.Wallet, ref message)
+        && BlockchainMining.TestCandidateExpiry(Testbench.Wallet, ref message);
     }
 
     class BlockchainMining : BlockchainTestbench
@@ -214,6 +215,51 @@ internal partial class Testbench
 
         message = $"{NAME_CASE_UNAFFORDABLE}: ReplaceAnchorsMissed created an anchor the output cannot pay.";
         return false;
+      }
+
+      internal static bool TestCandidateExpiry(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  6. Candidate Expiry: Prune missed and replaced candidates after the reorg margin.");
+
+        const string NAME_CASE = "Candidate expiry";
+        const int COUNT_REPLACEMENTS = 2;
+
+        if (!TryStartNode(wallet, NAME_CASE, VALUE_FUNDING, out BlockchainMining blockchain, out _, ref message))
+          return false;
+
+        blockchain.SetFeeAnchor();
+
+        if (!blockchain.TryMineAnchor(NAME_CASE, blockchain.MinerBlockchain.MineBlock, out BlockchainBitcoin.TXBitcoin tXAnchor, ref message))
+          return false;
+
+        List<int> lockTimes = [tXAnchor.LockTime];
+
+        for (int i = 0; i < COUNT_REPLACEMENTS; i++)
+        {
+          if (!blockchain.TryMissAnchor(NAME_CASE, 1, ref message)
+            || !blockchain.TryMineAnchor($"{NAME_CASE}, replacement {i + 1}", blockchain.MinerBlockchain.ReplaceAnchorsMissed, out tXAnchor, ref message))
+            return false;
+
+          lockTimes.Add(tXAnchor.LockTime);
+        }
+
+        while (true)
+        {
+          int heightParent = blockchain.ParentFake.GetHeight();
+          int countExpected = lockTimes.Count(l => l > heightParent - BITCOIN_REORG_MARGIN);
+          int countStored = blockchain.BlocksStoredAwaitingAnchor.Count();
+
+          if (countStored != countExpected)
+          {
+            message = $"{NAME_CASE}: at Bitcoin height {heightParent} the store holds {countStored} candidates, expected {countExpected} with LockTimes {string.Join(", ", lockTimes)}.";
+            return false;
+          }
+
+          if (countExpected == 0)
+            return true;
+
+          blockchain.ParentFake.MineBlock([]);
+        }
       }
 
       bool TryMissAnchor(string nameCase, int countReplaceableExpected, ref string message)
