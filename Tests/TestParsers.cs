@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
 
@@ -32,7 +33,8 @@ internal partial class Testbench
         return Test_HeaderBToken(ref message)
           && Test_HeaderBitcoin(ref message)
           && Test_TXBToken(wallet, ref message)
-          && Test_Block(wallet, ref message);
+          && Test_Block(wallet, ref message)
+          && Test_AnchorsWinner(wallet, ref message);
       }
       finally
       {
@@ -57,21 +59,6 @@ internal partial class Testbench
 
       return IsHeaderBTokenParsedEqual(header, headerSerialized, 0, ref message)
         && IsHeaderBTokenParsedEqual(header, EmbedInBuffer(headerSerialized), COUNT_BYTES_LEADING, ref message);
-    }
-
-    static HeaderBToken CreateHeaderBToken(byte[] merkleRoot)
-    {
-      HeaderBToken header = new(
-        headerHash: null,
-        hashPrevious: "00000000000000000002a7c4c1e48d76c5a37902165a270156b7a8d72728a054".ToBinary(),
-        merkleRootHash: merkleRoot,
-        hashAccounts: "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d".ToBinary(),
-        nonce: 0x42a47d62);
-
-      header.Version = 0x21d18000;
-      header.ComputeHash();
-
-      return header;
     }
 
     static bool IsHeaderBTokenParsedEqual(HeaderBToken header, byte[] buffer, int indexStart, ref string message)
@@ -125,10 +112,12 @@ internal partial class Testbench
     {
       Console.WriteLine("  3. Round-trip signed and coinbase TXBToken.");
 
-      BlockchainBToken.TXBToken tX = CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic);
+      TXOutputTokenAnchor tXOutputTokenAnchor = CreateTXOutputTokenAnchor(ID_TOKEN, 0);
+
+      BlockchainBToken.TXBToken tX = CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic, tXOutputTokenAnchor);
       tX.Serialize(wallet);
 
-      BlockchainBToken.TXBToken tXCoinbase = CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic);
+      BlockchainBToken.TXBToken tXCoinbase = CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic, tXOutputTokenAnchor);
       tXCoinbase.SerializeUnsigned();
 
       return IsTXBTokenParsedEqual(tX, tX.TXRaw, 0, isCoinbase: false, ref message)
@@ -142,38 +131,19 @@ internal partial class Testbench
       Console.WriteLine("  4. Round-trip BToken block with anchor winner.");
 
       BlockchainBToken.TXBToken tXCoinbase = CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic);
-      tXCoinbase.Nonce = 0;
-      tXCoinbase.TXOutputs.RemoveAll(o => o is TXOutputTokenAnchor);
       tXCoinbase.SerializeUnsigned();
 
-      BlockchainBToken.TXBToken tX = CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic);
+      TXOutputTokenAnchor tXOutputTokenAnchor = CreateTXOutputTokenAnchor(ID_TOKEN, 0);
+
+      BlockchainBToken.TXBToken tX = CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic, tXOutputTokenAnchor);
       tX.Serialize(wallet);
 
-      Block block = new(HeaderBToken.COUNT_HEADER_BYTES + 1 + tXCoinbase.TXRaw.Length + tX.TXRaw.Length);
-      block.TXs.Add(tXCoinbase);
-      block.TXs.Add(tX);
-
-      HeaderBToken header = CreateHeaderBToken(block.ComputeMerkleRoot());
-      header.Height = 737858;
-
-      block.Header = header;
-      block.Serialize();
-
-      Block blockParsed = new(block.Buffer[..block.LengthDataPayload])
-      {
-        Header = new HeaderBToken
-        {
-          Hash = header.Hash,
-          HashPrevious = header.HashPrevious,
-          Height = header.Height
-        }
-      };
-
-      new ParserBToken().ParseBlock(blockParsed, verifySignatures: true);
+      Block block = CreateBlock([tXCoinbase, tX]);
+      Block blockParsed = ParseBlockSerialized(block);
 
       string nameParser = "Block parsed by ParserBToken";
 
-      if (!AreHeadersBTokenEqual(nameParser, header, (HeaderBToken)blockParsed.Header, ref message)
+      if (!AreHeadersBTokenEqual(nameParser, (HeaderBToken)block.Header, (HeaderBToken)blockParsed.Header, ref message)
         || !IsFieldEqual(nameParser, "TXs.Count", block.TXs.Count, blockParsed.TXs.Count, ref message))
         return false;
 
@@ -181,45 +151,128 @@ internal partial class Testbench
         if (!AreTXsBTokenEqual($"{nameParser}, TXs[{i}]", (BlockchainBToken.TXBToken)block.TXs[i], (BlockchainBToken.TXBToken)blockParsed.TXs[i], ref message))
           return false;
 
-      TXOutputTokenAnchor anchorParsed = blockParsed.TXs[1].TXOutputs.OfType<TXOutputTokenAnchor>().Single();
-
-      if (!IsFieldEqual(nameParser, "AnchorsWinner.Count", 1, blockParsed.Header.AnchorsWinner.Count, ref message))
-        return false;
-
-      if (!blockParsed.Header.AnchorsWinner.TryGetValue(anchorParsed.IDToken, out TXOutputTokenAnchor anchorWinner)
-        || anchorWinner != anchorParsed)
-      {
-        message = $"{nameParser}: the anchor of TXs[1] is not the anchor winner of IDToken {anchorParsed.IDToken.ToHexString()}.";
-        return false;
-      }
-
-      return true;
+      return IsFieldEqual(nameParser, "AnchorsWinner.Count", 1, blockParsed.Header.AnchorsWinner.Count, ref message)
+        && IsAnchorWinnerLowestScore(nameParser, blockParsed.Header, [tXOutputTokenAnchor], ref message);
     }
 
-    static BlockchainBToken.TXBToken CreateTXBToken(byte[] keyPublic, byte[] iDAccountReceiving)
+    bool Test_AnchorsWinner(Wallet wallet, ref string message)
+    {
+      Console.WriteLine("  5. Draw anchor winners of two IDTokens, ignoring an anchor with other LockTime.");
+
+      byte[] iDTokenSecond = [0x05, 0x06, 0x07, 0x08];
+
+      TXOutputTokenAnchor[] anchorsFirst = [
+        CreateTXOutputTokenAnchor(ID_TOKEN, 1),
+        CreateTXOutputTokenAnchor(ID_TOKEN, 2),
+        CreateTXOutputTokenAnchor(ID_TOKEN, 3)];
+
+      TXOutputTokenAnchor[] anchorsSecond = [
+        CreateTXOutputTokenAnchor(iDTokenSecond, 4),
+        CreateTXOutputTokenAnchor(iDTokenSecond, 5)];
+
+      TXOutputTokenAnchor anchorLockTimeOther = CreateTXOutputTokenAnchor(ID_TOKEN, 6);
+
+      BlockchainBToken.TXBToken tXCoinbase = CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic);
+      tXCoinbase.SerializeUnsigned();
+
+      List<BlockchainBToken.TXBToken> tXs = [
+        tXCoinbase,
+        CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic, anchorsFirst[0], anchorsSecond[0]),
+        CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic, anchorsFirst[1], anchorsSecond[1]),
+        CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic, anchorsFirst[2]),
+        CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic, anchorLockTimeOther)];
+
+      tXs[^1].LockTime = 737856;
+
+      foreach (BlockchainBToken.TXBToken tX in tXs.Skip(1))
+        tX.Serialize(wallet);
+
+      Block block = CreateBlock(tXs);
+
+      while (anchorsFirst.Any(a => string.CompareOrdinal(
+        ComputeScoreAnchor(block.Header.Hash, a),
+        ComputeScoreAnchor(block.Header.Hash, anchorLockTimeOther)) < 0))
+      {
+        block.Header.Nonce += 1;
+        block.Header.ComputeHash();
+      }
+
+      Block blockParsed = ParseBlockSerialized(block);
+
+      string nameParser = "Anchor winners drawn by ParserBToken";
+
+      return IsFieldEqual(nameParser, "AnchorsWinner.Count", 2, blockParsed.Header.AnchorsWinner.Count, ref message)
+        && IsAnchorWinnerLowestScore(nameParser, blockParsed.Header, anchorsFirst, ref message)
+        && IsAnchorWinnerLowestScore(nameParser, blockParsed.Header, anchorsSecond, ref message);
+    }
+
+    static readonly byte[] ID_TOKEN = [0x01, 0x02, 0x03, 0x04];
+
+    static TXOutputTokenAnchor CreateTXOutputTokenAnchor(byte[] iDToken, byte seedHashBlockReferenced)
     {
       TXOutputTokenAnchor tXOutputTokenAnchor = new()
       {
-        IDToken = [0x01, 0x02, 0x03, 0x04],
-        HashBlockReferenced = "0000000000000000000735fc64773067fd0175461148902c97c494ffa3ca9306".ToBinary(),
+        IDToken = iDToken,
+        HashBlockReferenced = SHA256.HashData([seedHashBlockReferenced]),
         HashBlockPreviousReferenced = "0000000000000000000230d9bb1db81e56916b0c2c7363231e75b82b24714482".ToBinary()
       };
 
       tXOutputTokenAnchor.Serialize();
 
-      BlockchainBToken.TXBToken tX = new()
+      return tXOutputTokenAnchor;
+    }
+
+    static Block CreateBlock(List<BlockchainBToken.TXBToken> tXs)
+    {
+      Block block = new(HeaderBToken.COUNT_HEADER_BYTES + 1 + tXs.Sum(t => t.TXRaw.Length));
+      block.TXs.AddRange(tXs);
+
+      HeaderBToken header = CreateHeaderBToken(block.ComputeMerkleRoot());
+      header.Height = 737858;
+
+      block.Header = header;
+
+      return block;
+    }
+
+    static Block ParseBlockSerialized(Block block)
+    {
+      block.Serialize();
+
+      Block blockParsed = new(block.Buffer[..block.LengthDataPayload])
       {
-        KeyPublic = keyPublic,
-        HeightAccountCreated = 1234,
-        Nonce = 5,
-        Fee = 1000,
-        LockTime = 737857
+        Header = new HeaderBToken
+        {
+          Hash = block.Header.Hash,
+          HashPrevious = block.Header.HashPrevious,
+          Height = block.Header.Height
+        }
       };
 
-      tX.TXOutputs.Add(new TXOutputP2PKH(50000, iDAccountReceiving));
-      tX.TXOutputs.Add(tXOutputTokenAnchor);
+      new ParserBToken().ParseBlock(blockParsed, verifySignatures: true);
 
-      return tX;
+      return blockParsed;
+    }
+
+    static string ComputeScoreAnchor(byte[] hashBlock, TXOutputTokenAnchor tXOutputTokenAnchor)
+    {
+      return Convert.ToHexString(SHA256.HashData(
+        [.. hashBlock, .. tXOutputTokenAnchor.HashBlockReferenced, .. tXOutputTokenAnchor.HashBlockPreviousReferenced]));
+    }
+
+    static bool IsAnchorWinnerLowestScore(string nameParser, Header headerParsed, TXOutputTokenAnchor[] anchorsEligible, ref string message)
+    {
+      TXOutputTokenAnchor anchorExpected = anchorsEligible.MinBy(a => ComputeScoreAnchor(headerParsed.Hash, a), StringComparer.Ordinal);
+
+      string iDToken = anchorExpected.IDToken.ToHexString();
+
+      if (!headerParsed.AnchorsWinner.TryGetValue(anchorExpected.IDToken, out TXOutputTokenAnchor anchorWinner))
+      {
+        message = $"{nameParser}: no anchor winner of IDToken {iDToken}.";
+        return false;
+      }
+
+      return IsFieldEqual(nameParser, $"HashBlockReferenced of anchor winner of IDToken {iDToken}", anchorExpected.HashBlockReferenced, anchorWinner.HashBlockReferenced, ref message);
     }
 
     static bool IsTXBTokenParsedEqual(BlockchainBToken.TXBToken tX, byte[] buffer, int indexStart, bool isCoinbase, ref string message)
@@ -283,25 +336,6 @@ internal partial class Testbench
       }
 
       return true;
-    }
-
-    static bool IsFieldEqual(string nameParser, string nameField, byte[] expected, byte[] parsed, ref string message)
-    {
-      if (expected.AsSpan().SequenceEqual(parsed))
-        return true;
-
-      message = $"{nameParser}: field {nameField} is {parsed.ToHexString()} after parsing, expected {expected.ToHexString()}.";
-      return false;
-    }
-
-    static bool IsFieldEqual<T>(string nameParser, string nameField, T expected, T parsed, ref string message)
-      where T : struct
-    {
-      if (EqualityComparer<T>.Default.Equals(expected, parsed))
-        return true;
-
-      message = $"{nameParser}: field {nameField} is {parsed} after parsing, expected {expected}.";
-      return false;
     }
   }
 }
