@@ -96,7 +96,38 @@ internal partial class Testbench
         && TestStreamEnd(ref message)
         && TestGetheadersLocator(ref message)
         && TestLocatorLimit(ref message)
-        && TestHeadersInsertion(ref message);
+        && TestHeadersInsertion(ref message)
+        && TestReturnIdle(ref message);
+    }
+
+    static bool TestReturnIdle(ref string message)
+    {
+      Console.WriteLine("  37. Return Idle: Request blocks after an empty headers message.");
+
+      const string NAME_CASE = "Return idle";
+
+      bool isSent = TrySendHeadersOnTip(NAME_CASE, out SocketFake socketSeed, out List<Header> headersNew, ref message);
+
+      try
+      {
+        if (!isSent)
+          return false;
+
+        SendHeaders(socketSeed);
+
+        if (!TryReceiveRequest(NAME_CASE, socketSeed, MSG_BLOCK, out byte[] hash, ref message))
+          return false;
+
+        if (hash.IsAllBytesEqual(headersNew[0].Hash))
+          return true;
+
+        message = $"{NAME_CASE}: the node requests block {hash.ToHexString()}, expected the first received header {headersNew[0].Hash.ToHexString()}.";
+        return false;
+      }
+      finally
+      {
+        socketSeed.Dispose();
+      }
     }
 
     static bool TestHeadersInsertion(ref string message)
