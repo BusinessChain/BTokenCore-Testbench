@@ -1,6 +1,7 @@
 ﻿using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Net;
+using System.Security.Cryptography;
 
 using BTokenCore;
 
@@ -25,6 +26,9 @@ internal partial class Testbench
     const string COMMAND_NOTFOUND = "notfound";
     const int LENGTH_INVENTORY_TYPE = 4;
     const int LENGTH_INVENTORY = 36;
+    const Network.Inventory.InventoryType MSG_BLOCK = Network.Inventory.InventoryType.MSG_BLOCK;
+    const Network.Inventory.InventoryType MSG_SEGMENT_SWEEP = Network.Inventory.InventoryType.MSG_SEGMENT_SWEEP;
+    const string COMMAND_SEGMENT = "segment";
     const uint PROTOCOL_VERSION = 1;
     const int LENGTH_ADDRESS = 30;
     const int OFFSET_IP_ADDRESS = 12;
@@ -59,7 +63,8 @@ internal partial class Testbench
         && TestRequestTimeout(Testbench.Wallet, ref message)
         && TestBlockServing(Testbench.Wallet, ref message)
         && TestServingDOS(Testbench.Wallet, ref message)
-        && TestBlockAnnouncement(Testbench.Wallet, ref message);
+        && TestBlockAnnouncement(Testbench.Wallet, ref message)
+        && TestSegmentServing(Testbench.Wallet, ref message);
     }
 
     static bool TestHandshakeOutbound(ref string message)
@@ -431,7 +436,7 @@ internal partial class Testbench
 
         string messageHold = "";
 
-        if (TryReceiveRequestBlock(NAME_CASE, socketPeer, out _, ref messageHold, SECONDS_HOLD))
+        if (TryReceiveRequest(NAME_CASE, socketPeer, MSG_BLOCK, out _, ref messageHold, SECONDS_HOLD))
         {
           message = $"{NAME_CASE}: the node requests the newest block before any peer announced it.";
           return false;
@@ -466,7 +471,7 @@ internal partial class Testbench
       try
       {
         if (!TryHandshakeInbound(NAME_CASE, socketPeer, ref message)
-          || !TryReceiveRequestBlock(NAME_CASE, socketPeer, out byte[] hash, ref message))
+          || !TryReceiveRequest(NAME_CASE, socketPeer, MSG_BLOCK, out byte[] hash, ref message))
           return false;
 
         if (!hash.IsAllBytesEqual(blockRefused.Header.Hash))
@@ -475,11 +480,11 @@ internal partial class Testbench
           return false;
         }
 
-        SendInventoryBlock(socketPeer, COMMAND_NOTFOUND, hash);
+        SendInventory(socketPeer, MSG_BLOCK, COMMAND_NOTFOUND, hash);
         Stopwatch stopwatch = Stopwatch.StartNew();
 
         if (!TryServeBlocksRequested(NAME_CASE, socketPeer, blocks.Skip(1).Take(blocks.Count - 2).ToList(), ref message)
-          || !TryReceiveRequestBlock(NAME_CASE, socketPeer, out hash, ref message, SECONDS_TIMEOUT_RETRY))
+          || !TryReceiveRequest(NAME_CASE, socketPeer, MSG_BLOCK, out hash, ref message, SECONDS_TIMEOUT_RETRY))
           return false;
 
         if (!hash.IsAllBytesEqual(blockRefused.Header.Hash) || stopwatch.Elapsed < TimeSpan.FromSeconds(SECONDS_DELAY_REFUSED - 1))
@@ -537,7 +542,7 @@ internal partial class Testbench
       {
         if (!TryHandshakeInbound(NAME_CASE, socketPeer, ref message)
           || !IsPeerListed(NAME_CASE, network, IP_PEER, ref message)
-          || !TryReceiveRequestBlock(NAME_CASE, socketPeer, out _, ref message))
+          || !TryReceiveRequest(NAME_CASE, socketPeer, MSG_BLOCK, out _, ref message))
           return false;
 
         network.AgeBlockRequest(IP_PEER, Network.TIMEOUT_REQUEST_SECONDS);
@@ -559,32 +564,73 @@ internal partial class Testbench
       if (!BlockchainNetwork.TryCreateBlocks(wallet, out List<Block> blocks, ref message))
         return false;
 
-      byte[] hashStored = blocks[2].Header.Hash;
-      byte[] hashUnknown = Enumerable.Repeat((byte)0xAB, hashStored.Length).ToArray();
-
       StartNodeWithInboundPeer(out SocketFake socketPeer, out _, b => b.AnchorAndDeliver(blocks));
 
       try
       {
-        if (!TryHandshakeInbound(NAME_CASE, socketPeer, ref message)
-          || !TryReceiveBlockServed(NAME_CASE, socketPeer, hashStored, ref message))
-          return false;
-
-        SendInventoryBlock(socketPeer, COMMAND_GETDATA, hashUnknown);
-
-        if (!socketPeer.TryReceive(NAME_CASE, COMMAND_NOTFOUND, out byte[] payload, ref message))
-          return false;
-
-        if (payload[^hashUnknown.Length..].IsAllBytesEqual(hashUnknown))
-          return true;
-
-        message = $"{NAME_CASE}: the notfound answer carries hash {payload[^hashUnknown.Length..].ToHexString()}, expected {hashUnknown.ToHexString()}.";
-        return false;
+        return TryHandshakeInbound(NAME_CASE, socketPeer, ref message)
+          && TryReceiveBlockServed(NAME_CASE, socketPeer, blocks[2].Header.Hash, ref message)
+          && IsAnsweredNotFound(NAME_CASE, socketPeer, MSG_BLOCK, ref message);
       }
       finally
       {
         socketPeer.Dispose();
       }
+    }
+
+    static bool TestSegmentServing(Wallet wallet, ref string message)
+    {
+      Console.WriteLine("  18. Segment Serving: Serve the segment of a block, answer an unknown one with notfound.");
+
+      const string NAME_CASE = "Segment serving";
+
+      if (!BlockchainNetwork.TryCreateBlocks(wallet, out List<Block> blocks, ref message))
+        return false;
+
+      HeaderBToken header = (HeaderBToken)blocks[2].Header;
+
+      StartNodeWithInboundPeer(out SocketFake socketPeer, out _, b => b.AnchorAndDeliver(blocks));
+
+      try
+      {
+        if (!TryHandshakeInbound(NAME_CASE, socketPeer, ref message))
+          return false;
+
+        SendInventory(socketPeer, MSG_SEGMENT_SWEEP, COMMAND_GETDATA, header.Hash);
+
+        if (!socketPeer.TryReceive(NAME_CASE, COMMAND_SEGMENT, out byte[] segment, ref message))
+          return false;
+
+        if (!SHA256.HashData(segment).IsAllBytesEqual(header.HashAccounts))
+        {
+          message = $"{NAME_CASE}: the segment served for the block at height {header.Height} does not hash to its HashAccounts.";
+          return false;
+        }
+
+        return IsAnsweredNotFound(NAME_CASE, socketPeer, MSG_SEGMENT_SWEEP, ref message);
+      }
+      finally
+      {
+        socketPeer.Dispose();
+      }
+    }
+
+    static bool IsAnsweredNotFound(string nameCase, SocketFake socketPeer, Network.Inventory.InventoryType type, ref string message)
+    {
+      byte[] hashUnknown = Enumerable.Repeat((byte)0xAB, LENGTH_INVENTORY - LENGTH_INVENTORY_TYPE).ToArray();
+
+      SendInventory(socketPeer, type, COMMAND_GETDATA, hashUnknown);
+
+      if (!socketPeer.TryReceive(nameCase, COMMAND_NOTFOUND, out byte[] payload, ref message))
+        return false;
+
+      byte[] payloadExpected = [.. VarInt.GetBytes(1), .. BitConverter.GetBytes((uint)type), .. hashUnknown];
+
+      if (payload.IsAllBytesEqual(payloadExpected))
+        return true;
+
+      message = $"{nameCase}: the node answers an unknown {type} with notfound {payload.ToHexString()}, expected {payloadExpected.ToHexString()}.";
+      return false;
     }
 
     static bool TestServingDOS(Wallet wallet, ref string message)
@@ -614,7 +660,7 @@ internal partial class Testbench
           if (!TryReceiveBlockServed($"{NAME_CASE}, old block requested again", socketPeer, hashOld, ref message))
             return false;
 
-        SendInventoryBlock(socketPeer, COMMAND_GETDATA, hashOld);
+        SendInventory(socketPeer, MSG_BLOCK, COMMAND_GETDATA, hashOld);
 
         return socketPeer.IsDisconnected(NAME_CASE, ref message);
       }
@@ -690,7 +736,7 @@ internal partial class Testbench
 
     static bool TryReceiveBlockServed(string nameCase, SocketFake socketPeer, byte[] hash, ref string message)
     {
-      SendInventoryBlock(socketPeer, COMMAND_GETDATA, hash);
+      SendInventory(socketPeer, MSG_BLOCK, COMMAND_GETDATA, hash);
 
       if (!socketPeer.TryReceive(nameCase, COMMAND_BLOCK, out byte[] payload, ref message))
         return false;
@@ -704,9 +750,9 @@ internal partial class Testbench
       return false;
     }
 
-    static void SendInventoryBlock(SocketFake socketPeer, string command, byte[] hash)
+    static void SendInventory(SocketFake socketPeer, Network.Inventory.InventoryType type, string command, byte[] hash)
     {
-      byte[] payload = [.. VarInt.GetBytes(1), .. BitConverter.GetBytes((uint)Network.Inventory.InventoryType.MSG_BLOCK), .. hash];
+      byte[] payload = [.. VarInt.GetBytes(1), .. BitConverter.GetBytes((uint)type), .. hash];
 
       socketPeer.SendMessage(command, payload.Length, payload).Wait();
     }
@@ -715,7 +761,7 @@ internal partial class Testbench
     {
       for (int i = 0; i < blocksServed.Count; i++)
       {
-        if (!TryReceiveRequestBlock(nameCase, socketPeer, out byte[] hash, ref message))
+        if (!TryReceiveRequest(nameCase, socketPeer, MSG_BLOCK, out byte[] hash, ref message))
           return false;
 
         Block block = blocksServed.Find(b => b.Header.Hash.IsAllBytesEqual(hash));
@@ -737,7 +783,7 @@ internal partial class Testbench
       socketPeer.SendMessage(COMMAND_BLOCK, block.LengthDataPayload, block.Buffer).Wait();
     }
 
-    static bool TryReceiveRequestBlock(string nameCase, SocketFake socketPeer, out byte[] hash, ref string message, int secondsTimeout = SECONDS_TIMEOUT_REQUEST)
+    static bool TryReceiveRequest(string nameCase, SocketFake socketPeer, Network.Inventory.InventoryType type, out byte[] hash, ref string message, int secondsTimeout = SECONDS_TIMEOUT_REQUEST)
     {
       while (socketPeer.TryReceive(nameCase, COMMAND_GETDATA, out byte[] payload, ref message, secondsTimeout))
       {
@@ -745,7 +791,7 @@ internal partial class Testbench
         int countInventories = VarInt.GetInt(payload, ref startIndex);
 
         for (int i = 0; i < countInventories; i++, startIndex += LENGTH_INVENTORY)
-          if (BitConverter.ToUInt32(payload, startIndex) == (uint)Network.Inventory.InventoryType.MSG_BLOCK)
+          if (BitConverter.ToUInt32(payload, startIndex) == (uint)type)
           {
             hash = payload[(startIndex + LENGTH_INVENTORY_TYPE)..(startIndex + LENGTH_INVENTORY)];
             return true;
