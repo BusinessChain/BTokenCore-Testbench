@@ -23,7 +23,8 @@ internal partial class Testbench
         && BlockchainSynchronizing.TestRestartRollback(Testbench.Wallet, ref message)
         && BlockchainSynchronizing.TestReplayFromRoot(Testbench.Wallet, ref message)
         && BlockchainSynchronizing.TestSegmentInstallation(Testbench.Wallet, ref message)
-        && BlockchainSynchronizing.TestReplayRejection(Testbench.Wallet, ref message);
+        && BlockchainSynchronizing.TestReplayRejection(Testbench.Wallet, ref message)
+        && BlockchainSynchronizing.TestTXPoolGating(Testbench.Wallet, ref message);
     }
 
     class BlockchainSynchronizing : BlockchainTestbench
@@ -159,6 +160,39 @@ internal partial class Testbench
         blockchainRestarted.InsertBlocks(blocksLedger.Where(b => b.Header.Height >= HEIGHT_FORGED).ToList());
 
         return blockchainRestarted.IsSynchronized("Ledger blocks inserted after the rejected block", 6, ref message);
+      }
+
+      internal static bool TestTXPoolGating(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  9. TX Pool Gating: Reject TXs without accounts, reload owned TXs after replay.");
+
+        if (!TryCreateLedger(wallet, out Ledger ledger, ref message))
+          return false;
+
+        TXBToken tXSpend = ledger.CreateTXSpend(wallet, CreateIDAccount(1001, 2), VALUE_SPEND, t => { });
+
+        BlockchainSynchronizing blockchain = StartNodeWithoutAccounts(ledger.GetBlocksInserted());
+
+        if (!IsRejected("Account synchronizer, TX submitted without accounts", () => blockchain.SubmitTX(tXSpend.TXRaw), ref message))
+          return false;
+
+        BlockchainSynchronizing blockchainRestarted = StartNode(blockchain.LiteDatabase, int.MaxValue);
+
+        if (!blockchainRestarted.IsSynchronized("restart after the TX submitted without accounts", 6, ref message)
+          || !blockchainRestarted.IsInPool("restart after the TX submitted without accounts", tXSpend.Hash, false, ref message)
+          || !IsAccepted("Account synchronizer, TX submitted with accounts at the tip", () => blockchainRestarted.SubmitTX(tXSpend.TXRaw), ref message)
+          || !blockchainRestarted.IsInPool("TX submitted with accounts at the tip", tXSpend.Hash, true, ref message))
+          return false;
+
+        blockchainRestarted.Synchronizer.Drop();
+
+        if (!blockchainRestarted.IsInPool("account database dropped", tXSpend.Hash, false, ref message))
+          return false;
+
+        BlockchainSynchronizing blockchainReloaded = StartNode(blockchainRestarted.LiteDatabase, int.MaxValue);
+
+        return blockchainReloaded.IsSynchronized("restart after the account database was dropped", 6, ref message)
+          && blockchainReloaded.IsInPool("owned TX reloaded after the replay", tXSpend.Hash, true, ref message);
       }
 
       internal static bool TestSegmentInstallation(Wallet wallet, ref string message)
@@ -424,6 +458,15 @@ internal partial class Testbench
           return true;
 
         message = $"Account synchronizer, {nameCase}: the accounts are at the tip without a database download.";
+        return false;
+      }
+
+      bool IsInPool(string nameCase, byte[] hashTX, bool isInPoolExpected, ref string message)
+      {
+        if ((GetHashesTXNotInPool([hashTX]).Count == 0) == isInPoolExpected)
+          return true;
+
+        message = $"Account synchronizer, {nameCase}: TX {hashTX.ToHexString()} is {(isInPoolExpected ? "missing in" : "in")} the TX pool.";
         return false;
       }
 
