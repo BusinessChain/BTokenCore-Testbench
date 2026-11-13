@@ -17,7 +17,8 @@ internal partial class Testbench
       message = "";
 
       return BlockchainMining.TestMineCoinbase(Testbench.Wallet, ref message)
-        && BlockchainMining.TestMinePoolTXs(Testbench.Wallet, ref message);
+        && BlockchainMining.TestMinePoolTXs(Testbench.Wallet, ref message)
+        && BlockchainMining.TestFillBlock(Testbench.Wallet, ref message);
     }
 
     class BlockchainMining : BlockchainTestbench
@@ -57,32 +58,92 @@ internal partial class Testbench
         if (!TryStartNode(wallet, NAME_CASE, out BlockchainMining blockchain, out Ledger ledger, ref message))
           return false;
 
-        byte[] iDReceiver = CreateIDAccount(1001, 2);
-        List<TXBToken> tXs = [];
+        if (!blockchain.TryAddSpends(NAME_CASE, ledger, wallet, COUNT_TXS, 0, out List<TXBToken> tXsRanked, ref message))
+          return false;
 
-        for (int i = 0; i < COUNT_TXS; i++)
-        {
-          int offsetNonce = i;
-          TXBToken tX = ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => { t.Nonce += offsetNonce; t.Fee = FEE * (offsetNonce + 1); });
-
-          if (!IsAccepted($"{NAME_CASE}, spend {i} added to the pool", () => blockchain.AddTX(tX), ref message))
-            return false;
-
-          tXs.Add(tX);
-        }
-
-        List<TXBToken> tXsRanked = blockchain.GetTXsRanked(tXs.Select(t => t.Hash).ToHashSet(new EqualityComparerByteArray()));
-        long valueExpected = GetBlockReward(ledger.GetHeightTip() + 1) + ledger.GetRentNext() + tXs.Sum(t => t.Fee);
+        long valueExpected = GetBlockReward(ledger.GetHeightTip() + 1) + ledger.GetRentNext() + tXsRanked.Sum(t => t.Fee);
 
         if (!blockchain.TryMineBlock(NAME_CASE, out Block block, ref message)
           || !blockchain.IsBlockMinedCorrect(NAME_CASE, block, tXsRanked, valueExpected, ref message))
           return false;
 
-        if (blockchain.GetHashesTXNotInPool(tXs.Select(t => t.Hash).ToList()).Count == COUNT_TXS)
+        if (blockchain.GetHashesTXNotInPool(tXsRanked.Select(t => t.Hash).ToList()).Count == COUNT_TXS)
           return true;
 
         message = $"{NAME_CASE}: the pool still holds mined TXs after the block's insertion.";
         return false;
+      }
+
+      internal static bool TestFillBlock(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  3. Fill Block: Mine a pool larger than SizeBlockMax into one block.");
+
+        const string NAME_CASE = "Fill block";
+        const int COUNT_TXS = 25;
+        const int COUNT_OUTPUTS_ADDED = 1500;
+
+        if (!TryStartNode(wallet, NAME_CASE, out BlockchainMining blockchain, out Ledger ledger, ref message)
+          || !blockchain.TryAddSpends(NAME_CASE, ledger, wallet, COUNT_TXS, COUNT_OUTPUTS_ADDED, out List<TXBToken> tXsRanked, ref message))
+          return false;
+
+        if (tXsRanked.Sum(t => t.TXRaw.Length) <= blockchain.SizeBlockMax)
+        {
+          message = $"{NAME_CASE}: the pool holds only {tXsRanked.Sum(t => t.TXRaw.Length)} bytes, not more than SizeBlockMax {blockchain.SizeBlockMax}.";
+          return false;
+        }
+
+        long rent = ledger.GetRentNext();
+        int heightMined = ledger.GetHeightTip() + 1;
+
+        if (!blockchain.TryMineBlock(NAME_CASE, out Block block, ref message))
+          return false;
+
+        if (block.Buffer.Length > blockchain.SizeBlockMax)
+        {
+          message = $"{NAME_CASE}: the mined block at height {heightMined} takes {block.Buffer.Length} bytes, more than SizeBlockMax {blockchain.SizeBlockMax}.";
+          return false;
+        }
+
+        int countTXsMined = block.TXs.Count - 1;
+
+        if (countTXsMined < 1 || countTXsMined >= COUNT_TXS)
+        {
+          message = $"{NAME_CASE}: the mined block holds {countTXsMined} pool TXs, expected a strict prefix of the {COUNT_TXS} ranked pool TXs.";
+          return false;
+        }
+
+        List<TXBToken> tXsExpected = tXsRanked.Take(countTXsMined).ToList();
+
+        return blockchain.IsBlockMinedCorrect(NAME_CASE, block, tXsExpected, GetBlockReward(heightMined) + rent + tXsExpected.Sum(t => t.Fee), ref message);
+      }
+
+      bool TryAddSpends(string nameCase, Ledger ledger, Wallet wallet, int countTXs, int countOutputsAdded, out List<TXBToken> tXsRanked, ref string message)
+      {
+        tXsRanked = null;
+
+        byte[] iDReceiver = CreateIDAccount(1001, 2);
+        HashSet<byte[]> hashesTX = new(new EqualityComparerByteArray());
+
+        for (int i = 0; i < countTXs; i++)
+        {
+          int offsetNonce = i;
+
+          TXBToken tX = ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t =>
+          {
+            t.Nonce += offsetNonce;
+            t.Fee = FEE * (offsetNonce + 1);
+            t.TXOutputs.AddRange(Enumerable.Range(0, countOutputsAdded).Select(_ => new TXOutputP2PKH(1, iDReceiver)));
+          });
+
+          if (!IsAccepted($"{nameCase}, spend {i} added to the pool", () => AddTX(tX), ref message))
+            return false;
+
+          hashesTX.Add(tX.Hash);
+        }
+
+        tXsRanked = GetTXsRanked(hashesTX);
+
+        return true;
       }
 
       bool IsBlockMinedCorrect(string nameCase, Block block, List<TXBToken> tXsExpected, long valueCoinbaseExpected, ref string message)
@@ -124,7 +185,8 @@ internal partial class Testbench
 
         ParentFake.AnchorCreatedLast = null;
 
-        MinerBlockchain.MineBlock();
+        if (!IsAccepted($"{nameCase}, MineBlock", MinerBlockchain.MineBlock, ref message))
+          return false;
 
         if (ParentFake.AnchorCreatedLast is not TXOutputTokenAnchor anchor)
         {
