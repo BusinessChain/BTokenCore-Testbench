@@ -17,7 +17,8 @@ internal partial class Testbench
       message = "";
 
       return BlockchainAnchoring.TestAnchoredFollow(Testbench.Wallet, ref message)
-        && BlockchainAnchoring.TestAwaitingAnchor(Testbench.Wallet, ref message);
+        && BlockchainAnchoring.TestAwaitingAnchor(Testbench.Wallet, ref message)
+        && BlockchainAnchoring.TestAnchorExpiry(Testbench.Wallet, ref message);
     }
 
     class BlockchainBitcoinTestbench : BlockchainBitcoin
@@ -37,7 +38,7 @@ internal partial class Testbench
         return header;
       }
 
-      internal void MineBlock(TXOutputTokenAnchor anchor)
+      internal void MineBlock(params TXOutputTokenAnchor[] anchors)
       {
         HeaderBitcoin headerTip = (HeaderBitcoin)ChainRoot.HeaderTip;
 
@@ -53,7 +54,8 @@ internal partial class Testbench
         for (header.ComputeHash(); new UInt256(header.Hash).IsGreaterThan(UInt256.ParseFromCompact(header.NBits)); header.ComputeHash())
           header.Nonce += 1;
 
-        header.AnchorsWinner[anchor.IDToken] = anchor;
+        foreach (TXOutputTokenAnchor anchor in anchors)
+          header.AnchorsWinner[anchor.IDToken] = anchor;
 
         ChainRoot.AppendHeader(header);
         ChainRoot.BlocksQueued.Add(header.Height, new Block(0) { Header = header });
@@ -126,17 +128,69 @@ internal partial class Testbench
 
           blockchain.BlockchainParentBitcoin.MineBlock(CreateAnchor(blockLedger));
 
-          if (!blockchain.IsSynchronized(ledger, $"{nameCase} stored when its anchor arrived", height, ref message))
+          if (!blockchain.IsSynchronized(ledger, $"{nameCase} stored when its anchor arrived", height, ref message)
+            || !blockchain.IsRequestingNoBlock(nameCase, ref message))
             return false;
-
-          if (blockchain.FetchHeaderBlockMissingNext(h => true) is Header headerRequested)
-          {
-            message = $"{nameCase}: requested the block at height {headerRequested.Height} although it was stored awaiting its anchor.";
-            return false;
-          }
         }
 
         return true;
+      }
+
+      internal static bool TestAnchorExpiry(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  3. Anchor Expiry: Drop a stored block six Bitcoin blocks after its LockTime.");
+
+        if (!TryCreateLedger(wallet, out Ledger ledger, ref message))
+          return false;
+
+        List<Block> blocksLedger = ledger.GetBlocksInserted();
+        BlockchainAnchoring blockchain = StartNode();
+
+        int lockTime = blockchain.BlockchainParentBitcoin.GetHeight();
+        blockchain.StoreBlockAwaitingAnchor(blocksLedger[0], lockTime);
+        blockchain.MineBlocksUpTo(lockTime + BITCOIN_REORG_MARGIN - 1);
+        blockchain.BlockchainParentBitcoin.MineBlock(CreateAnchor(blocksLedger[0]));
+
+        string nameCaseKept = $"Anchor expiry, block at height 1 anchored {BITCOIN_REORG_MARGIN} Bitcoin blocks after its LockTime";
+
+        if (!blockchain.IsSynchronized(ledger, nameCaseKept, 1, ref message)
+          || !blockchain.IsRequestingNoBlock(nameCaseKept, ref message))
+          return false;
+
+        lockTime = blockchain.BlockchainParentBitcoin.GetHeight();
+        blockchain.StoreBlockAwaitingAnchor(blocksLedger[1], lockTime);
+        blockchain.MineBlocksUpTo(lockTime + BITCOIN_REORG_MARGIN);
+        blockchain.BlockchainParentBitcoin.MineBlock(CreateAnchor(blocksLedger[1]));
+
+        string nameCaseDropped = $"Anchor expiry, block at height 2 anchored {BITCOIN_REORG_MARGIN + 1} Bitcoin blocks after its LockTime";
+
+        if (!blockchain.IsAtHeight(nameCaseDropped, 1, ref message))
+          return false;
+
+        if (blockchain.FetchHeaderBlockMissingNext(h => true) is not Header headerRequested || headerRequested.Height != 2)
+        {
+          message = $"{nameCaseDropped}: the dropped block is not requested.";
+          return false;
+        }
+
+        blockchain.ReceiveBlock(blocksLedger[1]);
+
+        return blockchain.IsSynchronized(ledger, $"{nameCaseDropped}, received after the request", 2, ref message);
+      }
+
+      bool IsRequestingNoBlock(string nameCase, ref string message)
+      {
+        if (FetchHeaderBlockMissingNext(h => true) is not Header headerRequested)
+          return true;
+
+        message = $"{nameCase}: requested the block at height {headerRequested.Height} although it was stored awaiting its anchor.";
+        return false;
+      }
+
+      void MineBlocksUpTo(int height)
+      {
+        while (BlockchainParentBitcoin.GetHeight() < height)
+          BlockchainParentBitcoin.MineBlock();
       }
 
       static TXOutputTokenAnchor CreateAnchor(Block blockLedger)
