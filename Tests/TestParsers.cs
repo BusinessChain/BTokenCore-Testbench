@@ -49,7 +49,7 @@ internal partial class Testbench
 
     bool Test_HeaderBToken(ref string message)
     {
-      Console.WriteLine("  Serialize a HeaderBToken and parse it back at index 0 and behind leading bytes.");
+      Console.WriteLine("  1. Round-trip HeaderBToken at two offsets.");
 
       HeaderBToken header = CreateHeaderBToken("5a38043063d4da8309c3cbb2ffd20db190d74bdce1dec3f716d2ffc553864717".ToBinary());
 
@@ -98,7 +98,7 @@ internal partial class Testbench
 
     bool Test_HeaderBitcoin(ref string message)
     {
-      Console.WriteLine("  Parse the raw Bitcoin mainnet header of block 737857 and check its known hash and fields.");
+      Console.WriteLine("  2. Parse mainnet HeaderBitcoin of block 737857.");
 
       byte[] headerRaw = Convert.FromHexString(
         "0080d121824471242bb8751e2363732c0c6b91561eb81dbbd9300200000000000000000017478653c5ffd216f7c3dee1dc4bd790" +
@@ -123,7 +123,7 @@ internal partial class Testbench
 
     bool Test_TXBToken(Wallet wallet, ref string message)
     {
-      Console.WriteLine("  Serialize a wallet-signed and a coinbase TXBToken and parse them back at index 0 and behind leading bytes.");
+      Console.WriteLine("  3. Round-trip signed and coinbase TXBToken.");
 
       BlockchainBToken.TXBToken tX = CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic);
       tX.Serialize(wallet);
@@ -139,7 +139,7 @@ internal partial class Testbench
 
     bool Test_Block(Wallet wallet, ref string message)
     {
-      Console.WriteLine("  Serialize a BToken block with a coinbase and a wallet-signed TXBToken and parse it back with ParserBToken.");
+      Console.WriteLine("  4. Round-trip BToken block with anchor winner.");
 
       BlockchainBToken.TXBToken tXCoinbase = CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic);
       tXCoinbase.Nonce = 0;
