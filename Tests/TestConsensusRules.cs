@@ -3,6 +3,8 @@ using System.Security.Cryptography;
 
 using BTokenCore;
 
+using LiteDB;
+
 namespace BTokenCore_Testbench;
 
 internal partial class Testbench
@@ -19,7 +21,244 @@ internal partial class Testbench
 
       return Test_BlockRules(Testbench.Wallet, ref message)
         && Test_TXRules(Testbench.Wallet, ref message)
-        && Test_HeaderBitcoinRules(ref message);
+        && Test_HeaderBitcoinRules(ref message)
+        && BlockchainAccounts.TestSpendingRules(Testbench.Wallet, ref message);
+    }
+
+    abstract class BlockchainAccounts : BlockchainBToken
+    {
+      const int COUNT_SEGMENTS = 2048;
+      const int SHIFT_INDEX_SEGMENT = 5;
+      const long RENT_SWEEP = 36;
+      const long BLOCK_REWARD_INITIAL = 20_000_000_000;
+      const int PERIOD_HALVING = 52_500;
+      const long FEE = 1000;
+      const long VALUE_SPEND = 50000;
+
+      static readonly Comparer<byte[]> ComparerID = Comparer<byte[]>.Create((a, b) => a.AsSpan().SequenceCompareTo(b));
+
+      BlockchainAccounts()
+        : base(null, null, null, null)
+      { }
+
+      internal static bool TestSpendingRules(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  4. Reject spends with wrong Nonce or HeightAccountCreated, too little Balance, unknown or emptied account, replays and wrong HashAccounts.");
+
+        Ledger ledger = new(heightRoot: 0);
+
+        int indexSegmentWallet = GetIndexSegment(wallet.Hash160PKeyPublic);
+        byte[] iDMiner = CreateIDAccount((indexSegmentWallet + 100) % COUNT_SEGMENTS, 1);
+        byte[] iDReceiver = CreateIDAccount((indexSegmentWallet + 200) % COUNT_SEGMENTS, 2);
+        byte[] iDUnknown = CreateIDAccount((indexSegmentWallet + 300) % COUNT_SEGMENTS, 3);
+
+        if (!ledger.TryInsertBlock("coinbase creating the wallet account", [ledger.CreateCoinbase(wallet, wallet.Hash160PKeyPublic, 0)], isValidExpected: true, null, ref message))
+          return false;
+
+        long balanceWallet = ledger.GetBalanceNext(wallet.Hash160PKeyPublic);
+        TXBToken tXSpend = ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => { });
+
+        if (!ledger.TryInsertBlock("spend with Nonce one higher", [ledger.CreateCoinbase(wallet, iDMiner, FEE), ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => t.Nonce += 1)], isValidExpected: false, null, ref message)
+          || !ledger.TryInsertBlock("spend with HeightAccountCreated one higher", [ledger.CreateCoinbase(wallet, iDMiner, FEE), ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => t.HeightAccountCreated += 1)], isValidExpected: false, null, ref message)
+          || !ledger.TryInsertBlock("spend of one more than the Balance", [ledger.CreateCoinbase(wallet, iDMiner, FEE), ledger.CreateTXSpend(wallet, iDReceiver, balanceWallet - FEE + 1, t => { })], isValidExpected: false, null, ref message)
+          || !ledger.TryInsertBlock("spend from an unknown account", [ledger.CreateCoinbase(wallet, iDMiner, FEE), tXSpend], isValidExpected: false, b => ((TXBToken)b.TXs[1]).IDAccountSource = iDUnknown, ref message)
+          || !ledger.TryInsertBlock("block with wrong HashAccounts", [ledger.CreateCoinbase(wallet, iDMiner, FEE), tXSpend], isValidExpected: false, b => ((HeaderBToken)b.Header).HashAccounts = SHA256.HashData(((HeaderBToken)b.Header).HashAccounts), ref message)
+          || !ledger.TryInsertBlock("valid spend", [ledger.CreateCoinbase(wallet, iDMiner, FEE), tXSpend], isValidExpected: true, null, ref message)
+          || !ledger.TryInsertBlock("replayed spend", [ledger.CreateCoinbase(wallet, iDMiner, FEE), tXSpend], isValidExpected: false, null, ref message))
+          return false;
+
+        TXBToken tXSpendBalance = ledger.CreateTXSpend(wallet, iDReceiver, ledger.GetBalanceNext(wallet.Hash160PKeyPublic) - FEE, t => { });
+        TXBToken tXSpendAfterEmptied = ledger.CreateTXSpend(wallet, iDReceiver, 1, t => t.Nonce += 1);
+
+        return ledger.TryInsertBlock("spend from an account spent to zero in the same block", [ledger.CreateCoinbase(wallet, iDMiner, 2 * FEE), tXSpendBalance, tXSpendAfterEmptied], isValidExpected: false, null, ref message)
+          && ledger.TryInsertBlock("spend of the whole Balance", [ledger.CreateCoinbase(wallet, iDMiner, FEE), tXSpendBalance], isValidExpected: true, null, ref message);
+      }
+
+      static int GetIndexSegment(byte[] iDAccount)
+      {
+        return (iDAccount[0] << 8 | iDAccount[1]) >> SHIFT_INDEX_SEGMENT;
+      }
+
+      static byte[] CreateIDAccount(int indexSegment, byte seed)
+      {
+        byte[] iDAccount = new byte[20];
+        int prefix = indexSegment << SHIFT_INDEX_SEGMENT;
+
+        iDAccount[0] = (byte)(prefix >> 8);
+        iDAccount[1] = (byte)prefix;
+        iDAccount[^1] = seed;
+
+        return iDAccount;
+      }
+
+      static long GetBlockReward(int height)
+      {
+        int countHalvings = height / PERIOD_HALVING;
+
+        return countHalvings >= 64 ? 0 : BLOCK_REWARD_INITIAL >> countHalvings;
+      }
+
+      class Ledger
+      {
+        LiteDatabase LiteDatabase = new(new MemoryStream(), new BsonMapper { IncludeFields = true, IncludeNonPublic = true });
+        DatabaseAccounts Accounts = new();
+        Dictionary<byte[], Account> AccountsReference = new(new EqualityComparerByteArray());
+        int HeightTip;
+
+
+        internal Ledger(int heightRoot)
+        {
+          HeightTip = heightRoot;
+
+          Accounts.Load(LiteDatabase);
+          Accounts.Install([], new HeaderBToken { Hash = new byte[32], Height = heightRoot }, null, out _);
+        }
+
+        internal TXBToken CreateCoinbase(Wallet wallet, byte[] iDMiner, long fees)
+        {
+          ApplyBlock([], HeightTip + 1, out long rent);
+
+          TXBToken tX = CreateTXBToken(wallet.KeyPublic, iDMiner);
+          tX.TXOutputs[0] = new TXOutputP2PKH(GetBlockReward(HeightTip + 1) + fees + rent, iDMiner);
+          tX.SerializeUnsigned();
+
+          return tX;
+        }
+
+        internal TXBToken CreateTXSpend(Wallet wallet, byte[] iDReceiving, long value, Action<TXBToken> alter)
+        {
+          Account account = AccountsReference[wallet.Hash160PKeyPublic];
+
+          TXBToken tX = CreateTXBToken(wallet.KeyPublic, iDReceiving);
+          tX.HeightAccountCreated = account.HeightAccountCreated;
+          tX.Nonce = account.Nonce;
+          tX.Fee = FEE;
+          tX.TXOutputs[0] = new TXOutputP2PKH(value, iDReceiving);
+
+          alter(tX);
+          tX.Serialize(wallet);
+
+          return tX;
+        }
+
+        internal long GetBalanceNext(byte[] iDAccount)
+        {
+          return ApplyBlock([], HeightTip + 1, out _)[iDAccount].Balance;
+        }
+
+        internal bool TryInsertBlock(string nameCase, List<TXBToken> tXs, bool isValidExpected, Action<Block> alter, ref string message)
+        {
+          int height = HeightTip + 1;
+          Dictionary<byte[], Account> accountsAfter = ApplyBlock(tXs, height, out _);
+
+          Block block = CreateBlock(tXs);
+          HeaderBToken header = (HeaderBToken)block.Header;
+          header.Height = height;
+          header.HashAccounts = ComputeHashAccounts(accountsAfter, height);
+          header.ComputeHash();
+
+          Block blockParsed = ParseBlockSerialized(block);
+          alter?.Invoke(blockParsed);
+
+          try
+          {
+            LiteDatabase.RunTransaction(() => Accounts.InsertBlock(blockParsed));
+          }
+          catch (ProtocolException exception)
+          {
+            if (!isValidExpected)
+              return true;
+
+            message = $"Account rules, {nameCase}: rejected the valid block at height {height}: {exception.Message}";
+            return false;
+          }
+
+          if (!isValidExpected)
+          {
+            message = $"Account rules, {nameCase}: accepted the invalid block at height {height}.";
+            return false;
+          }
+
+          AccountsReference = accountsAfter;
+          HeightTip = height;
+
+          return true;
+        }
+
+        Dictionary<byte[], Account> ApplyBlock(List<TXBToken> tXs, int height, out long rent)
+        {
+          Dictionary<byte[], Account> accounts = new(new EqualityComparerByteArray());
+
+          foreach (Account account in AccountsReference.Values)
+            accounts.Add(account.ID, new Account
+            {
+              ID = account.ID,
+              HeightAccountCreated = account.HeightAccountCreated,
+              Nonce = account.Nonce,
+              Balance = account.Balance
+            });
+
+          rent = 0;
+
+          foreach (Account account in accounts.Values.Where(a => GetIndexSegment(a.ID) == height % COUNT_SEGMENTS).ToList())
+            if (account.Balance <= RENT_SWEEP)
+            {
+              rent += account.Balance;
+              accounts.Remove(account.ID);
+            }
+            else
+            {
+              rent += RENT_SWEEP;
+              account.Balance -= RENT_SWEEP;
+            }
+
+          for (int i = 0; i < tXs.Count; i++)
+          {
+            foreach (TXOutputP2PKH tXOutput in tXs[i].TXOutputs.OfType<TXOutputP2PKH>().Where(o => o.Value > 0))
+            {
+              if (!accounts.TryGetValue(tXOutput.IDAccount, out Account accountReceiving))
+              {
+                accountReceiving = new Account { ID = tXOutput.IDAccount, HeightAccountCreated = height };
+                accounts.Add(accountReceiving.ID, accountReceiving);
+              }
+
+              accountReceiving.Balance += tXOutput.Value;
+            }
+
+            if (i > 0 && accounts.TryGetValue(Crypto.ComputeHash160(tXs[i].KeyPublic), out Account accountSource))
+            {
+              accountSource.Nonce += 1;
+              accountSource.Balance -= tXs[i].GetValueOutputs() + tXs[i].Fee;
+            }
+          }
+
+          foreach (Account account in accounts.Values.Where(a => a.Balance == 0).ToList())
+            accounts.Remove(account.ID);
+
+          return accounts;
+        }
+
+        static byte[] ComputeHashAccounts(Dictionary<byte[], Account> accounts, int height)
+        {
+          int indexSegment = height % COUNT_SEGMENTS;
+          long offsetRent = RENT_SWEEP * ((height + COUNT_SEGMENTS - indexSegment) / COUNT_SEGMENTS);
+
+          List<byte> bytes = [];
+          int countAccounts = 0;
+
+          foreach (Account account in accounts.Values.Where(a => GetIndexSegment(a.ID) == indexSegment).OrderBy(a => a.ID, ComparerID))
+          {
+            bytes.AddRange(account.ID);
+            bytes.AddRange(BitConverter.GetBytes(account.HeightAccountCreated));
+            bytes.AddRange(BitConverter.GetBytes(account.Nonce));
+            bytes.AddRange(BitConverter.GetBytes(account.Balance + offsetRent));
+
+            countAccounts += 1;
+          }
+
+          return SHA256.HashData([.. VarInt.GetBytes(countAccounts), .. bytes]);
+        }
+      }
     }
 
     const uint UNIX_TIME_START = 1_600_000_000;
