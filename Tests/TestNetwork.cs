@@ -88,7 +88,35 @@ internal partial class Testbench
         && TestOwnTX(Testbench.Wallet, ref message)
         && TestFramingSend(ref message)
         && TestSplitReads(ref message)
-        && TestMagicMismatch(ref message);
+        && TestMagicMismatch(ref message)
+        && TestPayloadLength(ref message);
+    }
+
+    static bool TestPayloadLength(ref string message)
+    {
+      Console.WriteLine("  32. Payload Length: Reject payload lengths beyond the buffer or negative.");
+
+      const int SIZE_BUFFER = 16;
+
+      return IsPayloadLengthAccepted("declared length equal to the buffer size", SIZE_BUFFER, SIZE_BUFFER, true, ref message)
+        && IsPayloadLengthAccepted("declared length exceeding the buffer size", SIZE_BUFFER, SIZE_BUFFER + 1, false, ref message)
+        && IsPayloadLengthAccepted("negative declared length", SIZE_BUFFER, -1, false, ref message);
+    }
+
+    static bool IsPayloadLengthAccepted(string nameCase, int sizeBuffer, int lengthDeclared, bool isAcceptedExpected, ref string message)
+    {
+      using ConnectionLoopback connection = new();
+
+      connection.StreamRaw.Write(BuildMessage(MAGIC_BYTES, COMMAND_FRAMING, lengthDeclared, new byte[Math.Max(lengthDeclared, 0)]));
+      connection.Socket.ReceiveCommandMessageNext().GetAwaiter().GetResult();
+
+      string nameRule = $"Payload length, {nameCase}";
+      Action receive = () => connection.Socket.ReceivePayloadNext(new byte[sizeBuffer]).GetAwaiter().GetResult();
+
+      if (isAcceptedExpected)
+        return IsAccepted(nameRule, receive, ref message);
+
+      return IsRejected(nameRule, receive, ref message);
     }
 
     static bool TestMagicMismatch(ref string message)
