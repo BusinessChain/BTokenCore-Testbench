@@ -19,23 +19,27 @@ internal partial class Testbench
       message = "";
 
       return BlockchainSynchronizing.TestFreshStart(Testbench.Wallet, ref message)
-        && BlockchainSynchronizing.TestRollbackAtTip(Testbench.Wallet, ref message);
+        && BlockchainSynchronizing.TestRollbackAtTip(Testbench.Wallet, ref message)
+        && BlockchainSynchronizing.TestRestartRollback(Testbench.Wallet, ref message);
     }
 
     class BlockchainSynchronizing : BlockchainTestbench
     {
       const string NAME_TOKEN = "TestSynchronizer";
 
-      BlockchainSynchronizing(LiteDatabase liteDatabase, Blockchain blockchainParent)
+      int HeightAnchored;
+
+      BlockchainSynchronizing(LiteDatabase liteDatabase, Blockchain blockchainParent, int heightAnchored)
         : base(NAME_TOKEN, liteDatabase, blockchainParent)
-      { }
+      {
+        HeightAnchored = heightAnchored;
+      }
 
       internal static bool TestFreshStart(Wallet wallet, ref string message)
       {
         Console.WriteLine("  1. Fresh Start: Install empty accounts at height 0, follow inserted blocks.");
 
-        BlockchainSynchronizing blockchain = Create();
-        blockchain.Load();
+        BlockchainSynchronizing blockchain = StartNode(CreateLiteDatabase(), int.MaxValue);
 
         if (!blockchain.IsSynchronized("fresh start before any block", 0, ref message)
           || !TryCreateLedger(wallet, out Ledger ledger, ref message))
@@ -59,8 +63,7 @@ internal partial class Testbench
         if (!TryCreateLedger(wallet, out Ledger ledger, ref message))
           return false;
 
-        BlockchainSynchronizing blockchain = Create();
-        blockchain.Load();
+        BlockchainSynchronizing blockchain = StartNode(CreateLiteDatabase(), int.MaxValue);
         blockchain.InsertBlocks(ledger.GetBlocksInserted());
         blockchain.RollBackTo(3);
 
@@ -81,6 +84,26 @@ internal partial class Testbench
         blockchain.InsertBlocks(ledger.GetBlocksInserted().Where(b => b.Header.Height > 3).ToList());
 
         return blockchain.IsSynchronized("replacing fork inserted after the rollback to height 3", 6, ref message);
+      }
+
+      internal static bool TestRestartRollback(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  3. Restart Rollback: Restart rolls accounts back with unanchored blocks before replaying.");
+
+        if (!TryCreateLedger(wallet, out Ledger ledger, ref message))
+          return false;
+
+        BlockchainSynchronizing blockchain = StartNode(CreateLiteDatabase(), int.MaxValue);
+        blockchain.InsertBlocks(ledger.GetBlocksInserted());
+
+        BlockchainSynchronizing blockchainRestarted = StartNode(blockchain.LiteDatabase, 3);
+
+        if (!blockchainRestarted.IsSynchronized("restart with blocks anchored up to height 3", 3, ref message))
+          return false;
+
+        blockchainRestarted.InsertBlocks(ledger.GetBlocksInserted().Where(b => b.Header.Height > 3).ToList());
+
+        return blockchainRestarted.IsSynchronized("blocks above height 3 inserted again after the restart", 6, ref message);
       }
 
       static bool TryCreateLedger(Wallet wallet, out Ledger ledger, ref string message)
@@ -105,14 +128,17 @@ internal partial class Testbench
         UpdateTipBlockchain(ChainRoot);
       }
 
-      static BlockchainSynchronizing Create()
+      static BlockchainSynchronizing StartNode(LiteDatabase liteDatabase, int heightAnchored)
       {
         CreateWalletFile(BlockchainBitcoin.NAME_TOKEN);
         CreateWalletFile(NAME_TOKEN);
 
         BlockchainBitcoin blockchainParent = new(CreateLiteDatabase(), new SemaphoreSlim(1));
 
-        return new BlockchainSynchronizing(CreateLiteDatabase(), blockchainParent);
+        BlockchainSynchronizing blockchain = new(liteDatabase, blockchainParent, heightAnchored);
+        blockchain.Load();
+
+        return blockchain;
       }
 
       static void CreateWalletFile(string nameToken)
@@ -136,6 +162,14 @@ internal partial class Testbench
         return new HeaderBToken { Hash = new byte[32], Height = 0 };
       }
 
+      protected override void ParseBlockStored(Block block)
+      {
+        if (block.Header.Height <= HeightAnchored)
+          block.Header.HeaderParent = ChainRoot.HeaderRoot.HeaderParent;
+
+        base.ParseBlockStored(block);
+      }
+
       void InsertBlocks(List<Block> blocksLedger)
       {
         foreach (Block blockLedger in blocksLedger)
@@ -144,7 +178,6 @@ internal partial class Testbench
 
           int index = 0;
           Header header = Parser.ParseHeader(block.Buffer, ref index);
-          header.HeaderParent = ChainRoot.HeaderRoot.HeaderParent;
 
           ChainRoot.AppendHeader(header);
 
