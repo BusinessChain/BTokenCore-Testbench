@@ -235,7 +235,6 @@ internal partial class Testbench
           && blockchain.IsRequestingNoBlock(nameCaseReanchored, ref message);
       }
 
-      // Counter-tested 2026-11-13 19:05
       internal static bool TestRestartAnchored(Wallet wallet, ref string message)
       {
         Console.WriteLine("  5. Restart Anchored: Re-anchor stored blocks through the reloaded Bitcoin chain.");
@@ -360,7 +359,6 @@ internal partial class Testbench
         return blockchain.IsWithoutAccounts("Window resync, fork blocks delivered after the resync", HEIGHT_RESYNC + 1, ref message);
       }
 
-      // Counter-tested 2026-11-13 19:05
       internal static bool TestRestartResync(Wallet wallet, ref string message)
       {
         Console.WriteLine("  8. Restart Resync: Resync at restart when RollBackUnanchored drops below the window.");
