@@ -36,13 +36,14 @@ internal partial class Testbench
         && Test_BlockSize(ref message)
         && BlockchainAccounts.TestSingleRollbacks(Testbench.Wallet, ref message)
         && BlockchainAccounts.TestCountRestoration(Testbench.Wallet, ref message)
-        && BlockchainAccounts.TestForkReplacement(Testbench.Wallet, ref message);
+        && BlockchainAccounts.TestForkReplacement(Testbench.Wallet, ref message)
+        && BlockchainAccounts.TestRetentionWindow(Testbench.Wallet, ref message);
     }
 
     const int SIZE_BLOCK_MAX = 1 << 20;
     static readonly byte[] MAGIC_BYTES = [0xf9, 0xbe, 0xb4, 0xd9];
 
-    // Counter-tested 2026-11-13
+    // Counter-tested 2026-11-13 14:03
     bool Test_BlockSize(ref string message)
     {
       Console.WriteLine("  12. Receive a block payload of SizeBlockMax and reject a longer one and a negative length.");
@@ -204,12 +205,8 @@ internal partial class Testbench
         byte[] iDRentSwept = CreateIDAccount(indexSegmentRent, 4);
         byte[] iDRentSweptExactly = CreateIDAccount(indexSegmentRent, 5);
 
-        TXBToken tXCoinbaseRentAccounts = ledger.CreateCoinbase(wallet, wallet.Hash160PKeyPublic, 0);
-        ((TXOutputP2PKH)tXCoinbaseRentAccounts.TXOutputs[0]).Value -= 100 + 20 + RENT_SWEEP;
-        tXCoinbaseRentAccounts.TXOutputs.Add(new TXOutputP2PKH(100, iDRentPaying));
-        tXCoinbaseRentAccounts.TXOutputs.Add(new TXOutputP2PKH(20, iDRentSwept));
-        tXCoinbaseRentAccounts.TXOutputs.Add(new TXOutputP2PKH(RENT_SWEEP, iDRentSweptExactly));
-        tXCoinbaseRentAccounts.SerializeUnsigned();
+        TXBToken tXCoinbaseRentAccounts = ledger.CreateCoinbase(wallet, wallet.Hash160PKeyPublic, 0,
+          new TXOutputP2PKH(100, iDRentPaying), new TXOutputP2PKH(20, iDRentSwept), new TXOutputP2PKH(RENT_SWEEP, iDRentSweptExactly));
 
         if (!ledger.TryInsertBlock("coinbase paying one more than the block reward", [ledger.CreateCoinbase(wallet, iDMiner, 1)], isValidExpected: false, null, ref message)
           || !ledger.TryInsertBlock("coinbase paying one less than the block reward", [ledger.CreateCoinbase(wallet, iDMiner, -1)], isValidExpected: false, null, ref message)
@@ -284,12 +281,8 @@ internal partial class Testbench
         byte[] iDRentSwept = CreateIDAccount(indexSegmentRent, 4);
         byte[] iDRentSweptExactly = CreateIDAccount(indexSegmentRent, 5);
 
-        TXBToken tXCoinbaseRentAccounts = ledger.CreateCoinbase(wallet, wallet.Hash160PKeyPublic, 0);
-        ((TXOutputP2PKH)tXCoinbaseRentAccounts.TXOutputs[0]).Value -= 100 + 20 + RENT_SWEEP;
-        tXCoinbaseRentAccounts.TXOutputs.Add(new TXOutputP2PKH(100, iDRentPaying));
-        tXCoinbaseRentAccounts.TXOutputs.Add(new TXOutputP2PKH(20, iDRentSwept));
-        tXCoinbaseRentAccounts.TXOutputs.Add(new TXOutputP2PKH(RENT_SWEEP, iDRentSweptExactly));
-        tXCoinbaseRentAccounts.SerializeUnsigned();
+        TXBToken tXCoinbaseRentAccounts = ledger.CreateCoinbase(wallet, wallet.Hash160PKeyPublic, 0,
+          new TXOutputP2PKH(100, iDRentPaying), new TXOutputP2PKH(20, iDRentSwept), new TXOutputP2PKH(RENT_SWEEP, iDRentSweptExactly));
 
         if (!ledger.TryInsertBlock("coinbase creating the wallet account and three accounts in a rent segment", [tXCoinbaseRentAccounts], isValidExpected: true, null, ref message)
           || !ledger.TryInsertBlock("spend and TX paying only a Fee", [
@@ -306,33 +299,43 @@ internal partial class Testbench
           if (!ledger.TryInsertBlock("coinbase before the sweep", [ledger.CreateCoinbase(wallet, iDMiner, 0)], isValidExpected: true, null, ref message))
             return false;
 
-        TXBToken tXCoinbaseRecreating = ledger.CreateCoinbase(wallet, iDMiner, 0);
-        ((TXOutputP2PKH)tXCoinbaseRecreating.TXOutputs[0]).Value -= 50;
-        tXCoinbaseRecreating.TXOutputs.Add(new TXOutputP2PKH(50, iDRentSwept));
-        tXCoinbaseRecreating.SerializeUnsigned();
-
-        if (!ledger.TryInsertBlock("sweep recreating a swept account", [tXCoinbaseRecreating], isValidExpected: true, null, ref message)
+        if (!ledger.TryInsertBlock("sweep recreating a swept account", [ledger.CreateCoinbase(wallet, iDMiner, 0, new TXOutputP2PKH(50, iDRentSwept))], isValidExpected: true, null, ref message)
           || !ledger.TryInsertBlock("output to and spend from the wallet account", [ledger.CreateCoinbase(wallet, wallet.Hash160PKeyPublic, FEE), ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => { })], isValidExpected: true, null, ref message))
           return false;
 
         if (!ledger.TryInsertBlock("spend of the whole Balance", [ledger.CreateCoinbase(wallet, iDMiner, FEE), ledger.CreateTXSpend(wallet, iDReceiver, ledger.GetBalanceNext(wallet.Hash160PKeyPublic) - FEE, t => { })], isValidExpected: true, null, ref message))
           return false;
 
-        List<List<TXBToken>> tXsRolledBack = [];
+        return ledger.TryRollBackAndInsertAgain("single rollbacks", heightTarget: 0, ref message);
+      }
 
-        while (ledger.GetHeightTip() > 0)
-        {
-          if (!ledger.TryRollBack("single rollbacks", out List<TXBToken> tXs, ref message))
+      internal static bool TestRetentionWindow(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  16. Roll back all blocks whose undo records are kept, across two sweeps of a segment, and insert them again.");
+
+        const int COUNT_MAX_BLOCKS_STORED = COUNT_SEGMENTS + BITCOIN_REORG_MARGIN;
+
+        Ledger ledger = new(heightRoot: 0);
+
+        int indexSegmentRent = GetIndexSegment(wallet.Hash160PKeyPublic) == 3 ? 4 : 3;
+        byte[] iDMiner = CreateIDAccount(1001, 1);
+        byte[] iDReceiver = CreateIDAccount(1002, 2);
+
+        TXBToken tXCoinbaseAccounts = ledger.CreateCoinbase(wallet, wallet.Hash160PKeyPublic, 0,
+          new TXOutputP2PKH(100, CreateIDAccount(indexSegmentRent, 3)),
+          new TXOutputP2PKH(50, CreateIDAccount(indexSegmentRent, 4)),
+          new TXOutputP2PKH(100, CreateIDAccount(1000, 5)));
+
+        if (!ledger.TryInsertBlock("coinbase creating the wallet account and accounts in a segment swept twice", [tXCoinbaseAccounts], isValidExpected: true, null, ref message)
+          || !ledger.TryInsertBlock("spend from the wallet account", [ledger.CreateCoinbase(wallet, iDMiner, FEE), ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => { })], isValidExpected: true, null, ref message))
+          return false;
+
+        while (ledger.GetHeightTip() < COUNT_MAX_BLOCKS_STORED - 1)
+          if (!ledger.TryInsertBlock("coinbase inside the retention window", [ledger.CreateCoinbase(wallet, iDMiner, 0)], isValidExpected: true, null, ref message))
             return false;
 
-          tXsRolledBack.Insert(0, tXs);
-        }
-
-        foreach (List<TXBToken> tXs in tXsRolledBack)
-          if (!ledger.TryInsertBlock("block inserted again after rolling back to the root", tXs, isValidExpected: true, null, ref message))
-            return false;
-
-        return true;
+        return ledger.TryInsertBlock("spend of the whole Balance", [ledger.CreateCoinbase(wallet, iDMiner, FEE), ledger.CreateTXSpend(wallet, iDReceiver, ledger.GetBalanceNext(wallet.Hash160PKeyPublic) - FEE, t => { })], isValidExpected: true, null, ref message)
+          && ledger.TryRollBackAndInsertAgain("retention window", heightTarget: 0, ref message);
       }
 
       internal static bool TestCountRestoration(Wallet wallet, ref string message)
@@ -396,15 +399,8 @@ internal partial class Testbench
 
       static TXBToken CreateCoinbaseAccounts(Ledger ledger, Wallet wallet, int indexSegment, int countAccounts)
       {
-        TXBToken tX = ledger.CreateCoinbase(wallet, CreateIDAccount(indexSegment, 0), 0);
-        ((TXOutputP2PKH)tX.TXOutputs[0]).Value -= countAccounts - 1;
-
-        for (int i = 1; i < countAccounts; i++)
-          tX.TXOutputs.Add(new TXOutputP2PKH(1, CreateIDAccount(indexSegment, (byte)i)));
-
-        tX.SerializeUnsigned();
-
-        return tX;
+        return ledger.CreateCoinbase(wallet, CreateIDAccount(indexSegment, 0), 0,
+          [.. Enumerable.Range(1, countAccounts - 1).Select(i => new TXOutputP2PKH(1, CreateIDAccount(indexSegment, (byte)i)))]);
       }
 
       static int GetIndexSegment(byte[] iDAccount)
@@ -462,10 +458,11 @@ internal partial class Testbench
           return HeightTip;
         }
 
-        internal TXBToken CreateCoinbase(Wallet wallet, byte[] iDMiner, long fees)
+        internal TXBToken CreateCoinbase(Wallet wallet, byte[] iDMiner, long fees, params TXOutputP2PKH[] tXOutputsAdded)
         {
           TXBToken tX = CreateTXBToken(wallet.KeyPublic, iDMiner);
-          tX.TXOutputs[0] = new TXOutputP2PKH(GetBlockReward(HeightTip + 1) + fees + GetRentNext(), iDMiner);
+          tX.TXOutputs[0] = new TXOutputP2PKH(GetBlockReward(HeightTip + 1) + fees + GetRentNext() - tXOutputsAdded.Sum(o => o.Value), iDMiner);
+          tX.TXOutputs.AddRange(tXOutputsAdded);
           tX.SerializeUnsigned();
 
           return tX;
@@ -560,6 +557,25 @@ internal partial class Testbench
             message = $"Account rules, {nameCaseRollBack}: the last applied block is {Accounts.GetHashBlockAppliedLast().ToHexString()}, expected {HashTip.ToHexString()}.";
             return false;
           }
+
+          return true;
+        }
+
+        internal bool TryRollBackAndInsertAgain(string nameCase, int heightTarget, ref string message)
+        {
+          List<List<TXBToken>> tXsRolledBack = [];
+
+          while (HeightTip > heightTarget)
+          {
+            if (!TryRollBack(nameCase, out List<TXBToken> tXs, ref message))
+              return false;
+
+            tXsRolledBack.Insert(0, tXs);
+          }
+
+          foreach (List<TXBToken> tXs in tXsRolledBack)
+            if (!TryInsertBlock($"{nameCase}, block inserted again after rolling back to height {heightTarget}", tXs, isValidExpected: true, null, ref message))
+              return false;
 
           return true;
         }
@@ -673,7 +689,7 @@ internal partial class Testbench
     const int INDEX_NBITS = 72;
     const int INDEX_NONCE = 76;
 
-    // Counter-tested 2026-11-13
+    // Counter-tested 2026-11-13 14:03
     bool Test_HeaderBitcoinRules(ref string message)
     {
       Console.WriteLine("  3. Reject HeaderBitcoin with premature timestamp, failed proof of work, wrong HashPrevious, time below median or wrong NBits.");
@@ -849,7 +865,7 @@ internal partial class Testbench
     const long SUPPLY_MAX = 2 * 20_000_000_000 * 52_500;
     const long VALUE_OUTPUT = 50000;
 
-    // Counter-tested 2026-11-13
+    // Counter-tested 2026-11-13 14:03
     bool Test_TXRules(Wallet wallet, ref string message)
     {
       Console.WriteLine("  2. Reject TXs with invalid Fee, Value, script, signature or count of outputs, and check IsLockTimeValid.");
@@ -943,7 +959,7 @@ internal partial class Testbench
         ref message);
     }
 
-    // Counter-tested 2026-11-13
+    // Counter-tested 2026-11-13 14:03
     bool Test_BlockRules(Wallet wallet, ref string message)
     {
       Console.WriteLine("  1. Reject blocks with unexpected header, without TXs, with a TX twice, mutated or with wrong MerkleRoot.");

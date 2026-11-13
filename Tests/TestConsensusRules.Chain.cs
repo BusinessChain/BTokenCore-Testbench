@@ -22,7 +22,7 @@ internal partial class Testbench
         : base(null, 0, null, null, null)
       { }
 
-      // Counter-tested 2026-11-13
+      // Counter-tested 2026-11-13 14:03
       internal static bool TestForkPermutations(ref string message)
       {
         Console.WriteLine("  7. Choose the strongest fork in every permutation of BToken header trees with up to three forks.");
@@ -34,7 +34,7 @@ internal partial class Testbench
         return true;
       }
 
-      // Counter-tested 2026-11-13
+      // Counter-tested 2026-11-13 14:03
       internal static bool TestForkPruning(ref string message)
       {
         Console.WriteLine("  11. Check DropForksDeep and ReRoot at every height on every permutation of BToken header trees with up to two forks.");
@@ -102,7 +102,7 @@ internal partial class Testbench
           }
       }
 
-      // Counter-tested 2026-11-13
+      // Counter-tested 2026-11-13 14:03
       internal static bool TestKnownHeaders(ref string message)
       {
         Console.WriteLine("  9. Insert known, partly known, unconnected and too deep headers.");
@@ -150,7 +150,7 @@ internal partial class Testbench
         return IsInsertionCorrect("fork at heightBlockStoredOldest", chainRoot, headerRoot, headersForkAtOldest, 2, headersForkAtOldest[^1], headersExpected, headersHeldExpected, ref message);
       }
 
-      // Counter-tested 2026-11-13
+      // Counter-tested 2026-11-13 14:03
       internal static bool TestHeaderPlaceholders(ref string message)
       {
         Console.WriteLine("  10. Insert, find and cut off header placeholders in the main chain and in forks.");
@@ -310,7 +310,7 @@ internal partial class Testbench
         return $"the header at height {header.Height} with hash {header.Hash.ToHexString()}";
       }
 
-      // Counter-tested 2026-11-13
+      // Counter-tested 2026-11-13 14:03
       internal static bool TestAlternatingSwitches(ref string message)
       {
         Console.WriteLine("  8. Switch two competing branches back and forth.");
