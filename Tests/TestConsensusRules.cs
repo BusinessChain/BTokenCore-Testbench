@@ -40,7 +40,8 @@ internal partial class Testbench
         && BlockchainAccounts.TestRetentionWindow(Testbench.Wallet, ref message)
         && BlockchainAccounts.TestServedSegments(Testbench.Wallet, ref message)
         && BlockchainAccounts.TestMalformedSegments(ref message)
-        && BlockchainAccounts.TestInstalledAccounts(Testbench.Wallet, ref message);
+        && BlockchainAccounts.TestInstalledAccounts(Testbench.Wallet, ref message)
+        && BlockchainAccounts.TestSpendAdmission(Testbench.Wallet, ref message);
     }
 
     const int SIZE_BLOCK_MAX = 1 << 20;
@@ -939,10 +940,10 @@ internal partial class Testbench
       return tX.TXRaw;
     }
 
-    static void ParseTXRaw(byte[] tXRaw)
+    static BlockchainBToken.TXBToken ParseTXRaw(byte[] tXRaw)
     {
       int index = 0;
-      _ = new BlockchainBToken.TXBToken(tXRaw, ref index, isCoinbase: false, verifySignatures: true);
+      return new BlockchainBToken.TXBToken(tXRaw, ref index, isCoinbase: false, verifySignatures: true);
     }
 
     static bool IsLockTimeValidExpected(Wallet wallet, bool hasAnchor, int offsetLockTime, bool isValidExpected, ref string message)
