@@ -21,7 +21,8 @@ internal partial class Testbench
       new TestTXPool(this),
       new TestAccountSynchronizer(this),
       new TestAnchoring(this),
-      new TestMiner(this)
+      new TestMiner(this),
+      new TestNetwork(this)
     };
   }
 

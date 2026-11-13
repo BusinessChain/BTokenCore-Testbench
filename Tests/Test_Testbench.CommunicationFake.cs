@@ -1,0 +1,125 @@
+﻿using System.Collections.Concurrent;
+using System.Threading.Channels;
+
+using BTokenCore;
+
+namespace BTokenCore_Testbench;
+
+internal partial class Testbench
+{
+  abstract partial class Test_Testbench
+  {
+    protected class SocketFake : ISocketCommunication
+    {
+      const int SECONDS_TIMEOUT_RECEIVE = 10;
+
+      internal string IPRemote;
+      SocketFake Partner;
+      Channel<(string command, byte[] payload)> MessagesReceived = Channel.CreateUnbounded<(string command, byte[] payload)>();
+      byte[] PayloadNext;
+
+
+      internal static SocketFake CreatePair(out SocketFake socketPeer)
+      {
+        SocketFake socketNode = new();
+        socketPeer = new() { Partner = socketNode };
+        socketNode.Partner = socketPeer;
+
+        return socketNode;
+      }
+
+      public Task Start(byte[] magicBytes)
+      {
+        return Task.CompletedTask;
+      }
+
+      public Task SendMessage(string commandString, int lengthDataPayload, byte[] payload)
+      {
+        if (!Partner.MessagesReceived.Writer.TryWrite((commandString, payload[..lengthDataPayload])))
+          throw new IOException("Fake socket is closed.");
+
+        return Task.CompletedTask;
+      }
+
+      public async Task<string> ReceiveCommandMessageNext()
+      {
+        (string command, byte[] payload) = await MessagesReceived.Reader.ReadAsync().ConfigureAwait(false);
+
+        PayloadNext = payload;
+
+        return command;
+      }
+
+      public Task<int> ReceivePayloadNext(byte[] buffer)
+      {
+        if (PayloadNext.Length > buffer.Length)
+          throw new ProtocolException($"Payload length {PayloadNext.Length} exceeds buffer size {buffer.Length}.");
+
+        PayloadNext.CopyTo(buffer, 0);
+
+        return Task.FromResult(PayloadNext.Length);
+      }
+
+      public void Dispose()
+      {
+        MessagesReceived.Writer.TryComplete();
+        Partner.MessagesReceived.Writer.TryComplete();
+      }
+
+      public string GetIP()
+      {
+        return IPRemote;
+      }
+
+      internal bool TryReceive(string nameCase, string command, ref string message)
+      {
+        using CancellationTokenSource cancellation = new(TimeSpan.FromSeconds(SECONDS_TIMEOUT_RECEIVE));
+
+        try
+        {
+          while (MessagesReceived.Reader.ReadAsync(cancellation.Token).AsTask().GetAwaiter().GetResult().command != command)
+          { }
+
+          return true;
+        }
+        catch (Exception exception) when (exception is OperationCanceledException or ChannelClosedException)
+        {
+          message = $"{nameCase}: the node sent no {command} message within {SECONDS_TIMEOUT_RECEIVE} seconds.";
+          return false;
+        }
+      }
+    }
+
+    protected class CommunicationFake : ICommunication
+    {
+      ConcurrentQueue<SocketFake> SocketsOutbound = new();
+      Channel<SocketFake> SocketsInbound = Channel.CreateUnbounded<SocketFake>();
+
+
+      internal SocketFake QueueOutbound()
+      {
+        SocketsOutbound.Enqueue(SocketFake.CreatePair(out SocketFake socketPeer));
+
+        return socketPeer;
+      }
+
+      public void StartListenerCommunicationInbound(int port)
+      { }
+
+      public async Task<ISocketCommunication> AcceptSocketCommunicationInbound()
+      {
+        return await SocketsInbound.Reader.ReadAsync().ConfigureAwait(false);
+      }
+
+      public ISocketCommunication GetSocketCommunication(int port, string address)
+      {
+        if (!SocketsOutbound.TryDequeue(out SocketFake socketNode))
+          throw new IOException($"No outbound connection to {address} queued.");
+
+        socketNode.IPRemote = address;
+
+        return socketNode;
+      }
+    }
+  }
+}
