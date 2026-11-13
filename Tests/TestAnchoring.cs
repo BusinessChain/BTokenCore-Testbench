@@ -27,46 +27,29 @@ internal partial class Testbench
         && BlockchainAnchoring.TestWindowResync(Testbench.Wallet, ref message);
     }
 
-    class BlockchainBitcoinTestbench : BlockchainBitcoin
+    class BlockchainParentFake : BlockchainBitcoin
     {
-      const uint NBITS_EASY = 0x207fffff;
-      const uint NBITS_DIFFICULTY_1 = 0x1d00ffff;
-      const int COUNT_HEADERS_RETARGET = 2016;
-      const uint SECONDS_BLOCK = 600;
-
-      internal BlockchainBitcoinTestbench(LiteDatabase liteDatabase)
+      internal BlockchainParentFake(LiteDatabase liteDatabase)
         : base(liteDatabase, new SemaphoreSlim(1))
-      { }
+      {
+        Parser = new ParserBToken();
+      }
 
       protected override Header CreateHeaderRoot()
       {
-        HeaderBitcoin header = (HeaderBitcoin)base.CreateHeaderRoot();
-        header.NBits = NBITS_EASY;
-
-        return header;
+        return new HeaderBToken { Hash = new byte[32], Height = 0 };
       }
 
       internal void MineBlock(params TXOutputTokenAnchor[] anchors)
       {
-        HeaderBitcoin headerTip = (HeaderBitcoin)ChainRoot.HeaderTip;
-
-        HeaderBitcoin header = new(
+        HeaderBToken header = new(
           headerHash: null,
-          version: 0x20000000,
-          hashPrevious: headerTip.Hash,
+          hashPrevious: ChainRoot.HeaderTip.Hash,
           merkleRootHash: RandomNumberGenerator.GetBytes(32),
-          unixTimeSeconds: headerTip.UnixTimeSeconds + SECONDS_BLOCK,
-          nBits: (headerTip.Height + 1) % COUNT_HEADERS_RETARGET == 0 ? NBITS_DIFFICULTY_1 : headerTip.NBits,
+          hashAccounts: new byte[32],
           nonce: 0);
 
         header.ComputeHash();
-
-        if (header.NBits == NBITS_EASY)
-          while (new UInt256(header.Hash).IsGreaterThan(UInt256.ParseFromCompact(header.NBits)))
-          {
-            header.Nonce += 1;
-            header.ComputeHash();
-          }
 
         foreach (TXOutputTokenAnchor anchor in anchors)
           header.AnchorsWinner[anchor.IDToken] = anchor;
@@ -77,9 +60,9 @@ internal partial class Testbench
         UpdateTipBlockchain(ChainRoot);
       }
 
-      internal BlockchainBitcoinTestbench Restart()
+      internal BlockchainParentFake Restart()
       {
-        return new BlockchainBitcoinTestbench(LiteDatabase);
+        return new BlockchainParentFake(LiteDatabase);
       }
 
       internal void DeleteBlocksStoredAbove(int height)
@@ -101,14 +84,15 @@ internal partial class Testbench
     class BlockchainAnchoring : BlockchainTestbench
     {
       const string NAME_TOKEN = "TestAnchoring";
-      const int COUNT_MAX_BLOCKS_STORED = COUNT_SEGMENTS + BITCOIN_REORG_MARGIN;      static readonly byte[] ID_TOKEN_BTOKEN = [(byte)'B', (byte)'T', (byte)'K', 0];
+      const int COUNT_MAX_BLOCKS_STORED = COUNT_SEGMENTS + BITCOIN_REORG_MARGIN;
+      static readonly byte[] ID_TOKEN_BTOKEN = [(byte)'B', (byte)'T', (byte)'K', 0];
 
-      BlockchainBitcoinTestbench BlockchainParentBitcoin;
+      BlockchainParentFake ParentFake;
 
-      BlockchainAnchoring(LiteDatabase liteDatabase, BlockchainBitcoinTestbench blockchainParent)
+      BlockchainAnchoring(LiteDatabase liteDatabase, BlockchainParentFake blockchainParent)
         : base(NAME_TOKEN, liteDatabase, blockchainParent)
       {
-        BlockchainParentBitcoin = blockchainParent;
+        ParentFake = blockchainParent;
       }
 
       internal static bool TestAnchoredFollow(Wallet wallet, ref string message)
@@ -130,7 +114,7 @@ internal partial class Testbench
           if (!blockchain.IsAtHeight($"Anchored follow, block at height {height} received before its anchor", height - 1, ref message))
             return false;
 
-          blockchain.BlockchainParentBitcoin.MineBlock(CreateAnchor(blockLedger));
+          blockchain.ParentFake.MineBlock(CreateAnchor(blockLedger));
 
           blockchain.DeliverBlocks(blocksLedger);
 
@@ -155,12 +139,12 @@ internal partial class Testbench
           int height = blockLedger.Header.Height;
           string nameCase = $"Awaiting anchor, block at height {height}";
 
-          blockchain.StoreBlockAwaitingAnchor(blockLedger, blockchain.BlockchainParentBitcoin.GetHeight());
+          blockchain.StoreBlockAwaitingAnchor(blockLedger, blockchain.ParentFake.GetHeight());
 
           if (!blockchain.IsAtHeight($"{nameCase} stored before its anchor", height - 1, ref message))
             return false;
 
-          blockchain.BlockchainParentBitcoin.MineBlock(CreateAnchor(blockLedger));
+          blockchain.ParentFake.MineBlock(CreateAnchor(blockLedger));
 
           if (!blockchain.IsSynchronized(ledger, $"{nameCase} stored when its anchor arrived", height, ref message)
             || !blockchain.IsRequestingNoBlock(nameCase, ref message))
@@ -180,10 +164,10 @@ internal partial class Testbench
         List<Block> blocksLedger = ledger.GetBlocksInserted();
         BlockchainAnchoring blockchain = StartNode();
 
-        int lockTime = blockchain.BlockchainParentBitcoin.GetHeight();
+        int lockTime = blockchain.ParentFake.GetHeight();
         blockchain.StoreBlockAwaitingAnchor(blocksLedger[0], lockTime);
         blockchain.MineBlocksUpTo(lockTime + BITCOIN_REORG_MARGIN - 1);
-        blockchain.BlockchainParentBitcoin.MineBlock(CreateAnchor(blocksLedger[0]));
+        blockchain.ParentFake.MineBlock(CreateAnchor(blocksLedger[0]));
 
         string nameCaseKept = $"Anchor expiry, block at height 1 anchored {BITCOIN_REORG_MARGIN} Bitcoin blocks after its LockTime";
 
@@ -191,10 +175,10 @@ internal partial class Testbench
           || !blockchain.IsRequestingNoBlock(nameCaseKept, ref message))
           return false;
 
-        lockTime = blockchain.BlockchainParentBitcoin.GetHeight();
+        lockTime = blockchain.ParentFake.GetHeight();
         blockchain.StoreBlockAwaitingAnchor(blocksLedger[1], lockTime);
         blockchain.MineBlocksUpTo(lockTime + BITCOIN_REORG_MARGIN);
-        blockchain.BlockchainParentBitcoin.MineBlock(CreateAnchor(blocksLedger[1]));
+        blockchain.ParentFake.MineBlock(CreateAnchor(blocksLedger[1]));
 
         string nameCaseDropped = $"Anchor expiry, block at height 2 anchored {BITCOIN_REORG_MARGIN + 1} Bitcoin blocks after its LockTime";
 
@@ -228,12 +212,12 @@ internal partial class Testbench
         if (!blockchain.IsSynchronized(ledger, "Parent rollback, Ledger blocks anchored before the rollback", 6, ref message))
           return false;
 
-        blockchain.BlockchainParentBitcoin.RollBackTo(blockchain.BlockchainParentBitcoin.GetHeight() - 3);
+        blockchain.ParentFake.RollBackTo(blockchain.ParentFake.GetHeight() - 3);
 
         if (!blockchain.IsSynchronized(ledger, "Parent rollback, Bitcoin chain rolled back by three blocks", 3, ref message))
           return false;
 
-        blockchain.BlockchainParentBitcoin.MineBlock();
+        blockchain.ParentFake.MineBlock();
 
         if (!blockchain.IsAtHeight("Parent rollback, replacing Bitcoin block without anchor", 3, ref message))
           return false;
@@ -259,7 +243,7 @@ internal partial class Testbench
         blockchain.MineAnchors(blocksLedger);
         blockchain.DeliverBlocks(blocksLedger);
 
-        BlockchainAnchoring blockchainRestarted = StartNode(blockchain.LiteDatabase, blockchain.BlockchainParentBitcoin.Restart());
+        BlockchainAnchoring blockchainRestarted = StartNode(blockchain.LiteDatabase, blockchain.ParentFake.Restart());
 
         string nameCase = "Restart anchored, restart with every stored block anchored";
 
@@ -280,9 +264,9 @@ internal partial class Testbench
         blockchain.MineAnchors(blocksLedger);
         blockchain.DeliverBlocks(blocksLedger);
 
-        blockchain.BlockchainParentBitcoin.DeleteBlocksStoredAbove(blockchain.BlockchainParentBitcoin.GetHeight() - 3);
+        blockchain.ParentFake.DeleteBlocksStoredAbove(blockchain.ParentFake.GetHeight() - 3);
 
-        BlockchainAnchoring blockchainRestarted = StartNode(blockchain.LiteDatabase, blockchain.BlockchainParentBitcoin.Restart());
+        BlockchainAnchoring blockchainRestarted = StartNode(blockchain.LiteDatabase, blockchain.ParentFake.Restart());
 
         if (!blockchainRestarted.IsSynchronized(ledger, "Restart unanchored, restart after the three latest Bitcoin blocks were lost", 3, ref message))
           return false;
@@ -295,7 +279,6 @@ internal partial class Testbench
           && blockchainRestarted.IsRequestingNoBlock(nameCaseReanchored, ref message);
       }
 
-      // Counter-tested 2026-11-13 18:36
       internal static bool TestWindowResync(Wallet wallet, ref string message)
       {
         Console.WriteLine("  7. Window Resync: Drop accounts, re-root when a fork outruns the stored window.");
@@ -371,13 +354,13 @@ internal partial class Testbench
       void MineAnchors(List<Block> blocksLedger)
       {
         foreach (Block blockLedger in blocksLedger)
-          BlockchainParentBitcoin.MineBlock(CreateAnchor(blockLedger));
+          ParentFake.MineBlock(CreateAnchor(blockLedger));
       }
 
       void MineBlocksUpTo(int height)
       {
-        while (BlockchainParentBitcoin.GetHeight() < height)
-          BlockchainParentBitcoin.MineBlock();
+        while (ParentFake.GetHeight() < height)
+          ParentFake.MineBlock();
       }
 
       static TXOutputTokenAnchor CreateAnchor(Block blockLedger)
@@ -395,10 +378,10 @@ internal partial class Testbench
         CreateWalletFile(BlockchainBitcoin.NAME_TOKEN);
         CreateWalletFile(NAME_TOKEN);
 
-        return StartNode(CreateLiteDatabase(), new BlockchainBitcoinTestbench(CreateLiteDatabase()));
+        return StartNode(CreateLiteDatabase(), new BlockchainParentFake(CreateLiteDatabase()));
       }
 
-      static BlockchainAnchoring StartNode(LiteDatabase liteDatabase, BlockchainBitcoinTestbench blockchainParent)
+      static BlockchainAnchoring StartNode(LiteDatabase liteDatabase, BlockchainParentFake blockchainParent)
       {
         BlockchainAnchoring blockchain = new(liteDatabase, blockchainParent);
         blockchain.Load();
