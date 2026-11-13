@@ -38,6 +38,7 @@ internal partial class Testbench
       return [0xff, 0xfe, 0xfd, 0xfc, 0xfb, 0xfa, 0xf9, .. data, 0xf8];
     }
 
+    // Counter-tested 2026-11-13
     bool Test_HeaderBToken(ref string message)
     {
       Console.WriteLine("  1. Round-trip HeaderBToken at two offsets.");
@@ -72,6 +73,7 @@ internal partial class Testbench
         && IsFieldEqual(nameParser, nameof(Header.Hash), header.Hash, headerParsed.Hash, ref message);
     }
 
+    // Counter-tested 2026-11-13
     bool Test_HeaderBitcoin(ref string message)
     {
       Console.WriteLine("  2. Parse mainnet HeaderBitcoin of block 737857.");
@@ -95,6 +97,7 @@ internal partial class Testbench
         && IsFieldEqual(nameParser, "serialized bytes", headerRaw, headerParsed.Serialize(), ref message);
     }
 
+    // Counter-tested 2026-11-13
     bool Test_TXBToken(Wallet wallet, ref string message)
     {
       Console.WriteLine("  3. Round-trip signed and coinbase TXBToken.");
@@ -113,6 +116,7 @@ internal partial class Testbench
         && IsTXBTokenParsedEqual(tXCoinbase, EmbedInBuffer(tXCoinbase.TXRaw), COUNT_BYTES_LEADING, isCoinbase: true, ref message);
     }
 
+    // Counter-tested 2026-11-13
     bool Test_Block(Wallet wallet, ref string message)
     {
       Console.WriteLine("  4. Round-trip BToken block with anchor winner.");
@@ -142,6 +146,7 @@ internal partial class Testbench
         && IsAnchorWinnerLowestScore(nameParser, blockParsed.Header, [tXOutputTokenAnchor], ref message);
     }
 
+    // Counter-tested 2026-11-13
     bool Test_AnchorsWinner(Wallet wallet, ref string message)
     {
       Console.WriteLine("  5. Draw anchor winners of two IDTokens at two block hashes, ignoring anchors with LockTime before and after the eligible one.");
@@ -190,7 +195,7 @@ internal partial class Testbench
           block.Header.Nonce += 1;
           block.Header.ComputeHash();
         }
-        while (!IsDrawDiscriminating(block.Header.Hash, anchorsFirst, anchorsSecond, anchorsIneligible)
+        while (!IsDrawDiscriminating(block.Header.Hash, anchorsFirst, anchorsSecond, anchorsIneligible, isRoundFirst: anchorWinnerFirstPrevious == null)
           || GetAnchorScoreLowest(block.Header.Hash, anchorsFirst) == anchorWinnerFirstPrevious);
 
         Block blockParsed = ParseBlockSerialized(block);
@@ -206,11 +211,15 @@ internal partial class Testbench
       return true;
     }
 
-    static bool IsDrawDiscriminating(byte[] hashBlock, TXOutputTokenAnchor[] anchorsFirst, TXOutputTokenAnchor[] anchorsSecond, TXOutputTokenAnchor[] anchorsIneligible)
+    static bool IsDrawDiscriminating(byte[] hashBlock, TXOutputTokenAnchor[] anchorsFirst, TXOutputTokenAnchor[] anchorsSecond, TXOutputTokenAnchor[] anchorsIneligible, bool isRoundFirst)
     {
       TXOutputTokenAnchor anchorLowestFirst = GetAnchorScoreLowest(hashBlock, anchorsFirst);
 
-      return anchorLowestFirst != anchorsFirst[0]
+      bool isOrderDiscriminating = isRoundFirst
+        ? anchorLowestFirst == anchorsFirst[1] && string.CompareOrdinal(ComputeScoreAnchor(hashBlock, anchorsFirst[2]), ComputeScoreAnchor(hashBlock, anchorsFirst[0])) < 0
+        : anchorLowestFirst != anchorsFirst[0];
+
+      return isOrderDiscriminating
         && GetAnchorScoreLowest(hashBlock, anchorsSecond) != anchorsSecond[0]
         && anchorsIneligible.All(a => string.CompareOrdinal(ComputeScoreAnchor(hashBlock, a), ComputeScoreAnchor(hashBlock, anchorLowestFirst)) < 0);
     }

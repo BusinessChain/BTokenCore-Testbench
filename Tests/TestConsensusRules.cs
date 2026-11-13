@@ -39,6 +39,7 @@ internal partial class Testbench
     const int SIZE_BLOCK_MAX = 1 << 20;
     static readonly byte[] MAGIC_BYTES = [0xf9, 0xbe, 0xb4, 0xd9];
 
+    // Counter-tested 2026-11-13
     bool Test_BlockSize(ref string message)
     {
       Console.WriteLine("  12. Receive a block payload of SizeBlockMax and reject a longer one and a negative length.");
@@ -148,6 +149,7 @@ internal partial class Testbench
         : base(null, null, null, null)
       { }
 
+      // Counter-tested 2026-11-13
       internal static bool TestSpendingRules(Wallet wallet, ref string message)
       {
         Console.WriteLine("  4. Reject spends with wrong Nonce or HeightAccountCreated, too little Balance, unknown or emptied account, replays and wrong HashAccounts.");
@@ -186,6 +188,7 @@ internal partial class Testbench
           && ledger.TryInsertBlock("spend of the whole Balance", [ledger.CreateCoinbase(wallet, iDMiner, FEE), tXSpendBalance], isValidExpected: true, null, ref message);
       }
 
+      // Counter-tested 2026-11-13
       internal static bool TestCoinbaseRules(Wallet wallet, ref string message)
       {
         Console.WriteLine("  5. Check the coinbase against block reward, fees and rent, including the halving.");
@@ -244,6 +247,7 @@ internal partial class Testbench
           && ledgerHalvingLast.TryInsertBlock("coinbase paying no block reward after 64 halvings", [ledgerHalvingLast.CreateCoinbase(wallet, iDMiner, 0)], isValidExpected: true, null, ref message);
       }
 
+      // Counter-tested 2026-11-13
       internal static bool TestBlockLimits(Wallet wallet, ref string message)
       {
         Console.WriteLine("  6. Reject anchor TXs with wrong LockTime and new accounts above CountAccountsMax of a segment.");
@@ -513,6 +517,7 @@ internal partial class Testbench
     const int INDEX_NBITS = 72;
     const int INDEX_NONCE = 76;
 
+    // Counter-tested 2026-11-13
     bool Test_HeaderBitcoinRules(ref string message)
     {
       Console.WriteLine("  3. Reject HeaderBitcoin with premature timestamp, failed proof of work, wrong HashPrevious, time below median or wrong NBits.");
@@ -688,6 +693,7 @@ internal partial class Testbench
     const long SUPPLY_MAX = 2 * 20_000_000_000 * 52_500;
     const long VALUE_OUTPUT = 50000;
 
+    // Counter-tested 2026-11-13
     bool Test_TXRules(Wallet wallet, ref string message)
     {
       Console.WriteLine("  2. Reject TXs with invalid Fee, Value, script, signature or count of outputs, and check IsLockTimeValid.");
@@ -781,6 +787,7 @@ internal partial class Testbench
         ref message);
     }
 
+    // Counter-tested 2026-11-13
     bool Test_BlockRules(Wallet wallet, ref string message)
     {
       Console.WriteLine("  1. Reject blocks with unexpected header, without TXs, with a TX twice, mutated or with wrong MerkleRoot.");
