@@ -94,7 +94,59 @@ internal partial class Testbench
         && TestMagicMismatch(ref message)
         && TestPayloadLength(ref message)
         && TestStreamEnd(ref message)
-        && TestGetheadersLocator(ref message);
+        && TestGetheadersLocator(ref message)
+        && TestLocatorLimit(ref message);
+    }
+
+    static bool TestLocatorLimit(ref string message)
+    {
+      Console.WriteLine("  35. Locator Limit: Serve headers after the locator, reject an oversized locator.");
+
+      const string NAME_CASE = "Locator limit";
+      const int COUNT_BLOCKS = 10;
+      const int HEIGHT_LOCATOR = 3;
+      const int COUNT_HASHES_LOCATOR_OVERSIZED = 102;
+
+      SocketFake socketSeed = BlockchainNetwork.StartNodeBitcoin(COUNT_BLOCKS, out List<Header> headers);
+
+      try
+      {
+        if (!TryHandshakeBitcoin(NAME_CASE, socketSeed, out _, ref message))
+          return false;
+
+        SendGetheaders(socketSeed, [headers[HEIGHT_LOCATOR - 1].Hash]);
+
+        if (!socketSeed.TryReceive(NAME_CASE, COMMAND_HEADERS, out byte[] payload, ref message))
+          return false;
+
+        List<Header> headersExpected = headers.Skip(HEIGHT_LOCATOR).ToList();
+        byte[] payloadExpected = [.. VarInt.GetBytes(headersExpected.Count), .. headersExpected.SelectMany(h => (byte[])[.. h.Serialize(), 0x00])];
+
+        if (!payload.IsAllBytesEqual(payloadExpected))
+        {
+          message = $"{NAME_CASE}: the node serves {payload.ToHexString()}, expected the headers at heights {HEIGHT_LOCATOR + 1} to {COUNT_BLOCKS}.";
+          return false;
+        }
+
+        SendGetheaders(socketSeed, [.. Enumerable.Range(0, COUNT_HASHES_LOCATOR_OVERSIZED).Select(i => RandomNumberGenerator.GetBytes(Crypto.LENGTH_HASH256))]);
+
+        return socketSeed.IsDisconnected(NAME_CASE, ref message);
+      }
+      finally
+      {
+        socketSeed.Dispose();
+      }
+    }
+
+    static void SendGetheaders(SocketFake socketPeer, List<byte[]> locator)
+    {
+      byte[] payload = [
+        .. BitConverter.GetBytes(PROTOCOL_VERSION),
+        .. VarInt.GetBytes(locator.Count),
+        .. locator.SelectMany(h => h),
+        .. new byte[Crypto.LENGTH_HASH256]];
+
+      socketPeer.SendMessage(COMMAND_GETHEADERS, payload.Length, payload).Wait();
     }
 
     static bool TestGetheadersLocator(ref string message)
