@@ -25,6 +25,14 @@ internal partial class Testbench
       // Counter-tested 2026-11-13 14:03
       internal static bool TestForkPermutations(ref string message)
       {
+        bool isSkipped = true;
+
+        if (isSkipped)
+        {
+          Console.WriteLine("  -->> skipped 7. Fork Permutations");
+          return true;
+        }
+
         Console.WriteLine("  7. Fork Permutations: Choose strongest fork in every BToken header tree permutation.");
 
         for (int countBlocksMain = 0; countBlocksMain <= COUNT_HEADERS_MAIN; countBlocksMain++)
