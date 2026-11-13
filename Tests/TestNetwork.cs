@@ -89,7 +89,50 @@ internal partial class Testbench
         && TestFramingSend(ref message)
         && TestSplitReads(ref message)
         && TestMagicMismatch(ref message)
-        && TestPayloadLength(ref message);
+        && TestPayloadLength(ref message)
+        && TestStreamEnd(ref message);
+    }
+
+    static bool TestStreamEnd(ref string message)
+    {
+      Console.WriteLine("  33. Stream End: Throw IOException when the stream ends early.");
+
+      const int LENGTH_PAYLOAD = 10;
+      const int COUNT_BYTES_MISSING = 5;
+
+      byte[] messageCut = BuildMessage(MAGIC_BYTES, COMMAND_FRAMING, LENGTH_PAYLOAD, new byte[LENGTH_PAYLOAD])[..^COUNT_BYTES_MISSING];
+
+      return IsStreamEndDetected("stream closed before any byte", [], s => s.ReceiveCommandMessageNext(), ref message)
+        && IsStreamEndDetected("stream closed in the middle of the payload", messageCut, async s =>
+        {
+          await s.ReceiveCommandMessageNext();
+          await s.ReceivePayloadNext(new byte[LENGTH_PAYLOAD]);
+        }, ref message);
+    }
+
+    static bool IsStreamEndDetected(string nameCase, byte[] bytesWritten, Func<SocketTCP, Task> receive, ref string message)
+    {
+      using ConnectionLoopback connection = new();
+
+      connection.StreamRaw.Write(bytesWritten);
+      connection.ClientRaw.Close();
+
+      try
+      {
+        receive(connection.Socket).GetAwaiter().GetResult();
+      }
+      catch (IOException)
+      {
+        return true;
+      }
+      catch (Exception exception)
+      {
+        message = $"Stream end, {nameCase}: SocketTCP throws {exception.GetType().Name} instead of IOException: {exception.Message}";
+        return false;
+      }
+
+      message = $"Stream end, {nameCase}: SocketTCP receives without throwing an IOException.";
+      return false;
     }
 
     static bool TestPayloadLength(ref string message)
