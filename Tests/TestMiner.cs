@@ -18,15 +18,18 @@ internal partial class Testbench
 
       return BlockchainMining.TestMineCoinbase(Testbench.Wallet, ref message)
         && BlockchainMining.TestMinePoolTXs(Testbench.Wallet, ref message)
-        && BlockchainMining.TestFillBlock(Testbench.Wallet, ref message);
+        && BlockchainMining.TestFillBlock(Testbench.Wallet, ref message)
+        && BlockchainMining.TestAnchorFunding(Testbench.Wallet, ref message);
     }
 
     class BlockchainMining : BlockchainTestbench
     {
       const string NAME_TOKEN = "TestMiner";
       const long VALUE_FUNDING = 100_000;
+      const long FEE_ANCHOR = 1000;
 
       BlockchainParentFake ParentFake;
+      BlockchainBitcoin.TXBitcoin TXFunding;
 
       BlockchainMining(LiteDatabase liteDatabase, BlockchainParentFake blockchainParent)
         : base(NAME_TOKEN, liteDatabase, blockchainParent)
@@ -118,6 +121,68 @@ internal partial class Testbench
         return blockchain.IsBlockMinedCorrect(NAME_CASE, block, tXsExpected, GetBlockReward(heightMined) + rent + tXsExpected.Sum(t => t.Fee), ref message);
       }
 
+      internal static bool TestAnchorFunding(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  4. Anchor Funding: Spend the funded output, confirm, fund the next anchor from change.");
+
+        const string NAME_CASE = "Anchor funding";
+
+        if (!TryStartNode(wallet, NAME_CASE, out BlockchainMining blockchain, out _, ref message))
+          return false;
+
+        blockchain.SetFeeAnchor();
+
+        if (!blockchain.TryMineAnchor(NAME_CASE, out BlockchainBitcoin.TXBitcoin tXAnchor, ref message)
+          || !blockchain.IsAnchorSpending($"{NAME_CASE}, first anchor", tXAnchor, blockchain.TXFunding.Hash, 0, ref message))
+          return false;
+
+        if (tXAnchor.TXOutputs.Count != 2
+          || tXAnchor.TXOutputs[1] is not TXOutputP2PKH outputChange
+          || outputChange.Value != VALUE_FUNDING - FEE_ANCHOR
+          || !outputChange.IDAccount.IsAllBytesEqual(blockchain.ParentFake.Wallet.Hash160PKeyPublic))
+        {
+          message = $"{NAME_CASE}: the first anchor lacks a change output of {VALUE_FUNDING - FEE_ANCHOR} to the parent's wallet.";
+          return false;
+        }
+
+        if (!blockchain.TryInsertAnchored(NAME_CASE, tXAnchor, out _, ref message))
+          return false;
+
+        if (blockchain.ParentFake.GetTX(tXAnchor.Hash) != null || blockchain.ParentFake.CountAnchorsReplaceable(FEE_ANCHOR) != 0)
+        {
+          message = $"{NAME_CASE}: the anchor mined into the Bitcoin block is not confirmed.";
+          return false;
+        }
+
+        return blockchain.TryMineAnchor($"{NAME_CASE}, next anchor", out BlockchainBitcoin.TXBitcoin tXAnchorNext, ref message)
+          && blockchain.IsAnchorSpending($"{NAME_CASE}, next anchor", tXAnchorNext, tXAnchor.Hash, 1, ref message);
+      }
+
+      void SetFeeAnchor()
+      {
+        StartMining(1, FEE_ANCHOR);
+        StopMining();
+      }
+
+      bool IsAnchorSpending(string nameCase, BlockchainBitcoin.TXBitcoin tXAnchor, byte[] tXIDExpected, int indexExpected, ref string message)
+      {
+        if (tXAnchor.Inputs.Count != 1
+          || !tXAnchor.Inputs[0].TXIDOutput.IsAllBytesEqual(tXIDExpected)
+          || tXAnchor.Inputs[0].IndexOutput != indexExpected)
+        {
+          message = $"{nameCase}: the anchor does not spend output {indexExpected} of TX {tXIDExpected.ToHexString()}.";
+          return false;
+        }
+
+        if (tXAnchor.LockTime != ParentFake.GetHeight() || tXAnchor.Fee != FEE_ANCHOR)
+        {
+          message = $"{nameCase}: the anchor has LockTime {tXAnchor.LockTime} and fee {tXAnchor.Fee}, expected the Bitcoin tip {ParentFake.GetHeight()} and {FEE_ANCHOR}.";
+          return false;
+        }
+
+        return true;
+      }
+
       bool TryAddSpends(string nameCase, Ledger ledger, Wallet wallet, int countTXs, int countOutputsAdded, out List<TXBToken> tXsRanked, ref string message)
       {
         tXsRanked = null;
@@ -182,18 +247,34 @@ internal partial class Testbench
       bool TryMineBlock(string nameCase, out Block block, ref string message)
       {
         block = null;
-        int height = GetHeight() + 1;
+
+        return TryMineAnchor(nameCase, out BlockchainBitcoin.TXBitcoin tXAnchor, ref message)
+          && TryInsertAnchored(nameCase, tXAnchor, out block, ref message);
+      }
+
+      bool TryMineAnchor(string nameCase, out BlockchainBitcoin.TXBitcoin tXAnchor, ref string message)
+      {
+        tXAnchor = null;
 
         if (!IsAccepted($"{nameCase}, MineBlock", MinerBlockchain.MineBlock, ref message))
           return false;
 
         List<byte[]> hashesAnchor = ParentFake.GetHashesTXOwnedUnconfirmed();
 
-        if (hashesAnchor.Count != 1 || ParentFake.GetTX(hashesAnchor[0]) is not BlockchainBitcoin.TXBitcoin tXAnchor)
+        if (hashesAnchor.Count == 1 && ParentFake.GetTX(hashesAnchor[0]) is BlockchainBitcoin.TXBitcoin tXOwned)
         {
-          message = $"{nameCase}: MineBlock created {hashesAnchor.Count} anchors at the Bitcoin tip, expected one.";
-          return false;
+          tXAnchor = tXOwned;
+          return true;
         }
+
+        message = $"{nameCase}: MineBlock created {hashesAnchor.Count} anchors at the Bitcoin tip, expected one.";
+        return false;
+      }
+
+      bool TryInsertAnchored(string nameCase, BlockchainBitcoin.TXBitcoin tXAnchor, out Block block, ref string message)
+      {
+        block = null;
+        int height = GetHeight() + 1;
 
         TXOutputTokenAnchor anchor = tXAnchor.TXOutputs.OfType<TXOutputTokenAnchor>().Single();
 
@@ -233,7 +314,7 @@ internal partial class Testbench
 
         blockchain = new(CreateLiteDatabase(), new BlockchainParentFake(CreateLiteDatabase()));
         blockchain.Load();
-        blockchain.ParentFake.Fund(VALUE_FUNDING);
+        blockchain.TXFunding = blockchain.ParentFake.Fund(VALUE_FUNDING);
 
         List<Block> blocksLedger = ledger.GetBlocksInserted();
 

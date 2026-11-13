@@ -33,7 +33,7 @@ internal partial class Testbench
         return new HeaderBToken { Hash = new byte[32], Height = 0 };
       }
 
-      internal void Fund(long value)
+      internal TXBitcoin Fund(long value)
       {
         TXBitcoin tXFunding = new();
 
@@ -47,6 +47,8 @@ internal partial class Testbench
         tXFunding.Serialize(Wallet);
 
         MineBlock([tXFunding]);
+
+        return tXFunding;
       }
 
       internal void MineBlock(List<TXBitcoin> tXs, params TXOutputTokenAnchor[] anchors)
