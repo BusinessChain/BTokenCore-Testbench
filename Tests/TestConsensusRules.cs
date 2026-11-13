@@ -1,5 +1,8 @@
-﻿using System.Numerics;
+﻿using System.Net;
+using System.Net.Sockets;
+using System.Numerics;
 using System.Security.Cryptography;
+using System.Text;
 
 using BTokenCore;
 
@@ -29,7 +32,100 @@ internal partial class Testbench
         && BlockchainChain.TestAlternatingSwitches(ref message)
         && BlockchainChain.TestKnownHeaders(ref message)
         && BlockchainChain.TestHeaderPlaceholders(ref message)
-        && BlockchainChain.TestForkPruning(ref message);
+        && BlockchainChain.TestForkPruning(ref message)
+        && Test_BlockSize(ref message);
+    }
+
+    const int SIZE_BLOCK_MAX = 1 << 20;
+    static readonly byte[] MAGIC_BYTES = [0xf9, 0xbe, 0xb4, 0xd9];
+
+    bool Test_BlockSize(ref string message)
+    {
+      Console.WriteLine("  12. Receive a block payload of SizeBlockMax and reject a longer one and a negative length.");
+
+      byte[] payload = new byte[SIZE_BLOCK_MAX + 1];
+      Random.Shared.NextBytes(payload);
+
+      byte[] headerNegativeLength = [
+        .. MAGIC_BYTES,
+        .. Encoding.ASCII.GetBytes("block".PadRight(SocketTCP.SIZE_COMMAND, '\0')),
+        .. BitConverter.GetBytes(-1),
+        .. new byte[SocketTCP.SIZE_CHECKSUM]];
+
+      string error = ReceiveBlockPayload("payload of SizeBlockMax bytes", (s, c) => s.SendMessage("block", SIZE_BLOCK_MAX, payload), payload[..SIZE_BLOCK_MAX]).GetAwaiter().GetResult();
+
+      if (error == "")
+        error = ReceiveBlockPayload("payload of SizeBlockMax plus one bytes", (s, c) => s.SendMessage("block", SIZE_BLOCK_MAX + 1, payload), null).GetAwaiter().GetResult();
+
+      if (error == "")
+        error = ReceiveBlockPayload("payload of negative length", (s, c) => c.GetStream().WriteAsync(headerNegativeLength).AsTask(), null).GetAwaiter().GetResult();
+
+      if (error == "")
+        return true;
+
+      message = $"Block size, {error}";
+      return false;
+    }
+
+    static async Task<string> ReceiveBlockPayload(string nameCase, Func<SocketTCP, TcpClient, Task> send, byte[] payloadExpected)
+    {
+      TcpListener listener = new(IPAddress.Loopback, 0);
+      listener.Start();
+
+      TcpClient clientSending = new();
+      SocketTCP socketReceiving = null;
+
+      try
+      {
+        Task<TcpClient> accepting = listener.AcceptTcpClientAsync();
+        await clientSending.ConnectAsync(IPAddress.Loopback, ((IPEndPoint)listener.LocalEndpoint).Port);
+
+        socketReceiving = new SocketTCP(await accepting);
+        await socketReceiving.Start(MAGIC_BYTES);
+
+        SocketTCP socketSending = new(clientSending);
+        await socketSending.Start(MAGIC_BYTES);
+
+        Task sending = send(socketSending, clientSending);
+
+        byte[] buffer = new byte[SIZE_BLOCK_MAX];
+        string result;
+
+        try
+        {
+          string command = await socketReceiving.ReceiveCommandMessageNext();
+          int lengthReceived = await socketReceiving.ReceivePayloadNext(buffer);
+
+          if (payloadExpected == null)
+            result = $"{nameCase}: accepted a payload of {lengthReceived} bytes.";
+          else if (command != "block" || lengthReceived != payloadExpected.Length || !buffer.AsSpan(0, lengthReceived).SequenceEqual(payloadExpected))
+            result = $"{nameCase}: received command {command} with {lengthReceived} bytes that differ from the sent payload.";
+          else
+            result = "";
+        }
+        catch (ProtocolException exception)
+        {
+          result = payloadExpected == null ? "" : $"{nameCase}: rejected the valid payload: {exception.Message}";
+        }
+
+        socketReceiving.Dispose();
+        clientSending.Dispose();
+
+        try
+        {
+          await sending;
+        }
+        catch (Exception)
+        { }
+
+        return result;
+      }
+      finally
+      {
+        socketReceiving?.Dispose();
+        clientSending.Dispose();
+        listener.Stop();
+      }
     }
 
     abstract class BlockchainAccounts : BlockchainBToken
