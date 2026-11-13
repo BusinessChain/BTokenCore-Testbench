@@ -21,7 +21,8 @@ internal partial class Testbench
       return BlockchainAnchoring.TestAnchoredFollow(Testbench.Wallet, ref message)
         && BlockchainAnchoring.TestAwaitingAnchor(Testbench.Wallet, ref message)
         && BlockchainAnchoring.TestAnchorExpiry(Testbench.Wallet, ref message)
-        && BlockchainAnchoring.TestParentRollback(Testbench.Wallet, ref message);
+        && BlockchainAnchoring.TestParentRollback(Testbench.Wallet, ref message)
+        && BlockchainAnchoring.TestRestartAnchored(Testbench.Wallet, ref message);
     }
 
     class BlockchainBitcoinTestbench : BlockchainBitcoin
@@ -64,6 +65,11 @@ internal partial class Testbench
         ChainRoot.BlocksQueued.Add(header.Height, new Block(0) { Header = header });
 
         UpdateTipBlockchain(ChainRoot);
+      }
+
+      internal BlockchainBitcoinTestbench Restart()
+      {
+        return new BlockchainBitcoinTestbench(LiteDatabase);
       }
 
       internal void RollBackTo(int height)
@@ -201,9 +207,7 @@ internal partial class Testbench
         List<Block> blocksLedger = ledger.GetBlocksInserted();
         BlockchainAnchoring blockchain = StartNode();
 
-        foreach (Block blockLedger in blocksLedger)
-          blockchain.BlockchainParentBitcoin.MineBlock(CreateAnchor(blockLedger));
-
+        blockchain.MineAnchors(blocksLedger);
         blockchain.DeliverBlocks(blocksLedger);
 
         if (!blockchain.IsSynchronized(ledger, "Parent rollback, Ledger blocks anchored before the rollback", 6, ref message))
@@ -219,8 +223,7 @@ internal partial class Testbench
         if (!blockchain.IsAtHeight("Parent rollback, replacing Bitcoin block without anchor", 3, ref message))
           return false;
 
-        foreach (Block blockLedger in blocksLedger.Where(b => b.Header.Height > 3))
-          blockchain.BlockchainParentBitcoin.MineBlock(CreateAnchor(blockLedger));
+        blockchain.MineAnchors(blocksLedger.Where(b => b.Header.Height > 3).ToList());
 
         string nameCaseReanchored = "Parent rollback, rolled-back blocks anchored again by replacing Bitcoin blocks";
 
@@ -228,13 +231,40 @@ internal partial class Testbench
           && blockchain.IsRequestingNoBlock(nameCaseReanchored, ref message);
       }
 
+      internal static bool TestRestartAnchored(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  5. Restart Anchored: Re-anchor stored blocks through the reloaded Bitcoin chain.");
+
+        if (!TryCreateLedger(wallet, out Ledger ledger, ref message))
+          return false;
+
+        List<Block> blocksLedger = ledger.GetBlocksInserted();
+        BlockchainAnchoring blockchain = StartNode();
+
+        blockchain.MineAnchors(blocksLedger);
+        blockchain.DeliverBlocks(blocksLedger);
+
+        BlockchainAnchoring blockchainRestarted = StartNode(blockchain.LiteDatabase, blockchain.BlockchainParentBitcoin.Restart());
+
+        string nameCase = "Restart anchored, restart with every stored block anchored";
+
+        return blockchainRestarted.IsSynchronized(ledger, nameCase, 6, ref message)
+          && blockchainRestarted.IsRequestingNoBlock(nameCase, ref message);
+      }
+
       bool IsRequestingNoBlock(string nameCase, ref string message)
       {
         if (FetchHeaderBlockMissingNext(h => true) is not Header headerRequested)
           return true;
 
-        message = $"{nameCase}: requested the block at height {headerRequested.Height} although it was stored awaiting its anchor.";
+        message = $"{nameCase}: requested the block at height {headerRequested.Height} although the node holds it.";
         return false;
+      }
+
+      void MineAnchors(List<Block> blocksLedger)
+      {
+        foreach (Block blockLedger in blocksLedger)
+          BlockchainParentBitcoin.MineBlock(CreateAnchor(blockLedger));
       }
 
       void MineBlocksUpTo(int height)
@@ -255,10 +285,15 @@ internal partial class Testbench
 
       static BlockchainAnchoring StartNode()
       {
+        return StartNode(CreateLiteDatabase(), new BlockchainBitcoinTestbench(CreateLiteDatabase()));
+      }
+
+      static BlockchainAnchoring StartNode(LiteDatabase liteDatabase, BlockchainBitcoinTestbench blockchainParent)
+      {
         CreateWalletFile(BlockchainBitcoin.NAME_TOKEN);
         CreateWalletFile(NAME_TOKEN);
 
-        BlockchainAnchoring blockchain = new(CreateLiteDatabase(), new BlockchainBitcoinTestbench(CreateLiteDatabase()));
+        BlockchainAnchoring blockchain = new(liteDatabase, blockchainParent);
         blockchain.Load();
 
         return blockchain;
