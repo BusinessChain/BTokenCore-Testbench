@@ -2,6 +2,8 @@
 
 using BTokenCore;
 
+using LiteDB;
+
 namespace BTokenCore_Testbench;
 
 internal partial class Testbench
@@ -16,6 +18,22 @@ internal partial class Testbench
     }
 
     internal abstract bool TryRun(out string message);
+
+    protected static void CreateWalletFile(string nameToken)
+    {
+      string pathWallet = $"Wallet{nameToken}/wallet";
+
+      if (File.Exists(pathWallet))
+        return;
+
+      Directory.CreateDirectory($"Wallet{nameToken}");
+      File.WriteAllText(pathWallet, Crypto.GenerateKeyPrivate());
+    }
+
+    protected static LiteDatabase CreateLiteDatabase()
+    {
+      return new LiteDatabase(new MemoryStream(), new BsonMapper { IncludeFields = true, IncludeNonPublic = true });
+    }
 
     protected static HeaderBToken CreateHeaderBToken(byte[] merkleRoot)
     {

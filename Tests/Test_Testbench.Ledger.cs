@@ -86,22 +86,6 @@ internal partial class Testbench
         return new HeaderBToken { Hash = new byte[32], Height = 0 };
       }
 
-      protected static void CreateWalletFile(string nameToken)
-      {
-        string pathWallet = $"Wallet{nameToken}/wallet";
-
-        if (File.Exists(pathWallet))
-          return;
-
-        Directory.CreateDirectory($"Wallet{nameToken}");
-        File.WriteAllText(pathWallet, Crypto.GenerateKeyPrivate());
-      }
-
-      protected static LiteDatabase CreateLiteDatabase()
-      {
-        return new LiteDatabase(new MemoryStream(), new BsonMapper { IncludeFields = true, IncludeNonPublic = true });
-      }
-
       protected static bool TryCreateLedger(Wallet wallet, out Ledger ledger, ref string message)
       {
         ledger = new(heightRoot: 0);
