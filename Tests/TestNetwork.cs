@@ -1,4 +1,5 @@
-﻿using System.Diagnostics;
+﻿using System.Buffers.Binary;
+using System.Diagnostics;
 using System.Net;
 
 using BTokenCore;
@@ -20,6 +21,8 @@ internal partial class Testbench
     const int OFFSET_IP_ADDRESS = 12;
     const string IP_PEER = "10.0.0.2";
     const int SECONDS_TIMEOUT_PEER_LISTED = 10;
+    const int SECONDS_TIMEOUT_REQUEST = 10;
+    const int LENGTH_TIME_ADDRESS = 4;
 
 
     internal TestNetwork(Testbench testbench)
@@ -33,7 +36,8 @@ internal partial class Testbench
       return TestHandshakeOutbound(ref message)
         && TestHandshakeInbound(ref message)
         && TestServicesMissing(ref message)
-        && TestHandshakeTimeout(ref message);
+        && TestHandshakeTimeout(ref message)
+        && TestOutboundLimit(ref message);
     }
 
     static bool TestHandshakeOutbound(ref string message)
@@ -42,27 +46,16 @@ internal partial class Testbench
 
       const string NAME_CASE = "Handshake outbound";
 
-      CommunicationFake communication = new();
-      SocketFake socketPeer = communication.QueueOutbound();
-
-      NetworkTestbench network = BlockchainNetwork.StartNode(communication);
-      string iPSeed = network.ConfigurationNetwork.SeedAddresses[0];
+      NetworkTestbench network = StartNodeWithSeedPeer(1, out _, out SocketFake socketSeed);
 
       try
       {
-        if (!socketPeer.TryReceive(NAME_CASE, COMMAND_VERSION, out _, ref message))
-          return false;
-
-        SendVersion(socketPeer, Network.Configuration.NODE_NETWORK);
-        socketPeer.SendMessage(COMMAND_VERACK, 0, []).Wait();
-
-        return socketPeer.TryReceive(NAME_CASE, COMMAND_VERACK, out _, ref message)
-          && socketPeer.TryReceive(NAME_CASE, COMMAND_GETADDR, out _, ref message)
-          && IsPeerListed(NAME_CASE, network, iPSeed, ref message);
+        return TryHandshakeOutbound(NAME_CASE, socketSeed, ref message)
+          && IsPeerListed(NAME_CASE, network, network.ConfigurationNetwork.SeedAddresses[0], ref message);
       }
       finally
       {
-        socketPeer.Dispose();
+        socketSeed.Dispose();
       }
     }
 
@@ -72,17 +65,14 @@ internal partial class Testbench
 
       const string NAME_CASE = "Handshake inbound";
 
-      SocketFake socketPeer = ConnectInboundWithVersion(Network.Configuration.NODE_NETWORK, out NetworkTestbench network);
+      CommunicationFake communication = new();
+      NetworkTestbench network = BlockchainNetwork.StartNode(communication);
+      SocketFake socketPeer = communication.ConnectInbound(IP_PEER);
 
       try
       {
-        if (!socketPeer.TryReceive(NAME_CASE, COMMAND_VERACK, out _, ref message)
-          || !socketPeer.TryReceive(NAME_CASE, COMMAND_VERSION, out _, ref message))
-          return false;
-
-        socketPeer.SendMessage(COMMAND_VERACK, 0, []).Wait();
-
-        if (!IsPeerListed(NAME_CASE, network, IP_PEER, ref message))
+        if (!TryHandshakeInbound(NAME_CASE, socketPeer, ref message)
+          || !IsPeerListed(NAME_CASE, network, IP_PEER, ref message))
           return false;
 
         socketPeer.SendMessage(COMMAND_GETADDR, 0, []).Wait();
@@ -160,6 +150,89 @@ internal partial class Testbench
       }
     }
 
+    static bool TestOutboundLimit(ref string message)
+    {
+      Console.WriteLine("  5. Outbound Limit: Hold back connections beyond CountMaxOutboundConnections.");
+
+      const string NAME_CASE = "Outbound limit";
+      const string IP_LEARNED = "10.0.1.1";
+      const int SECONDS_HOLD = 8;
+
+      NetworkTestbench network = StartNodeWithSeedPeer(1, out CommunicationFake communication, out SocketFake socketSeed);
+
+      try
+      {
+        if (!TryHandshakeOutbound(NAME_CASE, socketSeed, ref message))
+          return false;
+
+        SendAddr(socketSeed, [(IP_LEARNED, network.ConfigurationNetwork.Port)]);
+
+        if (communication.IsRequested(IP_LEARNED, SECONDS_HOLD))
+        {
+          message = $"{NAME_CASE}: the node connects to {IP_LEARNED} although CountMaxOutboundConnections is reached.";
+          return false;
+        }
+
+        network.ConfigurationNetwork.CountMaxOutboundConnections = 2;
+
+        if (communication.IsRequested(IP_LEARNED, SECONDS_TIMEOUT_REQUEST))
+          return true;
+
+        message = $"{NAME_CASE}: the node does not connect to {IP_LEARNED} after CountMaxOutboundConnections was raised.";
+        return false;
+      }
+      finally
+      {
+        socketSeed.Dispose();
+      }
+    }
+
+    static NetworkTestbench StartNodeWithSeedPeer(int countMaxOutbound, out CommunicationFake communication, out SocketFake socketSeed)
+    {
+      communication = new();
+      socketSeed = communication.QueueOutbound();
+
+      return BlockchainNetwork.StartNode(communication, countMaxOutbound);
+    }
+
+    static bool TryHandshakeOutbound(string nameCase, SocketFake socketPeer, ref string message)
+    {
+      if (!socketPeer.TryReceive(nameCase, COMMAND_VERSION, out _, ref message))
+        return false;
+
+      SendVersion(socketPeer, Network.Configuration.NODE_NETWORK);
+      socketPeer.SendMessage(COMMAND_VERACK, 0, []).Wait();
+
+      return socketPeer.TryReceive(nameCase, COMMAND_VERACK, out _, ref message)
+        && socketPeer.TryReceive(nameCase, COMMAND_GETADDR, out _, ref message);
+    }
+
+    static bool TryHandshakeInbound(string nameCase, SocketFake socketPeer, ref string message)
+    {
+      SendVersion(socketPeer, Network.Configuration.NODE_NETWORK);
+
+      if (!socketPeer.TryReceive(nameCase, COMMAND_VERACK, out _, ref message)
+        || !socketPeer.TryReceive(nameCase, COMMAND_VERSION, out _, ref message))
+        return false;
+
+      socketPeer.SendMessage(COMMAND_VERACK, 0, []).Wait();
+
+      return true;
+    }
+
+    static void SendAddr(SocketFake socketPeer, List<(string iP, int port)> addresses)
+    {
+      byte[] payload = [
+        .. VarInt.GetBytes(addresses.Count),
+        .. addresses.SelectMany(a => (byte[])[
+          .. new byte[LENGTH_TIME_ADDRESS],
+          .. BitConverter.GetBytes(Network.Configuration.NODE_NETWORK),
+          .. IPAddress.Parse(a.iP).MapToIPv6().GetAddressBytes(),
+          .. BitConverter.GetBytes(BinaryPrimitives.ReverseEndianness((ushort)a.port))])];
+
+      socketPeer.SendMessage(COMMAND_ADDR, payload.Length, payload).Wait();
+    }
+
     static SocketFake ConnectInboundWithVersion(ulong networkServices, out NetworkTestbench network)
     {
       CommunicationFake communication = new();
@@ -222,7 +295,7 @@ internal partial class Testbench
         : base(NAME_TOKEN, liteDatabase, blockchainParent)
       { }
 
-      internal static NetworkTestbench StartNode(CommunicationFake communication)
+      internal static NetworkTestbench StartNode(CommunicationFake communication, int countMaxOutbound = 1, int countMaxInbound = 32)
       {
         CreateWalletFile(BlockchainBitcoin.NAME_TOKEN);
         CreateWalletFile(NAME_TOKEN);
@@ -231,7 +304,8 @@ internal partial class Testbench
         blockchain.Load();
 
         NetworkTestbench network = new(blockchain, communication);
-        network.ConfigurationNetwork.CountMaxOutboundConnections = 1;
+        network.ConfigurationNetwork.CountMaxOutboundConnections = countMaxOutbound;
+        network.ConfigurationNetwork.CountMaxInboundConnections = countMaxInbound;
         network.Start();
 
         return network;

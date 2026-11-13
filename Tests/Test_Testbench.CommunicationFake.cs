@@ -110,6 +110,7 @@ internal partial class Testbench
     {
       ConcurrentQueue<SocketFake> SocketsOutbound = new();
       Channel<SocketFake> SocketsInbound = Channel.CreateUnbounded<SocketFake>();
+      ConcurrentQueue<string> AddressesRequested = new();
 
 
       internal SocketFake QueueOutbound()
@@ -137,8 +138,15 @@ internal partial class Testbench
         return await SocketsInbound.Reader.ReadAsync().ConfigureAwait(false);
       }
 
+      internal bool IsRequested(string address, int secondsTimeout)
+      {
+        return SpinWait.SpinUntil(() => AddressesRequested.Contains(address), TimeSpan.FromSeconds(secondsTimeout));
+      }
+
       public ISocketCommunication GetSocketCommunication(int port, string address)
       {
+        AddressesRequested.Enqueue(address);
+
         if (!SocketsOutbound.TryDequeue(out SocketFake socketNode))
           throw new IOException($"No outbound connection to {address} queued.");
 
