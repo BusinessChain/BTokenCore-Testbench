@@ -1,4 +1,5 @@
-﻿using System.Net;
+﻿using System.Diagnostics;
+using System.Net;
 
 using BTokenCore;
 
@@ -31,7 +32,8 @@ internal partial class Testbench
 
       return TestHandshakeOutbound(ref message)
         && TestHandshakeInbound(ref message)
-        && TestServicesMissing(ref message);
+        && TestServicesMissing(ref message)
+        && TestHandshakeTimeout(ref message);
     }
 
     static bool TestHandshakeOutbound(ref string message)
@@ -117,6 +119,39 @@ internal partial class Testbench
           return true;
 
         message = $"{NAME_CASE}: the node lists the disconnected peer {IP_PEER} in Peers.";
+        return false;
+      }
+      finally
+      {
+        socketPeer.Dispose();
+      }
+    }
+
+    static bool TestHandshakeTimeout(ref string message)
+    {
+      Console.WriteLine("  4. Handshake Timeout: Disconnect an inbound peer that never sends verack.");
+
+      const string NAME_CASE = "Handshake timeout";
+      const int SECONDS_MARGIN = 10;
+
+      Stopwatch stopwatch = Stopwatch.StartNew();
+      SocketFake socketPeer = ConnectInboundWithVersion(Network.Configuration.NODE_NETWORK, out NetworkTestbench network);
+
+      try
+      {
+        if (!socketPeer.IsDisconnected(NAME_CASE, ref message, Network.TIMEOUT_REQUEST_SECONDS + SECONDS_MARGIN))
+          return false;
+
+        if (stopwatch.Elapsed < TimeSpan.FromSeconds(Network.TIMEOUT_REQUEST_SECONDS - 1))
+        {
+          message = $"{NAME_CASE}: the node disconnected the peer after {stopwatch.Elapsed.TotalSeconds:F0} seconds, before TIMEOUT_REQUEST_SECONDS.";
+          return false;
+        }
+
+        if (!network.IsPeerListed(IP_PEER))
+          return true;
+
+        message = $"{NAME_CASE}: the node lists the timed out peer {IP_PEER} in Peers.";
         return false;
       }
       finally

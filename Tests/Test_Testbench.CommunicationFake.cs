@@ -68,12 +68,12 @@ internal partial class Testbench
         Closed.TrySetResult();
       }
 
-      internal bool IsDisconnected(string nameCase, ref string message)
+      internal bool IsDisconnected(string nameCase, ref string message, int secondsTimeout = SECONDS_TIMEOUT_RECEIVE)
       {
-        if (Closed.Task.Wait(TimeSpan.FromSeconds(SECONDS_TIMEOUT_RECEIVE)))
+        if (Closed.Task.Wait(TimeSpan.FromSeconds(secondsTimeout)))
           return true;
 
-        message = $"{nameCase}: the node did not disconnect the peer within {SECONDS_TIMEOUT_RECEIVE} seconds.";
+        message = $"{nameCase}: the node did not disconnect the peer within {secondsTimeout} seconds.";
         return false;
       }
 
