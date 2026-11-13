@@ -20,6 +20,7 @@ internal partial class Testbench
     const int LENGTH_ADDRESS = 30;
     const int OFFSET_IP_ADDRESS = 12;
     const string IP_PEER = "10.0.0.2";
+    const string IP_READER = "10.0.0.9";
     const int SECONDS_TIMEOUT_PEER_LISTED = 10;
     const int SECONDS_TIMEOUT_REQUEST = 10;
     const int LENGTH_TIME_ADDRESS = 4;
@@ -37,7 +38,8 @@ internal partial class Testbench
         && TestHandshakeInbound(ref message)
         && TestServicesMissing(ref message)
         && TestHandshakeTimeout(ref message)
-        && TestOutboundLimit(ref message);
+        && TestOutboundLimit(ref message)
+        && TestOutboundFailure(ref message);
     }
 
     static bool TestHandshakeOutbound(ref string message)
@@ -72,15 +74,11 @@ internal partial class Testbench
       try
       {
         if (!TryHandshakeInbound(NAME_CASE, socketPeer, ref message)
-          || !IsPeerListed(NAME_CASE, network, IP_PEER, ref message))
+          || !IsPeerListed(NAME_CASE, network, IP_PEER, ref message)
+          || !TryGetAddresses(NAME_CASE, socketPeer, out List<string> iPs, ref message))
           return false;
 
-        socketPeer.SendMessage(COMMAND_GETADDR, 0, []).Wait();
-
-        if (!socketPeer.TryReceive(NAME_CASE, COMMAND_ADDR, out byte[] payloadAddr, ref message))
-          return false;
-
-        if (ParseIPsAddr(payloadAddr).Contains(IP_PEER))
+        if (iPs.Contains(IP_PEER))
           return true;
 
         message = $"{NAME_CASE}: the addr answer lacks the inbound peer's IP {IP_PEER}.";
@@ -187,6 +185,43 @@ internal partial class Testbench
       }
     }
 
+    static bool TestOutboundFailure(ref string message)
+    {
+      Console.WriteLine("  6. Outbound Failure: Drop the IP of a failed outbound connection.");
+
+      const string NAME_CASE = "Outbound failure";
+      const string IP_LEARNED = "10.0.1.1";
+
+      NetworkTestbench network = StartNodeWithSeedPeer(2, out CommunicationFake communication, out SocketFake socketSeed);
+
+      try
+      {
+        if (!TryHandshakeOutbound(NAME_CASE, socketSeed, ref message))
+          return false;
+
+        SendAddr(socketSeed, [(IP_LEARNED, network.ConfigurationNetwork.Port)]);
+
+        if (!communication.IsRequested(IP_LEARNED, SECONDS_TIMEOUT_REQUEST))
+        {
+          message = $"{NAME_CASE}: the node does not try to connect to {IP_LEARNED}.";
+          return false;
+        }
+
+        if (!TryReadAddressList(NAME_CASE, communication, out List<string> iPs, ref message))
+          return false;
+
+        if (!iPs.Contains(IP_LEARNED))
+          return true;
+
+        message = $"{NAME_CASE}: the node keeps {IP_LEARNED} after its outbound connection failed.";
+        return false;
+      }
+      finally
+      {
+        socketSeed.Dispose();
+      }
+    }
+
     static NetworkTestbench StartNodeWithSeedPeer(int countMaxOutbound, out CommunicationFake communication, out SocketFake socketSeed)
     {
       communication = new();
@@ -253,17 +288,39 @@ internal partial class Testbench
       return false;
     }
 
-    static List<string> ParseIPsAddr(byte[] payload)
+    static bool TryGetAddresses(string nameCase, SocketFake socketPeer, out List<string> iPs, ref string message)
     {
+      iPs = new();
+
+      socketPeer.SendMessage(COMMAND_GETADDR, 0, []).Wait();
+
+      if (!socketPeer.TryReceive(nameCase, COMMAND_ADDR, out byte[] payload, ref message))
+        return false;
+
       int startIndex = 0;
       int countAddresses = VarInt.GetInt(payload, ref startIndex);
-
-      List<string> iPs = new();
 
       for (int i = 0; i < countAddresses; i++)
         iPs.Add(new IPAddress(payload.AsSpan(startIndex + i * LENGTH_ADDRESS + OFFSET_IP_ADDRESS, 16)).MapToIPv4().ToString());
 
-      return iPs;
+      return true;
+    }
+
+    static bool TryReadAddressList(string nameCase, CommunicationFake communication, out List<string> iPs, ref string message)
+    {
+      iPs = null;
+
+      SocketFake socketReader = communication.ConnectInbound(IP_READER);
+
+      try
+      {
+        return TryHandshakeInbound(nameCase, socketReader, ref message)
+          && TryGetAddresses(nameCase, socketReader, out iPs, ref message);
+      }
+      finally
+      {
+        socketReader.Dispose();
+      }
     }
 
     static void SendVersion(SocketFake socketPeer, ulong networkServices)
