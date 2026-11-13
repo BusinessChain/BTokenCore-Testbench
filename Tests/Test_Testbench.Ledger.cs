@@ -26,6 +26,10 @@ internal partial class Testbench
         : base(null, null, null, null, null)
       { }
 
+      protected BlockchainTestbench(string nameToken, LiteDatabase liteDatabase, Blockchain blockchainParent)
+        : base(nameToken, liteDatabase, "BTK", blockchainParent, new SemaphoreSlim(1))
+      { }
+
       protected static bool TryInsertCoinbasesUpTo(Ledger ledger, Wallet wallet, byte[] iDMiner, int height, ref string message)
       {
         while (ledger.GetHeightTip() < height)
@@ -127,6 +131,11 @@ internal partial class Testbench
         internal int GetHeightTip()
         {
           return HeightTip;
+        }
+
+        internal List<Block> GetBlocksInserted()
+        {
+          return BlocksInserted.Select(b => b.block).ToList();
         }
 
         internal TXBToken CreateCoinbase(Wallet wallet, byte[] iDMiner, long fees, params TXOutputP2PKH[] tXOutputsAdded)
