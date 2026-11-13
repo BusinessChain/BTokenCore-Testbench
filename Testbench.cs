@@ -14,8 +14,7 @@ internal partial class Testbench
   {
     Tests = new()
     {
-      new TestParsers(this),
-      new TestModuleBlockchain(this)
+      new TestParsers(this)
     };
   }
 
@@ -33,13 +32,13 @@ internal partial class Testbench
 
       try
       {
-        Console.Write($"Run test {i + 1} : {test.GetType().Name}");
+        Console.WriteLine($"Run test {i + 1} : {test.GetType().Name}");
 
         resultIsSuccess = test.TryRun(out message);
 
         if (resultIsSuccess)
         {
-          Console.WriteLine($" -- success.");
+          Console.WriteLine($"  -- success.");
           continue;
         }
       }

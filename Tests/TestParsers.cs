@@ -22,6 +22,7 @@ internal partial class Testbench
       message = "";
 
       return Test_HeaderBToken(ref message)
+        && Test_HeaderBitcoin(ref message)
         && Test_TXBToken(ref message);
     }
 
@@ -34,6 +35,8 @@ internal partial class Testbench
 
     bool Test_HeaderBToken(ref string message)
     {
+      Console.WriteLine("  Serialize a HeaderBToken and parse it back at index 0 and behind leading bytes.");
+
       HeaderBToken header = new(
         headerHash: null,
         hashPrevious: "00000000000000000002a7c4c1e48d76c5a37902165a270156b7a8d72728a054".ToBinary(),
@@ -67,8 +70,35 @@ internal partial class Testbench
         && IsFieldEqual(nameParser, "index after parsing", indexStart + HeaderBToken.COUNT_HEADER_BYTES, index, ref message);
     }
 
+    bool Test_HeaderBitcoin(ref string message)
+    {
+      Console.WriteLine("  Parse the raw Bitcoin mainnet header of block 737857 and check its known hash and fields.");
+
+      byte[] headerRaw = Convert.FromHexString(
+        "0080d121824471242bb8751e2363732c0c6b91561eb81dbbd9300200000000000000000017478653c5ffd216f7c3dee1dc4bd790" +
+        "b10dd2ffb2cbc30983dad4633004385a85458e62206a0917627da442");
+
+      int index = 0;
+
+      HeaderBitcoin headerParsed = new(headerRaw, ref index);
+
+      string nameParser = $"{nameof(HeaderBitcoin)} of block 737857";
+
+      return IsFieldEqual(nameParser, nameof(Header.Hash), "0000000000000000000735fc64773067fd0175461148902c97c494ffa3ca9306".ToBinary(), headerParsed.Hash, ref message)
+        && IsFieldEqual(nameParser, nameof(Header.Version), 0x21d18000u, headerParsed.Version, ref message)
+        && IsFieldEqual(nameParser, nameof(Header.HashPrevious), "0000000000000000000230d9bb1db81e56916b0c2c7363231e75b82b24714482".ToBinary(), headerParsed.HashPrevious, ref message)
+        && IsFieldEqual(nameParser, nameof(Header.MerkleRoot), "5a38043063d4da8309c3cbb2ffd20db190d74bdce1dec3f716d2ffc553864717".ToBinary(), headerParsed.MerkleRoot, ref message)
+        && IsFieldEqual(nameParser, nameof(HeaderBitcoin.UnixTimeSeconds), 1653491077u, headerParsed.UnixTimeSeconds, ref message)
+        && IsFieldEqual(nameParser, nameof(HeaderBitcoin.NBits), 0x17096a20u, headerParsed.NBits, ref message)
+        && IsFieldEqual(nameParser, nameof(Header.Nonce), 0x42a47d62u, headerParsed.Nonce, ref message)
+        && IsFieldEqual(nameParser, "index after parsing", HeaderBitcoin.COUNT_HEADER_BYTES, index, ref message)
+        && IsFieldEqual(nameParser, "serialized bytes", headerRaw, headerParsed.Serialize(), ref message);
+    }
+
     bool Test_TXBToken(ref string message)
     {
+      Console.WriteLine("  Serialize a wallet-signed and a coinbase TXBToken and parse them back at index 0 and behind leading bytes.");
+
       string pathWallet = Path.GetTempFileName();
 
       try
