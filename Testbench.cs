@@ -14,7 +14,8 @@ internal partial class Testbench
   {
     Tests = new()
     {
-      new TestParsers(this)
+      new TestParsers(this),
+      new TestForkChoice(this)
     };
   }
 
