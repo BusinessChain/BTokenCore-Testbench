@@ -73,7 +73,82 @@ internal partial class Testbench
         && BlockchainNetwork.TryCreateBlocks(Testbench.Wallet, [], out List<Block> blocksWindow, out _, ref message, HEIGHT_TIP_WINDOW)
         && TestSegmentRequest(blocksWindow, ref message)
         && TestSegmentRefusal(blocksWindow, ref message)
-        && TestTXRequest(Testbench.Wallet, ref message);
+        && TestTXRequest(Testbench.Wallet, ref message)
+        && TestTXRelay(Testbench.Wallet, ref message);
+    }
+
+    static bool TestTXRelay(Wallet wallet, ref string message)
+    {
+      Console.WriteLine("  23. TX Relay: Relay a received TX to the other peers and serve it.");
+
+      const string NAME_CASE = "TX relay";
+      const string IP_PEER_OTHER = "10.0.0.3";
+      const int SECONDS_HOLD = 3;
+
+      if (!BlockchainNetwork.TryCreateBlocks(wallet, [t => { }], out List<Block> blocks, out List<BlockchainBToken.TXBToken> spends, ref message))
+        return false;
+
+      BlockchainBToken.TXBToken spend = spends[0];
+
+      NetworkTestbench network = StartNodeWithInboundPeer(out SocketFake socketPeer, out CommunicationFake communication, b => b.AnchorAndDeliver(blocks));
+      SocketFake socketOther = null;
+
+      try
+      {
+        if (!TryHandshakeInbound(NAME_CASE, socketPeer, ref message))
+          return false;
+
+        socketOther = communication.ConnectInbound(IP_PEER_OTHER);
+
+        if (!TryHandshakeInbound(NAME_CASE, socketOther, ref message)
+          || !IsPeerListed(NAME_CASE, network, IP_PEER_OTHER, ref message)
+          || !IsOnlyTXRequested(NAME_CASE, socketPeer, [spend.Hash], spend.Hash, ref message))
+          return false;
+
+        socketPeer.SendMessage(COMMAND_TX, spend.TXRaw.Length, spend.TXRaw).Wait();
+
+        if (!IsTXAnnounced(NAME_CASE, socketOther, spend.Hash, ref message))
+          return false;
+
+        SendInventory(socketOther, MSG_TX, COMMAND_GETDATA, spend.Hash);
+
+        if (!socketOther.TryReceive(NAME_CASE, COMMAND_TX, out byte[] tXRaw, ref message))
+          return false;
+
+        if (!tXRaw.IsAllBytesEqual(spend.TXRaw))
+        {
+          message = $"{NAME_CASE}: the node serves the TX {tXRaw.ToHexString()}, expected the relayed spend {spend.TXRaw.ToHexString()}.";
+          return false;
+        }
+
+        if (!IsAnsweredNotFound(NAME_CASE, socketOther, MSG_TX, ref message))
+          return false;
+
+        string messageHold = "";
+
+        if (!TryReceiveInventories(NAME_CASE, socketPeer, COMMAND_INV, MSG_TX, out _, ref messageHold, SECONDS_HOLD))
+          return true;
+
+        message = $"{NAME_CASE}: the node announces the spend back to the peer that delivered it.";
+        return false;
+      }
+      finally
+      {
+        socketPeer.Dispose();
+        socketOther?.Dispose();
+      }
+    }
+
+    static bool IsTXAnnounced(string nameCase, SocketFake socketPeer, byte[] hash, ref string message, int secondsTimeout = SECONDS_TIMEOUT_REQUEST)
+    {
+      if (!TryReceiveInventories(nameCase, socketPeer, COMMAND_INV, MSG_TX, out List<byte[]> hashes, ref message, secondsTimeout))
+        return false;
+
+      if (hashes.Any(h => h.IsAllBytesEqual(hash)))
+        return true;
+
+      message = $"{nameCase}: the node announces the TXs {string.Join(", ", hashes.Select(h => h.ToHexString()))}, expected {hash.ToHexString()}.";
+      return false;
     }
 
     static bool TestTXRequest(Wallet wallet, ref string message)
