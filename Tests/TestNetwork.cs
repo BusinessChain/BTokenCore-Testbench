@@ -29,6 +29,9 @@ internal partial class Testbench
     const Network.Inventory.InventoryType MSG_BLOCK = Network.Inventory.InventoryType.MSG_BLOCK;
     const Network.Inventory.InventoryType MSG_SEGMENT_SWEEP = Network.Inventory.InventoryType.MSG_SEGMENT_SWEEP;
     const string COMMAND_SEGMENT = "segment";
+    const string COMMAND_INV = "inv";
+    const string COMMAND_TX = "tx";
+    const Network.Inventory.InventoryType MSG_TX = Network.Inventory.InventoryType.MSG_TX;
     const int HEIGHT_TIP_WINDOW = 2060;
     const uint PROTOCOL_VERSION = 1;
     const int LENGTH_ADDRESS = 30;
@@ -67,9 +70,51 @@ internal partial class Testbench
         && TestBlockAnnouncement(Testbench.Wallet, ref message)
         && TestSegmentServing(Testbench.Wallet, ref message)
         && TestUnrequestedSegment(ref message)
-        && BlockchainNetwork.TryCreateBlocks(Testbench.Wallet, out List<Block> blocksWindow, ref message, HEIGHT_TIP_WINDOW)
+        && BlockchainNetwork.TryCreateBlocks(Testbench.Wallet, [], out List<Block> blocksWindow, out _, ref message, HEIGHT_TIP_WINDOW)
         && TestSegmentRequest(blocksWindow, ref message)
-        && TestSegmentRefusal(blocksWindow, ref message);
+        && TestSegmentRefusal(blocksWindow, ref message)
+        && TestTXRequest(Testbench.Wallet, ref message);
+    }
+
+    static bool TestTXRequest(Wallet wallet, ref string message)
+    {
+      Console.WriteLine("  22. TX Request: Request only the TXs missing from the TX pool.");
+
+      const string NAME_CASE = "TX request";
+
+      if (!BlockchainNetwork.TryCreateBlocks(wallet, [t => { }, t => t.Nonce += 1], out List<Block> blocks, out List<BlockchainBToken.TXBToken> spends, ref message))
+        return false;
+
+      StartNodeWithInboundPeer(out SocketFake socketPeer, out _, b => b.AnchorAndDeliver(blocks));
+
+      try
+      {
+        if (!TryHandshakeInbound(NAME_CASE, socketPeer, ref message)
+          || !IsOnlyTXRequested(NAME_CASE, socketPeer, [spends[0].Hash], spends[0].Hash, ref message))
+          return false;
+
+        socketPeer.SendMessage(COMMAND_TX, spends[0].TXRaw.Length, spends[0].TXRaw).Wait();
+
+        return IsOnlyTXRequested(NAME_CASE, socketPeer, [spends[0].Hash, spends[1].Hash], spends[1].Hash, ref message);
+      }
+      finally
+      {
+        socketPeer.Dispose();
+      }
+    }
+
+    static bool IsOnlyTXRequested(string nameCase, SocketFake socketPeer, byte[][] hashesAnnounced, byte[] hashExpected, ref string message)
+    {
+      SendInventory(socketPeer, MSG_TX, COMMAND_INV, hashesAnnounced);
+
+      if (!TryReceiveInventories(nameCase, socketPeer, COMMAND_GETDATA, MSG_TX, out List<byte[]> hashes, ref message))
+        return false;
+
+      if (hashes.Count == 1 && hashes[0].IsAllBytesEqual(hashExpected))
+        return true;
+
+      message = $"{nameCase}: the node requests the TXs {string.Join(", ", hashes.Select(h => h.ToHexString()))}, expected only {hashExpected.ToHexString()}.";
+      return false;
     }
 
     static bool TestHandshakeOutbound(ref string message)
@@ -426,7 +471,7 @@ internal partial class Testbench
       const string NAME_CASE = "Block download";
       const int SECONDS_HOLD = 3;
 
-      if (!BlockchainNetwork.TryCreateBlocks(wallet, out List<Block> blocks, ref message))
+      if (!BlockchainNetwork.TryCreateBlocks(wallet, [], out List<Block> blocks, out _, ref message))
         return false;
 
       Block blockNewest = blocks[^1];
@@ -466,7 +511,7 @@ internal partial class Testbench
       const int SECONDS_DELAY_REFUSED = 10;
       const int SECONDS_TIMEOUT_RETRY = 20;
 
-      if (!BlockchainNetwork.TryCreateBlocks(wallet, out List<Block> blocks, ref message))
+      if (!BlockchainNetwork.TryCreateBlocks(wallet, [], out List<Block> blocks, out _, ref message))
         return false;
 
       Block blockRefused = blocks[0];
@@ -625,7 +670,7 @@ internal partial class Testbench
 
       const string NAME_CASE = "Request timeout";
 
-      if (!BlockchainNetwork.TryCreateBlocks(wallet, out List<Block> blocks, ref message))
+      if (!BlockchainNetwork.TryCreateBlocks(wallet, [], out List<Block> blocks, out _, ref message))
         return false;
 
       NetworkTestbench network = StartNodeWithInboundPeer(out SocketFake socketPeer, out _, b => b.ParentFake.MineAnchors(blocks));
@@ -653,7 +698,7 @@ internal partial class Testbench
 
       const string NAME_CASE = "Block serving";
 
-      if (!BlockchainNetwork.TryCreateBlocks(wallet, out List<Block> blocks, ref message))
+      if (!BlockchainNetwork.TryCreateBlocks(wallet, [], out List<Block> blocks, out _, ref message))
         return false;
 
       StartNodeWithInboundPeer(out SocketFake socketPeer, out _, b => b.AnchorAndDeliver(blocks));
@@ -676,7 +721,7 @@ internal partial class Testbench
 
       const string NAME_CASE = "Segment serving";
 
-      if (!BlockchainNetwork.TryCreateBlocks(wallet, out List<Block> blocks, ref message))
+      if (!BlockchainNetwork.TryCreateBlocks(wallet, [], out List<Block> blocks, out _, ref message))
         return false;
 
       HeaderBToken header = (HeaderBToken)blocks[2].Header;
@@ -732,7 +777,7 @@ internal partial class Testbench
       const string NAME_CASE = "Serving DOS";
       const int MAX_LEVEL_DOS_GETDATA = 5;
 
-      if (!BlockchainNetwork.TryCreateBlocks(wallet, out List<Block> blocks, ref message))
+      if (!BlockchainNetwork.TryCreateBlocks(wallet, [], out List<Block> blocks, out _, ref message))
         return false;
 
       byte[] hashOld = blocks[0].Header.Hash;
@@ -769,7 +814,7 @@ internal partial class Testbench
       const string NAME_CASE = "Block announcement";
       const string IP_PEER_OTHER = "10.0.0.3";
 
-      if (!BlockchainNetwork.TryCreateBlocks(wallet, out List<Block> blocks, ref message))
+      if (!BlockchainNetwork.TryCreateBlocks(wallet, [], out List<Block> blocks, out _, ref message))
         return false;
 
       Block blockNewest = blocks[^1];
@@ -842,9 +887,9 @@ internal partial class Testbench
       return false;
     }
 
-    static void SendInventory(SocketFake socketPeer, Network.Inventory.InventoryType type, string command, byte[] hash)
+    static void SendInventory(SocketFake socketPeer, Network.Inventory.InventoryType type, string command, params byte[][] hashes)
     {
-      byte[] payload = [.. VarInt.GetBytes(1), .. BitConverter.GetBytes((uint)type), .. hash];
+      byte[] payload = [.. VarInt.GetBytes(hashes.Length), .. hashes.SelectMany(h => (byte[])[.. BitConverter.GetBytes((uint)type), .. h])];
 
       socketPeer.SendMessage(command, payload.Length, payload).Wait();
     }
@@ -877,20 +922,30 @@ internal partial class Testbench
 
     static bool TryReceiveRequest(string nameCase, SocketFake socketPeer, Network.Inventory.InventoryType type, out byte[] hash, ref string message, int secondsTimeout = SECONDS_TIMEOUT_REQUEST)
     {
-      while (socketPeer.TryReceive(nameCase, COMMAND_GETDATA, out byte[] payload, ref message, secondsTimeout))
+      bool isReceived = TryReceiveInventories(nameCase, socketPeer, COMMAND_GETDATA, type, out List<byte[]> hashes, ref message, secondsTimeout);
+
+      hash = hashes?[0];
+      return isReceived;
+    }
+
+    static bool TryReceiveInventories(string nameCase, SocketFake socketPeer, string command, Network.Inventory.InventoryType type, out List<byte[]> hashes, ref string message, int secondsTimeout = SECONDS_TIMEOUT_REQUEST)
+    {
+      while (socketPeer.TryReceive(nameCase, command, out byte[] payload, ref message, secondsTimeout))
       {
         int startIndex = 0;
         int countInventories = VarInt.GetInt(payload, ref startIndex);
 
+        hashes = [];
+
         for (int i = 0; i < countInventories; i++, startIndex += LENGTH_INVENTORY)
           if (BitConverter.ToUInt32(payload, startIndex) == (uint)type)
-          {
-            hash = payload[(startIndex + LENGTH_INVENTORY_TYPE)..(startIndex + LENGTH_INVENTORY)];
-            return true;
-          }
+            hashes.Add(payload[(startIndex + LENGTH_INVENTORY_TYPE)..(startIndex + LENGTH_INVENTORY)]);
+
+        if (hashes.Count > 0)
+          return true;
       }
 
-      hash = null;
+      hashes = null;
       return false;
     }
 
@@ -1065,15 +1120,17 @@ internal partial class Testbench
         ParentFake = blockchainParent;
       }
 
-      internal static bool TryCreateBlocks(Wallet wallet, out List<Block> blocks, ref string message, int heightTip = 0)
+      internal static bool TryCreateBlocks(Wallet wallet, List<Action<TXBToken>> altersSpend, out List<Block> blocks, out List<TXBToken> spends, ref string message, int heightTip = 0)
       {
         blocks = null;
+        spends = null;
 
         if (!TryCreateLedger(wallet, out Ledger ledger, ref message)
           || !TryInsertCoinbasesUpTo(ledger, wallet, CreateIDAccount(1000, 1), heightTip, ref message))
           return false;
 
         blocks = ledger.GetBlocksInserted();
+        spends = altersSpend.Select(a => ledger.CreateTXSpend(wallet, CreateIDAccount(1001, 2), VALUE_SPEND, a)).ToList();
         return true;
       }
 
