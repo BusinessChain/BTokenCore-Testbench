@@ -21,7 +21,8 @@ internal partial class Testbench
         && BlockchainMining.TestFillBlock(Testbench.Wallet, ref message)
         && BlockchainMining.TestAnchorFunding(Testbench.Wallet, ref message)
         && BlockchainMining.TestMissedReplacement(Testbench.Wallet, ref message)
-        && BlockchainMining.TestCandidateExpiry(Testbench.Wallet, ref message);
+        && BlockchainMining.TestCandidateExpiry(Testbench.Wallet, ref message)
+        && BlockchainMining.TestInsertedRemoval(Testbench.Wallet, ref message);
     }
 
     class BlockchainMining : BlockchainTestbench
@@ -260,6 +261,51 @@ internal partial class Testbench
 
           blockchain.ParentFake.MineBlock([]);
         }
+      }
+
+      internal static bool TestInsertedRemoval(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  7. Inserted Removal: Remove the inserted candidate at once, its missed rival after the margin.");
+
+        const string NAME_CASE = "Inserted removal";
+
+        if (!TryStartNode(wallet, NAME_CASE, VALUE_FUNDING, out BlockchainMining blockchain, out _, ref message))
+          return false;
+
+        blockchain.SetFeeAnchor();
+
+        if (!blockchain.TryMineAnchor(NAME_CASE, blockchain.MinerBlockchain.MineBlock, out BlockchainBitcoin.TXBitcoin tXMissed, ref message)
+          || !blockchain.TryMissAnchor(NAME_CASE, 1, ref message)
+          || !blockchain.TryMineAnchor($"{NAME_CASE}, replacement", blockchain.MinerBlockchain.ReplaceAnchorsMissed, out BlockchainBitcoin.TXBitcoin tXReplacement, ref message))
+          return false;
+
+        byte[] hashMissed = tXMissed.TXOutputs.OfType<TXOutputTokenAnchor>().Single().HashBlockReferenced;
+        byte[] hashReplacement = tXReplacement.TXOutputs.OfType<TXOutputTokenAnchor>().Single().HashBlockReferenced;
+
+        if (blockchain.BlocksStoredAwaitingAnchor.Count() != 2)
+        {
+          message = $"{NAME_CASE}: the store holds {blockchain.BlocksStoredAwaitingAnchor.Count()} candidates before the insertion, expected the missed and the replacing one.";
+          return false;
+        }
+
+        if (!blockchain.TryInsertAnchored(NAME_CASE, tXReplacement, out _, ref message))
+          return false;
+
+        if (blockchain.BlocksStoredAwaitingAnchor.FindById(hashReplacement) != null
+          || blockchain.BlocksStoredAwaitingAnchor.FindById(hashMissed) == null)
+        {
+          message = $"{NAME_CASE}: after the insertion the store must hold the missed candidate but not the inserted one.";
+          return false;
+        }
+
+        while (blockchain.ParentFake.GetHeight() < tXMissed.LockTime + BITCOIN_REORG_MARGIN)
+          blockchain.ParentFake.MineBlock([]);
+
+        if (blockchain.BlocksStoredAwaitingAnchor.Count() == 0)
+          return true;
+
+        message = $"{NAME_CASE}: the store still holds {blockchain.BlocksStoredAwaitingAnchor.Count()} candidates {BITCOIN_REORG_MARGIN} Bitcoin blocks after the missed LockTime.";
+        return false;
       }
 
       bool TryMissAnchor(string nameCase, int countReplaceableExpected, ref string message)
