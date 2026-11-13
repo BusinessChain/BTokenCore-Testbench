@@ -33,10 +33,10 @@ internal partial class Testbench
     {
       message = "";
 
-      return Test_RoundTripHeaderBToken(ref message);
+      return Test_HeaderBToken(ref message);
     }
 
-    bool Test_RoundTripHeaderBToken(ref string message)
+    bool Test_HeaderBToken(ref string message)
     {
       HeaderBToken header = new(
         headerHash: null,
@@ -48,18 +48,29 @@ internal partial class Testbench
       header.Version = 0x21d18000;
       header.ComputeHash();
 
-      byte[] buffer = header.Serialize();
-      int index = 0;
+      byte[] headerSerialized = header.Serialize();
+
+      byte[] bufferWithOffset = [0xff, 0xfe, 0xfd, 0xfc, 0xfb, 0xfa, 0xf9, .. headerSerialized, 0xf8];
+
+      return IsHeaderBTokenParsedEqual(header, headerSerialized, 0, ref message)
+        && IsHeaderBTokenParsedEqual(header, bufferWithOffset, 7, ref message);
+    }
+
+    static bool IsHeaderBTokenParsedEqual(HeaderBToken header, byte[] buffer, int indexStart, ref string message)
+    {
+      int index = indexStart;
 
       HeaderBToken headerParsed = new(buffer, ref index);
 
-      return IsFieldEqual(nameof(HeaderBToken), nameof(Header.Version), header.Version, headerParsed.Version, ref message)
-        && IsFieldEqual(nameof(HeaderBToken), nameof(Header.HashPrevious), header.HashPrevious, headerParsed.HashPrevious, ref message)
-        && IsFieldEqual(nameof(HeaderBToken), nameof(Header.MerkleRoot), header.MerkleRoot, headerParsed.MerkleRoot, ref message)
-        && IsFieldEqual(nameof(HeaderBToken), nameof(HeaderBToken.HashAccounts), header.HashAccounts, headerParsed.HashAccounts, ref message)
-        && IsFieldEqual(nameof(HeaderBToken), nameof(Header.Nonce), header.Nonce, headerParsed.Nonce, ref message)
-        && IsFieldEqual(nameof(HeaderBToken), nameof(Header.Hash), header.Hash, headerParsed.Hash, ref message)
-        && IsFieldEqual(nameof(HeaderBToken), "index after parsing", HeaderBToken.COUNT_HEADER_BYTES, index, ref message);
+      string nameParser = $"{nameof(HeaderBToken)} parsed from index {indexStart}";
+
+      return IsFieldEqual(nameParser, nameof(Header.Version), header.Version, headerParsed.Version, ref message)
+        && IsFieldEqual(nameParser, nameof(Header.HashPrevious), header.HashPrevious, headerParsed.HashPrevious, ref message)
+        && IsFieldEqual(nameParser, nameof(Header.MerkleRoot), header.MerkleRoot, headerParsed.MerkleRoot, ref message)
+        && IsFieldEqual(nameParser, nameof(HeaderBToken.HashAccounts), header.HashAccounts, headerParsed.HashAccounts, ref message)
+        && IsFieldEqual(nameParser, nameof(Header.Nonce), header.Nonce, headerParsed.Nonce, ref message)
+        && IsFieldEqual(nameParser, nameof(Header.Hash), header.Hash, headerParsed.Hash, ref message)
+        && IsFieldEqual(nameParser, "index after parsing", indexStart + HeaderBToken.COUNT_HEADER_BYTES, index, ref message);
     }
 
     static bool IsFieldEqual(string nameParser, string nameField, byte[] expected, byte[] parsed, ref string message)
