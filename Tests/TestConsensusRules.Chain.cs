@@ -79,6 +79,118 @@ internal partial class Testbench
         return IsInsertionCorrect("fork at heightBlockStoredOldest", chainRoot, headerRoot, headersForkAtOldest, 2, headersForkAtOldest[^1], headersExpected, headersHeldExpected, ref message);
       }
 
+      internal static bool TestHeaderPlaceholders(ref string message)
+      {
+        Console.WriteLine("  10. Insert, find and cut off header placeholders in the main chain and in forks.");
+
+        HeaderBToken headerRoot = CreateHeaderBToken(new byte[32]);
+        Chain chainRoot = new(headerRoot);
+
+        List<Header> headersMain = CreateHeaders(headerRoot, COUNT_HEADERS_MAIN, nonceBranch: 0);
+
+        foreach (Header header in headersMain)
+          chainRoot.AppendHeader(header);
+
+        chainRoot.HeaderTipBlockchain = chainRoot.HeaderTip;
+
+        List<Header> headersFork = InsertFork(chainRoot, headersMain[0], (IndexTrunk: -1, HeightFork: 1, CountHeaders: 2, CountBlocks: 0), nonceBranch: 1);
+
+        HashSet<Header> headersExpected = [headerRoot, .. headersMain, .. headersFork];
+        HashSet<Header> headersHeldExpected = [headerRoot, .. headersMain];
+
+        Header[] headersParent = [.. Enumerable.Range(0, 7).Select(i => CreateHeaderBToken(SHA256.HashData([(byte)i])))];
+
+        Header placeholderTipMain = CreatePlaceholder(SHA256.HashData([10]), headersMain[^1].Hash, headersParent[0]);
+        Header placeholderTipFork = CreatePlaceholder(SHA256.HashData([11]), headersFork[^1].Hash, headersParent[1]);
+        Header placeholderKnown = CreatePlaceholder(headersMain[1].Hash, headersMain[1].HashPrevious, headersParent[2]);
+        Header placeholderConflicting = CreatePlaceholder(headersMain[2].Hash, SHA256.HashData([12]), headersParent[3]);
+        Header placeholderRootFork = CreatePlaceholder(SHA256.HashData([13]), headersMain[2].Hash, headersParent[5]);
+
+        chainRoot.InsertHeaderPlaceholder(placeholderTipMain, 0);
+        chainRoot.InsertHeaderPlaceholder(placeholderTipFork, 0);
+        chainRoot.InsertHeaderPlaceholder(placeholderKnown, 0);
+        chainRoot.InsertHeaderPlaceholder(placeholderConflicting, 0);
+        chainRoot.InsertHeaderPlaceholder(placeholderRootFork, 0);
+
+        headersExpected.UnionWith([placeholderTipMain, placeholderTipFork, placeholderRootFork]);
+
+        if (!IsTreeConsistent(chainRoot, headerRoot, headersExpected, headersHeldExpected, out string error))
+        {
+          message = $"Header placeholders, after insertion: {error}";
+          return false;
+        }
+
+        if (!IsPlaceholderFound("new placeholder at the tip of the main chain", chainRoot, headersParent[0], placeholderTipMain, ref message)
+          || !IsPlaceholderFound("new placeholder at the tip of a fork", chainRoot, headersParent[1], placeholderTipFork, ref message)
+          || !IsPlaceholderFound("placeholder of a known header", chainRoot, headersParent[2], headersMain[1], ref message)
+          || !IsPlaceholderFound("placeholder of a known hash with other HashPrevious", chainRoot, headersParent[3], null, ref message)
+          || !IsPlaceholderFound("parent header without placeholder", chainRoot, headersParent[4], null, ref message)
+          || !IsPlaceholderFound("new placeholder as root of a fork", chainRoot, headersParent[5], placeholderRootFork, ref message))
+          return false;
+
+        chainRoot.TryGetHeaderPlaceholder(headersParent[1], out _, out Chain chainPlaceholderTipFork);
+        chainPlaceholderTipFork.CutOff(placeholderTipFork);
+        headersExpected.Remove(placeholderTipFork);
+
+        if (!IsTreeConsistent(chainRoot, headerRoot, headersExpected, headersHeldExpected, out error))
+        {
+          message = $"Header placeholders, after CutOff of the placeholder at the tip of a fork: {error}";
+          return false;
+        }
+
+        chainRoot.TryGetHeaderPlaceholder(headersParent[5], out _, out Chain chainPlaceholderRootFork);
+        chainPlaceholderRootFork.CutOff(placeholderRootFork);
+        headersExpected.Remove(placeholderRootFork);
+
+        if (!IsTreeConsistent(chainRoot, headerRoot, headersExpected, headersHeldExpected, out error))
+        {
+          message = $"Header placeholders, after CutOff of the placeholder at the root of a fork: {error}";
+          return false;
+        }
+
+        return true;
+      }
+
+      static Header CreatePlaceholder(byte[] hash, byte[] hashPrevious, Header headerParent)
+      {
+        return new HeaderBToken(
+          headerHash: hash,
+          hashPrevious: hashPrevious,
+          merkleRootHash: new byte[32],
+          hashAccounts: new byte[32],
+          nonce: 0)
+        {
+          HeaderParent = headerParent
+        };
+      }
+
+      static bool IsPlaceholderFound(string nameCase, Chain chainRoot, Header headerParent, Header headerExpected, ref string message)
+      {
+        bool isFound = chainRoot.TryGetHeaderPlaceholder(headerParent, out Header headerPlaceholder, out Chain chainPlaceholder);
+
+        if (headerExpected == null)
+        {
+          if (!isFound)
+            return true;
+
+          message = $"Header placeholders, {nameCase}: TryGetHeaderPlaceholder found {DescribeHeader(headerPlaceholder)}, expected none.";
+          return false;
+        }
+
+        if (!isFound || headerPlaceholder != headerExpected)
+        {
+          message = $"Header placeholders, {nameCase}: TryGetHeaderPlaceholder found {DescribeHeader(headerPlaceholder)}, expected {DescribeHeader(headerExpected)}.";
+          return false;
+        }
+
+        for (Header header = chainPlaceholder.HeaderTip; header != chainPlaceholder.HeaderRoot.HeaderPrevious; header = header.HeaderPrevious)
+          if (header == headerExpected)
+            return true;
+
+        message = $"Header placeholders, {nameCase}: TryGetHeaderPlaceholder returned {DescribeChain(chainPlaceholder)}, which doesn't hold {DescribeHeader(headerExpected)}.";
+        return false;
+      }
+
       static bool IsInsertionCorrect(string nameCase, Chain chainRoot, Header headerRoot, List<Header> headers, int heightBlockStoredOldest, Header headerLastExpected, HashSet<Header> headersExpected, HashSet<Header> headersHeldExpected, ref string message)
       {
         chainRoot.InsertHeadersInTree([.. headers], heightBlockStoredOldest, out Header headerLastInTree);
