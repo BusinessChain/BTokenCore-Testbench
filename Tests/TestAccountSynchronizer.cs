@@ -22,7 +22,8 @@ internal partial class Testbench
         && BlockchainSynchronizing.TestRollbackAtTip(Testbench.Wallet, ref message)
         && BlockchainSynchronizing.TestRestartRollback(Testbench.Wallet, ref message)
         && BlockchainSynchronizing.TestReplayFromRoot(Testbench.Wallet, ref message)
-        && BlockchainSynchronizing.TestSegmentInstallation(Testbench.Wallet, ref message);
+        && BlockchainSynchronizing.TestSegmentInstallation(Testbench.Wallet, ref message)
+        && BlockchainSynchronizing.TestReplayRejection(Testbench.Wallet, ref message);
     }
 
     class BlockchainSynchronizing : BlockchainTestbench
@@ -130,6 +131,34 @@ internal partial class Testbench
 
         return StartNode(blockchainRestarted.LiteDatabase, int.MaxValue)
           .IsSynchronized("restart without the stored block the accounts applied last", 5, ref message);
+      }
+
+      internal static bool TestReplayRejection(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  8. Replay Rejection: Reject a failing stored block during the replay, then follow.");
+
+        const int HEIGHT_FORGED = 4;
+
+        if (!TryCreateLedger(wallet, out Ledger ledger, ref message))
+          return false;
+
+        List<Block> blocksLedger = ledger.GetBlocksInserted();
+        TXBToken tXSpendInvalid = ledger.CreateTXSpend(wallet, CreateIDAccount(1001, 2), VALUE_SPEND, t => t.Nonce = 99);
+
+        BlockchainSynchronizing blockchain = StartNodeWithoutAccounts(blocksLedger.Where(b => b.Header.Height < HEIGHT_FORGED).ToList());
+        blockchain.InsertBlocks(ForgeBlocks(blocksLedger, HEIGHT_FORGED, (tXs, header) => tXs.Add(tXSpendInvalid)));
+
+        if (!blockchain.IsWithoutAccounts("forged blocks stored without accounts", 6, ref message))
+          return false;
+
+        BlockchainSynchronizing blockchainRestarted = StartNode(blockchain.LiteDatabase, int.MaxValue);
+
+        if (!blockchainRestarted.IsSynchronized($"replay from the root rejecting the block at height {HEIGHT_FORGED}", HEIGHT_FORGED - 1, ref message))
+          return false;
+
+        blockchainRestarted.InsertBlocks(blocksLedger.Where(b => b.Header.Height >= HEIGHT_FORGED).ToList());
+
+        return blockchainRestarted.IsSynchronized("Ledger blocks inserted after the rejected block", 6, ref message);
       }
 
       internal static bool TestSegmentInstallation(Wallet wallet, ref string message)
