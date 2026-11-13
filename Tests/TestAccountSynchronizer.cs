@@ -136,7 +136,8 @@ internal partial class Testbench
       {
         return TryCreateServer(wallet, out Ledger ledger, out BlockchainSynchronizing server, ref message)
           && TestSegmentDownload(ledger, server, ref message)
-          && TestFaultySegment(ledger, server, ref message);
+          && TestFaultySegment(ledger, server, ref message)
+          && TestFaultyCarriedBlock(wallet, ledger, server, ref message);
       }
 
       static bool TestSegmentDownload(Ledger ledger, BlockchainSynchronizing server, ref string message)
@@ -192,6 +193,30 @@ internal partial class Testbench
         blockchain.DownloadSegments(getSegmentServed);
 
         return blockchain.IsSynchronized("segments downloaded after the block with the invalid segment was replaced", HEIGHT_TIP_WINDOW, ref message);
+      }
+
+      static bool TestFaultyCarriedBlock(Wallet wallet, Ledger ledger, BlockchainSynchronizing server, ref string message)
+      {
+        Console.WriteLine("  7. Faulty Carried Block: Reject a carried block failing during installation, then install.");
+
+        const int HEIGHT_FORGED = HEIGHT_INSTALLED;
+
+        Func<Header, byte[]> getSegmentServed = GetSegmentServed(ledger, server);
+        List<Block> blocksLedger = ledger.GetBlocksInserted();
+        TXBToken tXSpendInvalid = ledger.CreateTXSpend(wallet, CreateIDAccount(1001, 2), VALUE_SPEND, t => t.Nonce = 99);
+
+        BlockchainSynchronizing blockchain = StartNodeWithoutAccounts(blocksLedger.Where(b => b.Header.Height < HEIGHT_FORGED).ToList());
+        blockchain.InsertBlocks(ForgeBlocks(blocksLedger, HEIGHT_FORGED, (tXs, header) => tXs.Add(tXSpendInvalid)));
+
+        blockchain.DownloadSegments(getSegmentServed);
+
+        if (!blockchain.IsWithoutAccounts($"carried block at height {HEIGHT_FORGED} failing during the installation", HEIGHT_FORGED - 1, ref message))
+          return false;
+
+        blockchain.InsertBlocks(blocksLedger.Where(b => b.Header.Height >= HEIGHT_FORGED).ToList());
+        blockchain.DownloadSegments(getSegmentServed);
+
+        return blockchain.IsSynchronized("segments downloaded after the failing carried block was replaced", HEIGHT_TIP_WINDOW, ref message);
       }
 
       static List<Block> ForgeBlocks(List<Block> blocksLedger, int heightForged, Action<List<TXBToken>, HeaderBToken> alter)
