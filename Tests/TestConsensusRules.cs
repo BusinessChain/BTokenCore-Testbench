@@ -43,7 +43,8 @@ internal partial class Testbench
         && BlockchainAccounts.TestInstalledAccounts(Testbench.Wallet, ref message)
         && BlockchainAccounts.TestSpendAdmission(Testbench.Wallet, ref message)
         && BlockchainAccounts.TestCreationAdmission(Testbench.Wallet, ref message)
-        && BlockchainAccounts.TestBundleRanking(Testbench.Wallet, ref message);
+        && BlockchainAccounts.TestBundleRanking(Testbench.Wallet, ref message)
+        && BlockchainAccounts.TestPoolEviction(Testbench.Wallet, ref message);
     }
 
     const int SIZE_BLOCK_MAX = 1 << 20;
