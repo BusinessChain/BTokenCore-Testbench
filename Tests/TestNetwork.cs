@@ -64,7 +64,8 @@ internal partial class Testbench
         && TestBlockServing(Testbench.Wallet, ref message)
         && TestServingDOS(Testbench.Wallet, ref message)
         && TestBlockAnnouncement(Testbench.Wallet, ref message)
-        && TestSegmentServing(Testbench.Wallet, ref message);
+        && TestSegmentServing(Testbench.Wallet, ref message)
+        && TestUnrequestedSegment(ref message);
     }
 
     static bool TestHandshakeOutbound(ref string message)
@@ -508,18 +509,28 @@ internal partial class Testbench
     {
       Console.WriteLine("  13. Unrequested Block: Disconnect a peer that sends a block unasked.");
 
-      const string NAME_CASE = "Unrequested block";
+      return IsDisconnectedOnUnasked("Unrequested block", COMMAND_BLOCK, ref message);
+    }
 
+    static bool TestUnrequestedSegment(ref string message)
+    {
+      Console.WriteLine("  19. Unrequested Segment: Disconnect a peer that sends a segment unasked.");
+
+      return IsDisconnectedOnUnasked("Unrequested segment", COMMAND_SEGMENT, ref message);
+    }
+
+    static bool IsDisconnectedOnUnasked(string nameCase, string command, ref string message)
+    {
       StartNodeWithInboundPeer(out SocketFake socketPeer, out _);
 
       try
       {
-        if (!TryHandshakeInbound(NAME_CASE, socketPeer, ref message))
+        if (!TryHandshakeInbound(nameCase, socketPeer, ref message))
           return false;
 
-        socketPeer.SendMessage(COMMAND_BLOCK, 1, [0x00]).Wait();
+        socketPeer.SendMessage(command, 1, [0x00]).Wait();
 
-        return socketPeer.IsDisconnected(NAME_CASE, ref message);
+        return socketPeer.IsDisconnected(nameCase, ref message);
       }
       finally
       {
