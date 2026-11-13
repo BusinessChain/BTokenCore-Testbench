@@ -235,6 +235,7 @@ internal partial class Testbench
           && blockchain.IsRequestingNoBlock(nameCaseReanchored, ref message);
       }
 
+      // Counter-tested 2026-11-13 19:39
       internal static bool TestRestartAnchored(Wallet wallet, ref string message)
       {
         Console.WriteLine("  5. Restart Anchored: Re-anchor stored blocks through the reloaded Bitcoin chain.");
@@ -256,6 +257,7 @@ internal partial class Testbench
           && blockchainRestarted.IsRequestingNoBlock(nameCase, ref message);
       }
 
+      // Counter-tested 2026-11-13 19:42
       internal static bool TestRestartUnanchored(Wallet wallet, ref string message)
       {
         Console.WriteLine("  6. Restart Unanchored: Roll back unanchored tip blocks, keep unanchored blocks below anchored.");
@@ -319,8 +321,18 @@ internal partial class Testbench
 
         string nameCaseLostBelow = $"Restart unanchored, restart after the Bitcoin blocks up to height {HEIGHT_ANCHOR_LOST_LAST} were lost";
 
-        return blockchainRerootedRestarted.IsWithoutAccounts(nameCaseLostBelow, HEIGHT_TIP_REROOTED, ref message)
-          && blockchainRerootedRestarted.IsBlockStoredOldestAt(nameCaseLostBelow, HEIGHT_ROOT_REROOTED + 1, ref message);
+        if (!blockchainRerootedRestarted.IsWithoutAccounts(nameCaseLostBelow, HEIGHT_TIP_REROOTED, ref message)
+          || !blockchainRerootedRestarted.IsBlockStoredOldestAt(nameCaseLostBelow, HEIGHT_ROOT_REROOTED + 1, ref message))
+          return false;
+
+        blockchainRerootedRestarted.ParentFake.DeleteBlocksStored(0, int.MaxValue);
+
+        BlockchainAnchoring blockchainParentLost = StartNode(blockchainRerootedRestarted.LiteDatabase, blockchainRerootedRestarted.ParentFake.Restart());
+
+        string nameCaseLostAll = "Restart unanchored, restart of the re-rooted node after all Bitcoin blocks were lost";
+
+        return blockchainParentLost.IsWithoutAccounts(nameCaseLostAll, HEIGHT_ROOT_REROOTED + 1, ref message)
+          && blockchainParentLost.IsBlockStoredOldestAt(nameCaseLostAll, HEIGHT_ROOT_REROOTED + 1, ref message);
       }
 
       // Counter-tested 2026-11-13 19:05
@@ -370,6 +382,7 @@ internal partial class Testbench
         return blockchain.IsWithoutAccounts("Window resync, fork blocks delivered after the resync", HEIGHT_RESYNC + 1, ref message);
       }
 
+      // Counter-tested 2026-11-13 19:39
       internal static bool TestRestartResync(Wallet wallet, ref string message)
       {
         Console.WriteLine("  8. Restart Resync: Resync at restart when RollBackUnanchored drops below the window.");
