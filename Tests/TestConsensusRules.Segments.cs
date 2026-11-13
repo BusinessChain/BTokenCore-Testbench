@@ -131,11 +131,80 @@ internal partial class Testbench
         return iDAccount;
       }
 
+      internal static bool TestInstalledAccounts(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  20. Install the served segments into a fresh database and compare all accounts and account counts.");
+
+        const int HEIGHT_INSTALLED = COUNT_SEGMENTS + BITCOIN_REORG_MARGIN;
+
+        Ledger ledgerServing = new(heightRoot: 0);
+
+        byte[] iDMiner = CreateIDAccount(1001, 1);
+        byte[] iDReceiver = CreateIDAccount(1002, 2);
+        byte[] iDPaidAroundSnapshot = CreateIDAccount(1000, 3);
+        byte[] iDPaidBeforeSnapshot = CreateIDAccount(3, 4);
+        byte[] iDCreatedAfterSnapshot = CreateIDAccount(3, 5);
+
+        if (!ledgerServing.TryInsertBlock("coinbase creating the wallet account and two accounts", [ledgerServing.CreateCoinbase(wallet, wallet.Hash160PKeyPublic, 0, new TXOutputP2PKH(100, iDPaidAroundSnapshot), new TXOutputP2PKH(100, iDPaidBeforeSnapshot))], isValidExpected: true, null, ref message)
+          || !ledgerServing.TryInsertBlock("spend from the wallet account", [ledgerServing.CreateCoinbase(wallet, iDMiner, FEE), ledgerServing.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => { })], isValidExpected: true, null, ref message)
+          || !TryInsertCoinbasesUpTo(ledgerServing, wallet, iDMiner, 499, ref message)
+          || !ledgerServing.TryInsertBlock("output before the snapshot of its segment", [ledgerServing.CreateCoinbase(wallet, iDMiner, 0, new TXOutputP2PKH(10, iDPaidAroundSnapshot))], isValidExpected: true, null, ref message)
+          || !TryInsertCoinbasesUpTo(ledgerServing, wallet, iDMiner, 1499, ref message)
+          || !ledgerServing.TryInsertBlock("output after and spend before the snapshots of their segments", [ledgerServing.CreateCoinbase(wallet, iDMiner, FEE, new TXOutputP2PKH(20, iDPaidAroundSnapshot)), ledgerServing.CreateTXSpend(wallet, iDPaidBeforeSnapshot, VALUE_SPEND, t => { })], isValidExpected: true, null, ref message)
+          || !TryInsertCoinbasesUpTo(ledgerServing, wallet, iDMiner, 2051, ref message)
+          || !ledgerServing.TryInsertBlock("account created after its snapshot and spend of the whole Balance", [ledgerServing.CreateCoinbase(wallet, iDMiner, FEE, new TXOutputP2PKH(30, iDCreatedAfterSnapshot)), ledgerServing.CreateTXSpend(wallet, iDReceiver, ledgerServing.GetBalanceNext(wallet.Hash160PKeyPublic) - FEE, t => { })], isValidExpected: true, null, ref message)
+          || !TryInsertCoinbasesUpTo(ledgerServing, wallet, iDMiner, HEIGHT_INSTALLED + BITCOIN_REORG_MARGIN, ref message))
+          return false;
+
+        return new Ledger(ledgerServing, HEIGHT_INSTALLED).AreAccountsInstalledCorrect(ref message);
+      }
+
       partial class Ledger
       {
+        internal Ledger(Ledger ledgerServing, int heightInstalled)
+        {
+          Dictionary<Header, Block> blocksServed = ledgerServing.BlocksInserted.ToDictionary(b => b.block.Header, b => b.block);
+          (byte[] segment, Header header)[] sweeps = new (byte[], Header)[COUNT_SEGMENTS];
+
+          foreach (Header header in blocksServed.Keys.Where(h => h.Height > heightInstalled - COUNT_SEGMENTS && h.Height <= heightInstalled))
+            sweeps[header.Height % COUNT_SEGMENTS] = (ledgerServing.Accounts.SerializeSegmentAtHeight(header.Height), header);
+
+          Header headerInstalled = sweeps[heightInstalled % COUNT_SEGMENTS].header;
+
+          Accounts.Load(LiteDatabase);
+          LiteDatabase.RunTransaction(() => Accounts.Install(sweeps, headerInstalled, h => blocksServed[h], out _));
+
+          AccountsReference = ledgerServing.BlocksInserted.FirstOrDefault(b => b.block.Header.Height == heightInstalled + 1).accountsBefore ?? ledgerServing.AccountsReference;
+          IDsAccountSeen = new(ledgerServing.IDsAccountSeen, new EqualityComparerByteArray());
+          HeightTip = heightInstalled;
+          HashTip = headerInstalled.Hash;
+        }
+
+        internal bool AreAccountsInstalledCorrect(ref string message)
+        {
+          if (!AreAccountsStoredCorrect($"installed accounts at height {HeightTip}", AccountsReference, ref message))
+            return false;
+
+          int[] countsAccountExpected = new int[COUNT_SEGMENTS];
+
+          foreach (byte[] iDAccount in ApplyBlock([], HeightTip + 1, out _).Keys)
+            countsAccountExpected[GetIndexSegment(iDAccount)] += 1;
+
+          (int[] countsAccount, _) = Accounts.LoadCountsAccountsPerSegmentNext();
+
+          for (int i = 0; i < COUNT_SEGMENTS; i++)
+            if (countsAccount[i] != countsAccountExpected[i])
+            {
+              message = $"Installed accounts at height {HeightTip}: segment {i} counts {countsAccount[i]} accounts, expected {countsAccountExpected[i]}.";
+              return false;
+            }
+
+          return true;
+        }
+
         internal bool AreSegmentsServedCorrect(string nameCase, int heightFirst, ref string message)
         {
-          foreach ((Header header, _, _) in BlocksInserted.Where(b => b.header.Height >= heightFirst))
+          foreach (Header header in BlocksInserted.Select(b => b.block.Header).Where(h => h.Height >= heightFirst))
           {
             byte[] segment = Accounts.SerializeSegmentAtHeight(header.Height);
 

@@ -39,7 +39,8 @@ internal partial class Testbench
         && BlockchainAccounts.TestForkReplacement(Testbench.Wallet, ref message)
         && BlockchainAccounts.TestRetentionWindow(Testbench.Wallet, ref message)
         && BlockchainAccounts.TestServedSegments(Testbench.Wallet, ref message)
-        && BlockchainAccounts.TestMalformedSegments(ref message);
+        && BlockchainAccounts.TestMalformedSegments(ref message)
+        && BlockchainAccounts.TestInstalledAccounts(Testbench.Wallet, ref message);
     }
 
     const int SIZE_BLOCK_MAX = 1 << 20;
@@ -432,7 +433,7 @@ internal partial class Testbench
         DatabaseAccounts Accounts = new();
         Dictionary<byte[], Account> AccountsReference = new(new EqualityComparerByteArray());
         HashSet<byte[]> IDsAccountSeen = new(new EqualityComparerByteArray());
-        List<(Header header, List<TXBToken> tXs, Dictionary<byte[], Account> accountsBefore)> BlocksInserted = [];
+        List<(Block block, List<TXBToken> tXs, Dictionary<byte[], Account> accountsBefore)> BlocksInserted = [];
         int HeightTip;
         byte[] HashTip = new byte[32];
 
@@ -527,7 +528,7 @@ internal partial class Testbench
           if (!AreAccountsStoredCorrect($"{nameCase}, after the block at height {height}", accountsAfter, ref message))
             return false;
 
-          BlocksInserted.Add((blockParsed.Header, tXs, AccountsReference));
+          BlocksInserted.Add((blockParsed, tXs, AccountsReference));
           AccountsReference = accountsAfter;
           HeightTip = height;
           HashTip = blockParsed.Header.Hash;
@@ -537,8 +538,10 @@ internal partial class Testbench
 
         internal bool TryRollBack(string nameCase, out List<TXBToken> tXsRolledBack, ref string message)
         {
-          (Header header, tXsRolledBack, Dictionary<byte[], Account> accountsBefore) = BlocksInserted[^1];
+          (Block block, tXsRolledBack, Dictionary<byte[], Account> accountsBefore) = BlocksInserted[^1];
           BlocksInserted.RemoveAt(BlocksInserted.Count - 1);
+
+          Header header = block.Header;
 
           LiteDatabase.RunTransaction(() => Accounts.RollBack(header));
 
