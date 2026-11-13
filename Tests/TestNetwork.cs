@@ -16,6 +16,9 @@ internal partial class Testbench
     const string COMMAND_VERACK = "verack";
     const string COMMAND_GETADDR = "getaddr";
     const string COMMAND_ADDR = "addr";
+    const string COMMAND_PING = "ping";
+    const string COMMAND_PONG = "pong";
+    const int LENGTH_NONCE_PING = 8;
     const uint PROTOCOL_VERSION = 1;
     const int LENGTH_ADDRESS = 30;
     const int OFFSET_IP_ADDRESS = 12;
@@ -41,7 +44,8 @@ internal partial class Testbench
         && TestOutboundLimit(ref message)
         && TestOutboundFailure(ref message)
         && TestInboundDuplicate(ref message)
-        && TestInboundEviction(ref message);
+        && TestInboundEviction(ref message)
+        && TestAddressPort(ref message);
     }
 
     static bool TestHandshakeOutbound(ref string message)
@@ -302,6 +306,47 @@ internal partial class Testbench
         socketUnprotected.Dispose();
         socketNew?.Dispose();
       }
+    }
+
+    static bool TestAddressPort(ref string message)
+    {
+      Console.WriteLine("  9. Address Port: Store only learned addresses with the network's port.");
+
+      const string NAME_CASE = "Address port";
+      const string IP_PORT_NETWORK = "10.0.2.1";
+      const string IP_PORT_OTHER = "10.0.2.2";
+      const int PORT_OTHER = 1234;
+
+      NetworkTestbench network = StartNodeWithSeedPeer(1, out CommunicationFake communication, out SocketFake socketSeed);
+
+      try
+      {
+        if (!TryHandshakeOutbound(NAME_CASE, socketSeed, ref message))
+          return false;
+
+        SendAddr(socketSeed, [(IP_PORT_NETWORK, network.ConfigurationNetwork.Port), (IP_PORT_OTHER, PORT_OTHER)]);
+
+        if (!TrySynchronize(NAME_CASE, socketSeed, ref message)
+          || !TryReadAddressList(NAME_CASE, communication, out List<string> iPs, ref message))
+          return false;
+
+        if (iPs.Contains(IP_PORT_NETWORK) && !iPs.Contains(IP_PORT_OTHER))
+          return true;
+
+        message = $"{NAME_CASE}: the address list {string.Join(", ", iPs)} should contain {IP_PORT_NETWORK} but not {IP_PORT_OTHER}.";
+        return false;
+      }
+      finally
+      {
+        socketSeed.Dispose();
+      }
+    }
+
+    static bool TrySynchronize(string nameCase, SocketFake socketPeer, ref string message)
+    {
+      socketPeer.SendMessage(COMMAND_PING, LENGTH_NONCE_PING, new byte[LENGTH_NONCE_PING]).Wait();
+
+      return socketPeer.TryReceive(nameCase, COMMAND_PONG, out _, ref message);
     }
 
     static NetworkTestbench StartNodeWithSeedPeer(int countMaxOutbound, out CommunicationFake communication, out SocketFake socketSeed)
