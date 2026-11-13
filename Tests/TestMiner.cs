@@ -23,7 +23,8 @@ internal partial class Testbench
         && BlockchainMining.TestMissedReplacement(Testbench.Wallet, ref message)
         && BlockchainMining.TestCandidateExpiry(Testbench.Wallet, ref message)
         && BlockchainMining.TestInsertedRemoval(Testbench.Wallet, ref message)
-        && BlockchainMining.TestBurntSlot(Testbench.Wallet, ref message);
+        && BlockchainMining.TestBurntSlot(Testbench.Wallet, ref message)
+        && BlockchainMining.TestLosingAnchor(Testbench.Wallet, ref message);
     }
 
     class BlockchainMining : BlockchainTestbench
@@ -175,7 +176,7 @@ internal partial class Testbench
         blockchain.SetFeeAnchor();
 
         if (!blockchain.TryMineAnchor(NAME_CASE, blockchain.MinerBlockchain.MineBlock, out BlockchainBitcoin.TXBitcoin tXMissed, ref message)
-          || !blockchain.TryMissAnchor(NAME_CASE, 1, ref message))
+          || !blockchain.TryMissAnchor(NAME_CASE, [], 1, ref message))
           return false;
 
         long feeReplacement = Math.Max(FEE_ANCHOR, tXMissed.Fee + LENGTH_ANCHOR);
@@ -208,7 +209,7 @@ internal partial class Testbench
         blockchainPoor.SetFeeAnchor();
 
         if (!blockchainPoor.TryMineAnchor(NAME_CASE_UNAFFORDABLE, blockchainPoor.MinerBlockchain.MineBlock, out _, ref message)
-          || !blockchainPoor.TryMissAnchor(NAME_CASE_UNAFFORDABLE, 0, ref message)
+          || !blockchainPoor.TryMissAnchor(NAME_CASE_UNAFFORDABLE, [], 0, ref message)
           || !IsAccepted($"{NAME_CASE_UNAFFORDABLE}, ReplaceAnchorsMissed", blockchainPoor.MinerBlockchain.ReplaceAnchorsMissed, ref message))
           return false;
 
@@ -238,7 +239,7 @@ internal partial class Testbench
 
         for (int i = 0; i < COUNT_REPLACEMENTS; i++)
         {
-          if (!blockchain.TryMissAnchor(NAME_CASE, 1, ref message)
+          if (!blockchain.TryMissAnchor(NAME_CASE, [], 1, ref message)
             || !blockchain.TryMineAnchor($"{NAME_CASE}, replacement {i + 1}", blockchain.MinerBlockchain.ReplaceAnchorsMissed, out tXAnchor, ref message))
             return false;
 
@@ -276,7 +277,7 @@ internal partial class Testbench
         blockchain.SetFeeAnchor();
 
         if (!blockchain.TryMineAnchor(NAME_CASE, blockchain.MinerBlockchain.MineBlock, out BlockchainBitcoin.TXBitcoin tXMissed, ref message)
-          || !blockchain.TryMissAnchor(NAME_CASE, 1, ref message)
+          || !blockchain.TryMissAnchor(NAME_CASE, [], 1, ref message)
           || !blockchain.TryMineAnchor($"{NAME_CASE}, replacement", blockchain.MinerBlockchain.ReplaceAnchorsMissed, out BlockchainBitcoin.TXBitcoin tXReplacement, ref message))
           return false;
 
@@ -324,7 +325,7 @@ internal partial class Testbench
         TXOutputTokenAnchor anchorWithheld = BlockchainParentFake.CreateAnchorWithheld(blockchain.ChainRoot.HeaderTipBlockchain.Hash);
 
         if (!blockchain.TryMineAnchor(NAME_CASE, blockchain.MinerBlockchain.MineBlock, out _, ref message)
-          || !blockchain.TryMissAnchor(NAME_CASE, 1, ref message, anchorWithheld))
+          || !blockchain.TryMissAnchor(NAME_CASE, [], 1, ref message, anchorWithheld))
           return false;
 
         string nameCaseWithheld = $"{NAME_CASE}, slot won by the withheld block";
@@ -342,18 +343,55 @@ internal partial class Testbench
         string nameCaseReplaced = $"{NAME_CASE}, replacement anchor";
 
         if (!blockchain.TryMineAnchor(nameCaseReplaced, blockchain.MinerBlockchain.ReplaceAnchorsMissed, out BlockchainBitcoin.TXBitcoin tXReplacement, ref message)
-          || !blockchain.TryInsertAnchored(nameCaseReplaced, tXReplacement, out Block blockReplacement, ref message)
-          || !ledger.TryInsertBlock(nameCaseReplaced, blockReplacement.TXs.Cast<TXBToken>().ToList(), isValidExpected: true, null, ref message)
-          || !blockchain.IsSynchronized(ledger, nameCaseReplaced, heightTip + 1, ref message)
-          || !blockchain.IsRequestingNoBlock(nameCaseReplaced, ref message))
+          || !blockchain.TryInsertAnchoredSynchronized(nameCaseReplaced, ledger, tXReplacement, ref message))
           return false;
 
         return blockchain.TryMineBlock($"{NAME_CASE}, block mined on the replacement", out _, ref message);
       }
 
-      bool TryMissAnchor(string nameCase, int countReplaceableExpected, ref string message, params TXOutputTokenAnchor[] anchorsWinner)
+      internal static bool TestLosingAnchor(Wallet wallet, ref string message)
       {
-        ParentFake.MineBlock([], anchorsWinner);
+        Console.WriteLine("  9. Losing Anchor: Fund the next anchor from a mined losing anchor.");
+
+        const string NAME_CASE = "Losing anchor";
+
+        if (!TryStartNode(wallet, NAME_CASE, VALUE_FUNDING, out BlockchainMining blockchain, out Ledger ledger, ref message))
+          return false;
+
+        blockchain.SetFeeAnchor();
+
+        int heightTip = blockchain.GetHeight();
+        TXOutputTokenAnchor anchorWithheld = BlockchainParentFake.CreateAnchorWithheld(blockchain.ChainRoot.HeaderTipBlockchain.Hash);
+
+        if (!blockchain.TryMineAnchor(NAME_CASE, blockchain.MinerBlockchain.MineBlock, out BlockchainBitcoin.TXBitcoin tXLosing, ref message)
+          || !blockchain.TryMissAnchor(NAME_CASE, [tXLosing], 0, ref message, anchorWithheld)
+          || !blockchain.IsAtHeight($"{NAME_CASE}, slot won by the withheld block", heightTip, ref message))
+          return false;
+
+        if (blockchain.ParentFake.GetTX(tXLosing.Hash) != null)
+        {
+          message = $"{NAME_CASE}: the losing anchor mined into the Bitcoin block is not confirmed.";
+          return false;
+        }
+
+        string nameCaseNext = $"{NAME_CASE}, next anchor";
+
+        return blockchain.TryMineAnchor(nameCaseNext, blockchain.MinerBlockchain.MineBlock, out BlockchainBitcoin.TXBitcoin tXNext, ref message)
+          && blockchain.IsAnchorSpending(nameCaseNext, tXNext, tXLosing.Hash, 1, FEE_ANCHOR, ref message)
+          && blockchain.TryInsertAnchoredSynchronized(nameCaseNext, ledger, tXNext, ref message);
+      }
+
+      bool TryInsertAnchoredSynchronized(string nameCase, Ledger ledger, BlockchainBitcoin.TXBitcoin tXAnchor, ref string message)
+      {
+        return TryInsertAnchored(nameCase, tXAnchor, out Block block, ref message)
+          && ledger.TryInsertBlock(nameCase, block.TXs.Cast<TXBToken>().ToList(), isValidExpected: true, null, ref message)
+          && IsSynchronized(ledger, nameCase, block.Header.Height, ref message)
+          && IsRequestingNoBlock(nameCase, ref message);
+      }
+
+      bool TryMissAnchor(string nameCase, List<BlockchainBitcoin.TXBitcoin> tXs, int countReplaceableExpected, ref string message, params TXOutputTokenAnchor[] anchorsWinner)
+      {
+        ParentFake.MineBlock(tXs, anchorsWinner);
 
         int countReplaceable = ParentFake.CountAnchorsReplaceable(FEE_ANCHOR);
 
