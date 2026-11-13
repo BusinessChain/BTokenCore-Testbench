@@ -68,7 +68,8 @@ internal partial class Testbench
         && TestSegmentServing(Testbench.Wallet, ref message)
         && TestUnrequestedSegment(ref message)
         && BlockchainNetwork.TryCreateBlocks(Testbench.Wallet, out List<Block> blocksWindow, ref message, HEIGHT_TIP_WINDOW)
-        && TestSegmentRequest(blocksWindow, ref message);
+        && TestSegmentRequest(blocksWindow, ref message)
+        && TestSegmentRefusal(blocksWindow, ref message);
     }
 
     static bool TestHandshakeOutbound(ref string message)
@@ -542,6 +543,44 @@ internal partial class Testbench
         socketPeer.SendMessage(COMMAND_SEGMENT, segments[0].segment.Length, segments[0].segment).Wait();
 
         return IsSegmentRequested(NAME_CASE, socketPeer, segments[1].hash, ref message);
+      }
+      finally
+      {
+        socketPeer.Dispose();
+      }
+    }
+
+    static bool TestSegmentRefusal(List<Block> blocksWindow, ref string message)
+    {
+      Console.WriteLine("  21. Segment Refusal: Never ask a peer again for a segment it refused.");
+
+      const string NAME_CASE = "Segment refusal";
+      const int COUNT_REFUSALS = 4;
+
+      StartNodeWithInboundPeer(out SocketFake socketPeer, out _, b => b.AnchorAndDeliverWithoutAccounts(blocksWindow, 0));
+
+      try
+      {
+        if (!TryHandshakeInbound(NAME_CASE, socketPeer, ref message))
+          return false;
+
+        HashSet<byte[]> hashesRefused = new(new EqualityComparerByteArray());
+
+        for (int i = 0; i < COUNT_REFUSALS; i++)
+        {
+          if (!TryReceiveRequest(NAME_CASE, socketPeer, MSG_SEGMENT_SWEEP, out byte[] hash, ref message))
+            return false;
+
+          if (!hashesRefused.Add(hash))
+          {
+            message = $"{NAME_CASE}: the node requests the refused segment of block {hash.ToHexString()} again.";
+            return false;
+          }
+
+          SendInventory(socketPeer, MSG_SEGMENT_SWEEP, COMMAND_NOTFOUND, hash);
+        }
+
+        return true;
       }
       finally
       {
