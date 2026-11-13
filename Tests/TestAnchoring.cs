@@ -101,9 +101,7 @@ internal partial class Testbench
     class BlockchainAnchoring : BlockchainTestbench
     {
       const string NAME_TOKEN = "TestAnchoring";
-      const int COUNT_MAX_BLOCKS_STORED = COUNT_SEGMENTS + BITCOIN_REORG_MARGIN;
-      const int HEIGHT_TIP_WINDOW = 2060;
-      static readonly byte[] ID_TOKEN_BTOKEN = [(byte)'B', (byte)'T', (byte)'K', 0];
+      const int COUNT_MAX_BLOCKS_STORED = COUNT_SEGMENTS + BITCOIN_REORG_MARGIN;      static readonly byte[] ID_TOKEN_BTOKEN = [(byte)'B', (byte)'T', (byte)'K', 0];
 
       BlockchainBitcoinTestbench BlockchainParentBitcoin;
 
@@ -297,25 +295,68 @@ internal partial class Testbench
           && blockchainRestarted.IsRequestingNoBlock(nameCaseReanchored, ref message);
       }
 
+      // Counter-tested 2026-11-13 18:36
       internal static bool TestWindowResync(Wallet wallet, ref string message)
       {
-        Console.WriteLine("  7. Window Resync: Drop accounts, re-root when anchors lead beyond the stored window.");
+        Console.WriteLine("  7. Window Resync: Drop accounts, re-root when a fork outruns the stored window.");
 
-        if (!TryCreateLedger(wallet, out Ledger ledger, ref message)
-          || !TryInsertCoinbasesUpTo(ledger, wallet, CreateIDAccount(1000, 1), HEIGHT_TIP_WINDOW, ref message))
+        const int HEIGHT_FORK = 3;
+        const int HEIGHT_TIP = 6;
+        const int HEIGHT_RESYNC = HEIGHT_TIP + COUNT_MAX_BLOCKS_STORED + 1;
+
+        if (!TryCreateLedger(wallet, out Ledger ledger, ref message))
           return false;
 
-        List<Block> blocksLedger = ledger.GetBlocksInserted();
+        List<Block> blocksMain = ledger.GetBlocksInserted();
         BlockchainAnchoring blockchain = StartNode();
 
-        blockchain.MineAnchors(blocksLedger);
+        blockchain.MineAnchors(blocksMain);
+        blockchain.DeliverBlocks(blocksMain);
 
-        if (!blockchain.IsWithoutAccounts($"Window resync, anchors up to height {HEIGHT_TIP_WINDOW} without delivered blocks", HEIGHT_TIP_WINDOW - COUNT_MAX_BLOCKS_STORED, ref message))
+        if (!blockchain.IsSynchronized(ledger, "Window resync, main chain anchored and delivered", HEIGHT_TIP, ref message))
           return false;
 
-        blockchain.DeliverBlocks(blocksLedger);
+        while (ledger.GetHeightTip() > HEIGHT_FORK)
+          if (!ledger.TryRollBack("Window resync, fork below the tip", out _, ref message))
+            return false;
 
-        return blockchain.IsWithoutAccounts("Window resync, blocks delivered after the resync", HEIGHT_TIP_WINDOW, ref message);
+        if (!TryInsertCoinbasesUpTo(ledger, wallet, CreateIDAccount(1002, 3), HEIGHT_RESYNC + 1, ref message))
+          return false;
+
+        List<Block> blocksFork = ledger.GetBlocksInserted().Where(b => b.Header.Height > HEIGHT_FORK).ToList();
+
+        blockchain.MineAnchors(blocksFork.Where(b => b.Header.Height < HEIGHT_RESYNC).ToList());
+
+        string nameCaseInside = $"Window resync, fork anchored up to {COUNT_MAX_BLOCKS_STORED} blocks above the tip";
+
+        if (!blockchain.IsAtHeight(nameCaseInside, HEIGHT_TIP, ref message)
+          || !blockchain.IsBlockStoredOldestAt(nameCaseInside, 1, ref message))
+          return false;
+
+        foreach (Block blockFork in blocksFork.Where(b => b.Header.Height >= HEIGHT_RESYNC))
+        {
+          int heightRoot = blockFork.Header.Height - COUNT_MAX_BLOCKS_STORED;
+          string nameCase = $"Window resync, fork anchored up to height {blockFork.Header.Height}";
+
+          blockchain.MineAnchors([blockFork]);
+
+          if (!blockchain.IsWithoutAccounts(nameCase, heightRoot, ref message)
+            || !blockchain.IsBlockStoredOldestAt(nameCase, heightRoot, ref message))
+            return false;
+        }
+
+        blockchain.DeliverBlocks(blocksFork);
+
+        return blockchain.IsWithoutAccounts("Window resync, fork blocks delivered after the resync", HEIGHT_RESYNC + 1, ref message);
+      }
+
+      bool IsBlockStoredOldestAt(string nameCase, int heightExpected, ref string message)
+      {
+        if (GetHeightBlockStoredOldest() == heightExpected)
+          return true;
+
+        message = $"{nameCase}: the oldest stored block lies at height {GetHeightBlockStoredOldest()}, expected {heightExpected}.";
+        return false;
       }
 
       bool IsRequestingNoBlock(string nameCase, ref string message)
@@ -351,14 +392,14 @@ internal partial class Testbench
 
       static BlockchainAnchoring StartNode()
       {
+        CreateWalletFile(BlockchainBitcoin.NAME_TOKEN);
+        CreateWalletFile(NAME_TOKEN);
+
         return StartNode(CreateLiteDatabase(), new BlockchainBitcoinTestbench(CreateLiteDatabase()));
       }
 
       static BlockchainAnchoring StartNode(LiteDatabase liteDatabase, BlockchainBitcoinTestbench blockchainParent)
       {
-        CreateWalletFile(BlockchainBitcoin.NAME_TOKEN);
-        CreateWalletFile(NAME_TOKEN);
-
         BlockchainAnchoring blockchain = new(liteDatabase, blockchainParent);
         blockchain.Load();
 
