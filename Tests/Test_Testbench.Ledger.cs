@@ -119,6 +119,15 @@ internal partial class Testbench
         return false;
       }
 
+      protected bool IsRequestingNoBlock(string nameCase, ref string message)
+      {
+        if (FetchHeaderBlockMissingNext(h => true) is not Header headerRequested)
+          return true;
+
+        message = $"{nameCase}: requested the block at height {headerRequested.Height} although the node holds it.";
+        return false;
+      }
+
       protected bool IsSynchronized(Ledger ledger, string nameCase, int heightExpected, ref string message)
       {
         if (!IsAtHeight(nameCase, heightExpected, ref message))

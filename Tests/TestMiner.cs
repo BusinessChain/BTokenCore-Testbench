@@ -22,7 +22,8 @@ internal partial class Testbench
         && BlockchainMining.TestAnchorFunding(Testbench.Wallet, ref message)
         && BlockchainMining.TestMissedReplacement(Testbench.Wallet, ref message)
         && BlockchainMining.TestCandidateExpiry(Testbench.Wallet, ref message)
-        && BlockchainMining.TestInsertedRemoval(Testbench.Wallet, ref message);
+        && BlockchainMining.TestInsertedRemoval(Testbench.Wallet, ref message)
+        && BlockchainMining.TestBurntSlot(Testbench.Wallet, ref message);
     }
 
     class BlockchainMining : BlockchainTestbench
@@ -308,9 +309,51 @@ internal partial class Testbench
         return false;
       }
 
-      bool TryMissAnchor(string nameCase, int countReplaceableExpected, ref string message)
+      internal static bool TestBurntSlot(Wallet wallet, ref string message)
       {
-        ParentFake.MineBlock([]);
+        Console.WriteLine("  8. Burnt Slot: Replacement anchor wins after a withheld anchor winner.");
+
+        const string NAME_CASE = "Burnt slot";
+
+        if (!TryStartNode(wallet, NAME_CASE, VALUE_FUNDING, out BlockchainMining blockchain, out Ledger ledger, ref message))
+          return false;
+
+        blockchain.SetFeeAnchor();
+
+        int heightTip = blockchain.GetHeight();
+        TXOutputTokenAnchor anchorWithheld = BlockchainParentFake.CreateAnchorWithheld(blockchain.ChainRoot.HeaderTipBlockchain.Hash);
+
+        if (!blockchain.TryMineAnchor(NAME_CASE, blockchain.MinerBlockchain.MineBlock, out _, ref message)
+          || !blockchain.TryMissAnchor(NAME_CASE, 1, ref message, anchorWithheld))
+          return false;
+
+        string nameCaseWithheld = $"{NAME_CASE}, slot won by the withheld block";
+
+        if (!blockchain.IsAtHeight(nameCaseWithheld, heightTip, ref message))
+          return false;
+
+        if (blockchain.FetchHeaderBlockMissingNext(h => true) is not Header headerRequested
+          || !headerRequested.Hash.IsAllBytesEqual(anchorWithheld.HashBlockReferenced))
+        {
+          message = $"{nameCaseWithheld}: the withheld block is not requested.";
+          return false;
+        }
+
+        string nameCaseReplaced = $"{NAME_CASE}, replacement anchor";
+
+        if (!blockchain.TryMineAnchor(nameCaseReplaced, blockchain.MinerBlockchain.ReplaceAnchorsMissed, out BlockchainBitcoin.TXBitcoin tXReplacement, ref message)
+          || !blockchain.TryInsertAnchored(nameCaseReplaced, tXReplacement, out Block blockReplacement, ref message)
+          || !ledger.TryInsertBlock(nameCaseReplaced, blockReplacement.TXs.Cast<TXBToken>().ToList(), isValidExpected: true, null, ref message)
+          || !blockchain.IsSynchronized(ledger, nameCaseReplaced, heightTip + 1, ref message)
+          || !blockchain.IsRequestingNoBlock(nameCaseReplaced, ref message))
+          return false;
+
+        return blockchain.TryMineBlock($"{NAME_CASE}, block mined on the replacement", out _, ref message);
+      }
+
+      bool TryMissAnchor(string nameCase, int countReplaceableExpected, ref string message, params TXOutputTokenAnchor[] anchorsWinner)
+      {
+        ParentFake.MineBlock([], anchorsWinner);
 
         int countReplaceable = ParentFake.CountAnchorsReplaceable(FEE_ANCHOR);
 

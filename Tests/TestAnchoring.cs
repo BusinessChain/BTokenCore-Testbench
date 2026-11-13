@@ -388,15 +388,6 @@ internal partial class Testbench
         return false;
       }
 
-      bool IsRequestingNoBlock(string nameCase, ref string message)
-      {
-        if (FetchHeaderBlockMissingNext(h => true) is not Header headerRequested)
-          return true;
-
-        message = $"{nameCase}: requested the block at height {headerRequested.Height} although the node holds it.";
-        return false;
-      }
-
       void MineBlocksUpTo(int height)
       {
         while (ParentFake.GetHeight() < height)

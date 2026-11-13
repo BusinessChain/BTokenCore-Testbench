@@ -87,6 +87,16 @@ internal partial class Testbench
           });
       }
 
+      internal static TXOutputTokenAnchor CreateAnchorWithheld(byte[] hashBlockPrevious)
+      {
+        return new TXOutputTokenAnchor
+        {
+          IDToken = ID_TOKEN_BTOKEN,
+          HashBlockReferenced = RandomNumberGenerator.GetBytes(32),
+          HashBlockPreviousReferenced = hashBlockPrevious
+        };
+      }
+
       internal BlockchainParentFake Restart()
       {
         return new BlockchainParentFake(LiteDatabase);
