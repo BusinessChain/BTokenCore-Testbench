@@ -55,7 +55,8 @@ internal partial class Testbench
         && TestAddressDOS(ref message)
         && TestBlockDownload(Testbench.Wallet, ref message)
         && TestBlockRefusal(Testbench.Wallet, ref message)
-        && TestUnrequestedBlock(ref message);
+        && TestUnrequestedBlock(ref message)
+        && TestRequestTimeout(Testbench.Wallet, ref message);
     }
 
     static bool TestHandshakeOutbound(ref string message)
@@ -524,6 +525,36 @@ internal partial class Testbench
       }
     }
 
+    static bool TestRequestTimeout(Wallet wallet, ref string message)
+    {
+      Console.WriteLine("  14. Request Timeout: Disconnect a peer that does not deliver a requested block.");
+
+      const string NAME_CASE = "Request timeout";
+
+      if (!BlockchainNetwork.TryCreateBlocks(wallet, out List<Block> blocks, ref message))
+        return false;
+
+      CommunicationFake communication = new();
+      NetworkTestbench network = BlockchainNetwork.StartNode(communication, prepare: b => b.ParentFake.MineAnchors(blocks));
+      SocketFake socketPeer = communication.ConnectInbound(IP_PEER);
+
+      try
+      {
+        if (!TryHandshakeInbound(NAME_CASE, socketPeer, ref message)
+          || !IsPeerListed(NAME_CASE, network, IP_PEER, ref message)
+          || !TryReceiveRequestBlock(NAME_CASE, socketPeer, out _, ref message))
+          return false;
+
+        network.AgeBlockRequest(IP_PEER, Network.TIMEOUT_REQUEST_SECONDS);
+
+        return socketPeer.IsDisconnected(NAME_CASE, ref message);
+      }
+      finally
+      {
+        socketPeer.Dispose();
+      }
+    }
+
     static void SendInventoryBlock(SocketFake socketPeer, string command, byte[] hash)
     {
       byte[] payload = [.. VarInt.GetBytes(1), .. BitConverter.GetBytes((uint)Network.Inventory.InventoryType.MSG_BLOCK), .. hash];
@@ -725,6 +756,12 @@ internal partial class Testbench
       {
         lock (LOCK_Peers)
           ((TXMessage)Peers.Single(p => p.GetIP() == iP).MessagesByCommand[TXMessage.Command]).TimeDeliveredLast = DateTime.UtcNow;
+      }
+
+      internal void AgeBlockRequest(string iP, int seconds)
+      {
+        lock (LOCK_Peers)
+          ((BlockMessage)Peers.Single(p => p.GetIP() == iP).MessagesByCommand[BlockMessage.Command]).TimeRequest -= TimeSpan.FromSeconds(seconds);
       }
     }
 
