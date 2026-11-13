@@ -87,7 +87,21 @@ internal partial class Testbench
         && TestTXThrottle(Testbench.Wallet, ref message)
         && TestOwnTX(Testbench.Wallet, ref message)
         && TestFramingSend(ref message)
-        && TestSplitReads(ref message);
+        && TestSplitReads(ref message)
+        && TestMagicMismatch(ref message);
+    }
+
+    static bool TestMagicMismatch(ref string message)
+    {
+      Console.WriteLine("  31. Magic Mismatch: Reject a message with other magic bytes.");
+
+      using ConnectionLoopback connection = new();
+
+      byte[] magicBytesOther = [.. MAGIC_BYTES.Select(b => (byte)~b)];
+
+      connection.StreamRaw.Write(BuildMessage(magicBytesOther, COMMAND_FRAMING, 0, []));
+
+      return IsRejected("Magic mismatch", () => connection.Socket.ReceiveCommandMessageNext().GetAwaiter().GetResult(), ref message);
     }
 
     static bool TestSplitReads(ref string message)
