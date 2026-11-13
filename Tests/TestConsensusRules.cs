@@ -37,7 +37,8 @@ internal partial class Testbench
         && BlockchainAccounts.TestSingleRollbacks(Testbench.Wallet, ref message)
         && BlockchainAccounts.TestCountRestoration(Testbench.Wallet, ref message)
         && BlockchainAccounts.TestForkReplacement(Testbench.Wallet, ref message)
-        && BlockchainAccounts.TestRetentionWindow(Testbench.Wallet, ref message);
+        && BlockchainAccounts.TestRetentionWindow(Testbench.Wallet, ref message)
+        && BlockchainAccounts.TestServedSegments(Testbench.Wallet, ref message);
     }
 
     const int SIZE_BLOCK_MAX = 1 << 20;
@@ -137,7 +138,7 @@ internal partial class Testbench
       }
     }
 
-    abstract class BlockchainAccounts : BlockchainBToken
+    abstract partial class BlockchainAccounts : BlockchainBToken
     {
       const int COUNT_SEGMENTS = 2048;
       const int SHIFT_INDEX_SEGMENT = 5;
@@ -217,12 +218,9 @@ internal partial class Testbench
 
         if (!ledger.TryInsertBlock("coinbase paying one more than block reward plus fees", [ledger.CreateCoinbase(wallet, iDMiner, FEE + 1), tXSpend], isValidExpected: false, null, ref message)
           || !ledger.TryInsertBlock("coinbase paying one less than block reward plus fees", [ledger.CreateCoinbase(wallet, iDMiner, FEE - 1), tXSpend], isValidExpected: false, null, ref message)
-          || !ledger.TryInsertBlock("coinbase paying block reward plus fees", [ledger.CreateCoinbase(wallet, iDMiner, FEE), tXSpend], isValidExpected: true, null, ref message))
+          || !ledger.TryInsertBlock("coinbase paying block reward plus fees", [ledger.CreateCoinbase(wallet, iDMiner, FEE), tXSpend], isValidExpected: true, null, ref message)
+          || !TryInsertCoinbasesUpTo(ledger, wallet, iDMiner, indexSegmentRent - 1, ref message))
           return false;
-
-        while (ledger.GetHeightTip() < indexSegmentRent - 1)
-          if (!ledger.TryInsertBlock("coinbase before the sweep", [ledger.CreateCoinbase(wallet, iDMiner, 0)], isValidExpected: true, null, ref message))
-            return false;
 
         long rent = ledger.GetRentNext();
 
@@ -292,12 +290,9 @@ internal partial class Testbench
             {
               t.Nonce += 1;
               t.TXOutputs.Clear();
-            })], isValidExpected: true, null, ref message))
+            })], isValidExpected: true, null, ref message)
+          || !TryInsertCoinbasesUpTo(ledger, wallet, iDMiner, indexSegmentRent - 1, ref message))
           return false;
-
-        while (ledger.GetHeightTip() < indexSegmentRent - 1)
-          if (!ledger.TryInsertBlock("coinbase before the sweep", [ledger.CreateCoinbase(wallet, iDMiner, 0)], isValidExpected: true, null, ref message))
-            return false;
 
         if (!ledger.TryInsertBlock("sweep recreating a swept account", [ledger.CreateCoinbase(wallet, iDMiner, 0, new TXOutputP2PKH(50, iDRentSwept))], isValidExpected: true, null, ref message)
           || !ledger.TryInsertBlock("output to and spend from the wallet account", [ledger.CreateCoinbase(wallet, wallet.Hash160PKeyPublic, FEE), ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => { })], isValidExpected: true, null, ref message))
@@ -327,12 +322,9 @@ internal partial class Testbench
           new TXOutputP2PKH(100, CreateIDAccount(1000, 5)));
 
         if (!ledger.TryInsertBlock("coinbase creating the wallet account and accounts in a segment swept twice", [tXCoinbaseAccounts], isValidExpected: true, null, ref message)
-          || !ledger.TryInsertBlock("spend from the wallet account", [ledger.CreateCoinbase(wallet, iDMiner, FEE), ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => { })], isValidExpected: true, null, ref message))
+          || !ledger.TryInsertBlock("spend from the wallet account", [ledger.CreateCoinbase(wallet, iDMiner, FEE), ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => { })], isValidExpected: true, null, ref message)
+          || !TryInsertCoinbasesUpTo(ledger, wallet, iDMiner, COUNT_MAX_BLOCKS_STORED - 1, ref message))
           return false;
-
-        while (ledger.GetHeightTip() < COUNT_MAX_BLOCKS_STORED - 1)
-          if (!ledger.TryInsertBlock("coinbase inside the retention window", [ledger.CreateCoinbase(wallet, iDMiner, 0)], isValidExpected: true, null, ref message))
-            return false;
 
         return ledger.TryInsertBlock("spend of the whole Balance", [ledger.CreateCoinbase(wallet, iDMiner, FEE), ledger.CreateTXSpend(wallet, iDReceiver, ledger.GetBalanceNext(wallet.Hash160PKeyPublic) - FEE, t => { })], isValidExpected: true, null, ref message)
           && ledger.TryRollBackAndInsertAgain("retention window", heightTarget: 0, ref message);
@@ -351,12 +343,9 @@ internal partial class Testbench
           || !ledger.TryInsertBlock("coinbase creating 100 accounts in one segment", [CreateCoinbaseAccounts(ledger, wallet, indexSegmentAccounts, 100)], isValidExpected: true, null, ref message)
           || !ledger.TryRollBack("count restoration", out _, ref message)
           || !ledger.TryInsertBlock("coinbase creating 101 accounts in one segment after rolling back the creation of 100", [CreateCoinbaseAccounts(ledger, wallet, indexSegmentAccounts, 101)], isValidExpected: false, null, ref message)
-          || !ledger.TryInsertBlock("coinbase creating 100 accounts in one segment after rolling back their creation", [CreateCoinbaseAccounts(ledger, wallet, indexSegmentAccounts, 100)], isValidExpected: true, null, ref message))
+          || !ledger.TryInsertBlock("coinbase creating 100 accounts in one segment after rolling back their creation", [CreateCoinbaseAccounts(ledger, wallet, indexSegmentAccounts, 100)], isValidExpected: true, null, ref message)
+          || !TryInsertCoinbasesUpTo(ledger, wallet, iDMiner, indexSegmentAccounts - 1, ref message))
           return false;
-
-        while (ledger.GetHeightTip() < indexSegmentAccounts - 1)
-          if (!ledger.TryInsertBlock("coinbase before the sweep", [ledger.CreateCoinbase(wallet, iDMiner, 0)], isValidExpected: true, null, ref message))
-            return false;
 
         return ledger.TryInsertBlock("sweep deleting 99 accounts", [ledger.CreateCoinbase(wallet, iDMiner, 0)], isValidExpected: true, null, ref message)
           && ledger.TryRollBack("count restoration", out _, ref message)
@@ -389,6 +378,15 @@ internal partial class Testbench
             ledger.CreateCoinbase(wallet, iDMinerFork, 2 * FEE),
             ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => { }),
             ledger.CreateTXSpend(wallet, iDReceiverFork, VALUE_SPEND, t => t.Nonce += 1)], isValidExpected: true, null, ref message);
+      }
+
+      static bool TryInsertCoinbasesUpTo(Ledger ledger, Wallet wallet, byte[] iDMiner, int height, ref string message)
+      {
+        while (ledger.GetHeightTip() < height)
+          if (!ledger.TryInsertBlock("coinbase to the miner account", [ledger.CreateCoinbase(wallet, iDMiner, 0)], isValidExpected: true, null, ref message))
+            return false;
+
+        return true;
       }
 
       static void AddAnchor(TXBToken tX, int lockTime)
@@ -427,7 +425,7 @@ internal partial class Testbench
         return countHalvings >= 64 ? 0 : BLOCK_REWARD_INITIAL >> countHalvings;
       }
 
-      class Ledger
+      partial class Ledger
       {
         LiteDatabase LiteDatabase = new(new MemoryStream(), new BsonMapper { IncludeFields = true, IncludeNonPublic = true });
         DatabaseAccounts Accounts = new();
