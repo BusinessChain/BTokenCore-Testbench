@@ -19,7 +19,7 @@ internal partial class Testbench
       const int COUNT_ROUNDS_SWITCH = 6;
 
       BlockchainChain()
-        : base(null, 0, null, null, null)
+        : base(null, null, 0, null, null, null)
       { }
 
       // Counter-tested 2026-11-13 14:03

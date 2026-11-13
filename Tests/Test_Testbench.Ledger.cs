@@ -23,7 +23,7 @@ internal partial class Testbench
       static readonly Comparer<byte[]> ComparerID = Comparer<byte[]>.Create((a, b) => a.AsSpan().SequenceCompareTo(b));
 
       protected BlockchainTestbench()
-        : base(null, null, null, null)
+        : base(null, null, null, null, null)
       { }
 
       protected static bool TryInsertCoinbasesUpTo(Ledger ledger, Wallet wallet, byte[] iDMiner, int height, ref string message)
