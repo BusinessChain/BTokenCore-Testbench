@@ -74,7 +74,36 @@ internal partial class Testbench
         && TestSegmentRequest(blocksWindow, ref message)
         && TestSegmentRefusal(blocksWindow, ref message)
         && TestTXRequest(Testbench.Wallet, ref message)
-        && TestTXRelay(Testbench.Wallet, ref message);
+        && TestTXRelay(Testbench.Wallet, ref message)
+        && TestTXTimeout(Testbench.Wallet, ref message);
+    }
+
+    static bool TestTXTimeout(Wallet wallet, ref string message)
+    {
+      Console.WriteLine("  24. TX Timeout: Disconnect a peer that does not answer a TX request.");
+
+      const string NAME_CASE = "TX timeout";
+
+      if (!BlockchainNetwork.TryCreateBlocks(wallet, [t => { }], out List<Block> blocks, out List<BlockchainBToken.TXBToken> spends, ref message))
+        return false;
+
+      NetworkTestbench network = StartNodeWithInboundPeer(out SocketFake socketPeer, out _, b => b.AnchorAndDeliver(blocks));
+
+      try
+      {
+        if (!TryHandshakeInbound(NAME_CASE, socketPeer, ref message)
+          || !IsPeerListed(NAME_CASE, network, IP_PEER, ref message)
+          || !IsOnlyTXRequested(NAME_CASE, socketPeer, [spends[0].Hash], spends[0].Hash, ref message))
+          return false;
+
+        network.AgeTXRequests(IP_PEER, Network.TIMEOUT_REQUEST_SECONDS);
+
+        return socketPeer.IsDisconnected(NAME_CASE, ref message);
+      }
+      finally
+      {
+        socketPeer.Dispose();
+      }
     }
 
     static bool TestTXRelay(Wallet wallet, ref string message)
@@ -1179,6 +1208,18 @@ internal partial class Testbench
       {
         lock (LOCK_Peers)
           ((BlockMessage)Peers.Single(p => p.GetIP() == iP).MessagesByCommand[BlockMessage.Command]).TimeRequest -= TimeSpan.FromSeconds(seconds);
+      }
+
+      internal void AgeTXRequests(string iP, int seconds)
+      {
+        lock (LOCK_Peers)
+        {
+          Dictionary<byte[], DateTime> hashesTXRequested = ((PeerBToken)Peers.Single(p => p.GetIP() == iP)).HashesTXRequested;
+
+          lock (hashesTXRequested)
+            foreach (byte[] hash in hashesTXRequested.Keys.ToList())
+              hashesTXRequested[hash] -= TimeSpan.FromSeconds(seconds);
+        }
       }
     }
 
