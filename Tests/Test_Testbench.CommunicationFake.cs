@@ -17,12 +17,13 @@ internal partial class Testbench
       SocketFake Partner;
       Channel<(string command, byte[] payload)> MessagesReceived = Channel.CreateUnbounded<(string command, byte[] payload)>();
       byte[] PayloadNext;
+      TaskCompletionSource Closed = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
 
       internal static SocketFake CreatePair(out SocketFake socketPeer)
       {
         SocketFake socketNode = new();
-        socketPeer = new() { Partner = socketNode };
+        socketPeer = new() { Partner = socketNode, Closed = socketNode.Closed };
         socketNode.Partner = socketPeer;
 
         return socketNode;
@@ -64,6 +65,16 @@ internal partial class Testbench
       {
         MessagesReceived.Writer.TryComplete();
         Partner.MessagesReceived.Writer.TryComplete();
+        Closed.TrySetResult();
+      }
+
+      internal bool IsDisconnected(string nameCase, ref string message)
+      {
+        if (Closed.Task.Wait(TimeSpan.FromSeconds(SECONDS_TIMEOUT_RECEIVE)))
+          return true;
+
+        message = $"{nameCase}: the node did not disconnect the peer within {SECONDS_TIMEOUT_RECEIVE} seconds.";
+        return false;
       }
 
       public string GetIP()

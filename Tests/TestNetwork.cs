@@ -17,6 +17,7 @@ internal partial class Testbench
     const uint PROTOCOL_VERSION = 1;
     const int LENGTH_ADDRESS = 30;
     const int OFFSET_IP_ADDRESS = 12;
+    const string IP_PEER = "10.0.0.2";
     const int SECONDS_TIMEOUT_PEER_LISTED = 10;
 
 
@@ -29,7 +30,8 @@ internal partial class Testbench
       message = "";
 
       return TestHandshakeOutbound(ref message)
-        && TestHandshakeInbound(ref message);
+        && TestHandshakeInbound(ref message)
+        && TestServicesMissing(ref message);
     }
 
     static bool TestHandshakeOutbound(ref string message)
@@ -67,16 +69,11 @@ internal partial class Testbench
       Console.WriteLine("  2. Handshake Inbound: Accept an inbound peer and store its IP.");
 
       const string NAME_CASE = "Handshake inbound";
-      const string IP_PEER = "10.0.0.2";
 
-      CommunicationFake communication = new();
-      NetworkTestbench network = BlockchainNetwork.StartNode(communication);
-      SocketFake socketPeer = communication.ConnectInbound(IP_PEER);
+      SocketFake socketPeer = ConnectInboundWithVersion(Network.Configuration.NODE_NETWORK, out NetworkTestbench network);
 
       try
       {
-        SendVersion(socketPeer, Network.Configuration.NODE_NETWORK);
-
         if (!socketPeer.TryReceive(NAME_CASE, COMMAND_VERACK, out _, ref message)
           || !socketPeer.TryReceive(NAME_CASE, COMMAND_VERSION, out _, ref message))
           return false;
@@ -101,6 +98,42 @@ internal partial class Testbench
       {
         socketPeer.Dispose();
       }
+    }
+
+    static bool TestServicesMissing(ref string message)
+    {
+      Console.WriteLine("  3. Services Missing: Disconnect an inbound peer lacking NODE_NETWORK.");
+
+      const string NAME_CASE = "Services missing";
+
+      SocketFake socketPeer = ConnectInboundWithVersion(0, out NetworkTestbench network);
+
+      try
+      {
+        if (!socketPeer.IsDisconnected(NAME_CASE, ref message))
+          return false;
+
+        if (!network.IsPeerListed(IP_PEER))
+          return true;
+
+        message = $"{NAME_CASE}: the node lists the disconnected peer {IP_PEER} in Peers.";
+        return false;
+      }
+      finally
+      {
+        socketPeer.Dispose();
+      }
+    }
+
+    static SocketFake ConnectInboundWithVersion(ulong networkServices, out NetworkTestbench network)
+    {
+      CommunicationFake communication = new();
+      network = BlockchainNetwork.StartNode(communication);
+
+      SocketFake socketPeer = communication.ConnectInbound(IP_PEER);
+      SendVersion(socketPeer, networkServices);
+
+      return socketPeer;
     }
 
     static bool IsPeerListed(string nameCase, NetworkTestbench network, string iP, ref string message)
