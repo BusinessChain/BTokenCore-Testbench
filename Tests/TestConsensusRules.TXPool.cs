@@ -261,6 +261,53 @@ internal partial class Testbench
           && ledger.TryInsertBlockFromPool("block of the TX left in the pool", pool, wallet, iDMiner, 1, ref message);
       }
 
+      internal static bool TestBlockRollback(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  27. Block Rollback: Return rolled-back TXs in front, drop expired anchors.");
+
+        Ledger ledger = new(heightRoot: 0);
+
+        Wallet walletB = CreateWallet();
+        Wallet walletC = CreateWallet();
+        Wallet walletD = CreateWallet();
+        byte[] iDMiner = CreateIDAccount(1000, 1);
+
+        TXBToken tXCoinbaseWallets = ledger.CreateCoinbase(wallet, wallet.Hash160PKeyPublic, 0,
+          new TXOutputP2PKH(BALANCE_WALLET, walletB.Hash160PKeyPublic),
+          new TXOutputP2PKH(BALANCE_WALLET, walletC.Hash160PKeyPublic),
+          new TXOutputP2PKH(BALANCE_WALLET, walletD.Hash160PKeyPublic));
+
+        if (!ledger.TryInsertBlock("coinbase creating four wallet accounts", [tXCoinbaseWallets], isValidExpected: true, null, ref message))
+          return false;
+
+        int heightTip = ledger.GetHeightTip();
+
+        TXBToken tXA1 = CreateTXSpendFee(ledger, wallet, walletB.Hash160PKeyPublic, 0, 16000);
+        TXBToken tXA2 = CreateTXSpendFee(ledger, wallet, walletB.Hash160PKeyPublic, 1, 8000);
+        TXBToken tXB1 = ledger.CreateTXSpend(walletB, wallet.Hash160PKeyPublic, VALUE_SPEND, t =>
+        {
+          AddAnchor(t, heightTip);
+          t.Fee = 17000;
+        });
+        TXBToken tXB2 = CreateTXSpendFee(ledger, walletB, wallet.Hash160PKeyPublic, 1, 0);
+        TXBToken tXC1 = ledger.CreateTXSpend(walletC, wallet.Hash160PKeyPublic, VALUE_SPEND, t => AddAnchor(t, heightTip + 1));
+        TXBToken tXD1 = CreateTXSpendFee(ledger, walletD, wallet.Hash160PKeyPublic, 0, 0);
+
+        PoolTXBToken pool = ledger.CreateTXPool(COUNT_BYTES_MAX_POOL);
+
+        return IsAdmitted("spend of the block later rolled back", pool, tXA1, true, ref message)
+          && IsAdmitted("anchor TX of the block later rolled back", pool, tXB1, true, ref message)
+          && IsAdmitted("spend of Fee 0 of the block later rolled back", pool, tXB2, true, ref message)
+          && ledger.TryInsertBlockFromPool("block later rolled back", pool, wallet, iDMiner, 3, ref message)
+          && AreTXsRankedCorrect("pool after RemoveTXs of the block later rolled back", pool.GetTXsRanked(), [], ref message)
+          && IsAdmitted("spend of Fee 0 pooled before the rollback", pool, tXD1, true, ref message)
+          && IsAdmitted("spend following the block later rolled back", pool, tXA2, true, ref message)
+          && IsAdmitted("anchor TX valid only after the block later rolled back", pool, tXC1, true, ref message)
+          && ledger.TryRollBack("block rollback", out _, ref message)
+          && AreTXsRankedCorrect("pool after ReturnTXs", pool.GetTXsRanked(), [tXA1, tXB1, tXA2, tXB2, tXD1], ref message)
+          && ledger.TryInsertBlockFromPool("rolled-back block inserted again with the pooled TXs", pool, wallet, iDMiner, 5, ref message);
+      }
+
       static bool IsFeePerByteMinCorrect(string nameCase, PoolTXBToken pool, double feePerByteMinExpected, ref string message)
       {
         double feePerByteMin = pool.GetFeePerByteMin();
