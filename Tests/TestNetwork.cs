@@ -44,6 +44,9 @@ internal partial class Testbench
     const string COMMAND_FEEFILTER = "feefilter";
     const string COMMAND_FRAMING = "framing";
     static readonly byte[] MAGIC_BYTES = [0xB7, 0xD0, 0xC3, 0xE5];
+    const string IP_SEED_BITCOIN = "10.0.5.1";
+    const string COMMAND_GETHEADERS = "getheaders";
+    const int LENGTH_PROTOCOL_VERSION = 4;
     const int SECONDS_TIMEOUT_PEER_LISTED = 10;
     const int SECONDS_TIMEOUT_REQUEST = 10;
     const int LENGTH_TIME_ADDRESS = 4;
@@ -90,7 +93,64 @@ internal partial class Testbench
         && TestSplitReads(ref message)
         && TestMagicMismatch(ref message)
         && TestPayloadLength(ref message)
-        && TestStreamEnd(ref message);
+        && TestStreamEnd(ref message)
+        && TestGetheadersLocator(ref message);
+    }
+
+    static bool TestGetheadersLocator(ref string message)
+    {
+      Console.WriteLine("  34. Getheaders Locator: Send getheaders with an exponential locator after verack.");
+
+      const string NAME_CASE = "Getheaders locator";
+      const int COUNT_BLOCKS = 10;
+
+      SocketFake socketSeed = BlockchainNetwork.StartNodeBitcoin(COUNT_BLOCKS, out List<Header> headers);
+
+      try
+      {
+        if (!TryHandshakeBitcoin(NAME_CASE, socketSeed, out List<byte[]> locator, ref message))
+          return false;
+
+        List<byte[]> locatorExpected = [.. new[] { 10, 9, 7, 3 }.Select(h => headers[h - 1].Hash), headers[0].HashPrevious];
+
+        if (locator.Count == locatorExpected.Count && locator.Zip(locatorExpected).All(l => l.First.IsAllBytesEqual(l.Second)))
+          return true;
+
+        message = $"{NAME_CASE}: the locator holds {string.Join(", ", locator.Select(h => h.ToHexString()))}, " +
+          $"expected the hashes at heights 10, 9, 7, 3 and 0.";
+        return false;
+      }
+      finally
+      {
+        socketSeed.Dispose();
+      }
+    }
+
+    static bool TryHandshakeBitcoin(string nameCase, SocketFake socketPeer, out List<byte[]> locator, ref string message)
+    {
+      locator = null;
+
+      if (!socketPeer.TryReceive(nameCase, COMMAND_VERSION, out _, ref message))
+        return false;
+
+      SendVersion(socketPeer, Network.Configuration.NODE_NETWORK);
+      socketPeer.SendMessage(COMMAND_VERACK, 0, []).Wait();
+
+      return TryReceiveGetheaders(nameCase, socketPeer, out locator, ref message);
+    }
+
+    static bool TryReceiveGetheaders(string nameCase, SocketFake socketPeer, out List<byte[]> locator, ref string message)
+    {
+      locator = null;
+
+      if (!socketPeer.TryReceive(nameCase, COMMAND_GETHEADERS, out byte[] payload, ref message))
+        return false;
+
+      int startIndex = LENGTH_PROTOCOL_VERSION;
+      int countHashes = VarInt.GetInt(payload, ref startIndex);
+
+      locator = [.. Enumerable.Range(0, countHashes).Select(i => payload[(startIndex + i * Crypto.LENGTH_HASH256)..(startIndex + (i + 1) * Crypto.LENGTH_HASH256)])];
+      return true;
     }
 
     static bool TestStreamEnd(ref string message)
@@ -1687,6 +1747,26 @@ internal partial class Testbench
         network.Start();
 
         return network;
+      }
+
+      internal static SocketFake StartNodeBitcoin(int countBlocks, out List<Header> headers)
+      {
+        CreateWalletFile(BlockchainBitcoin.NAME_TOKEN);
+
+        BlockchainParentFake blockchain = new(CreateLiteDatabase());
+        blockchain.LoadBlockchain();
+
+        headers = Enumerable.Range(0, countBlocks).Select(i => blockchain.MineBlock([])).ToList();
+
+        CommunicationFake communication = new();
+        SocketFake socketSeed = communication.QueueOutbound();
+
+        NetworkBitcoin network = new(blockchain, communication);
+        network.ConfigurationNetwork.SeedAddresses = [IP_SEED_BITCOIN];
+        network.ConfigurationNetwork.CountMaxOutboundConnections = 1;
+        network.Start();
+
+        return socketSeed;
       }
     }
   }

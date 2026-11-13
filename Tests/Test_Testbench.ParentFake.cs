@@ -51,7 +51,7 @@ internal partial class Testbench
         return tXFunding;
       }
 
-      internal void MineBlock(List<TXBitcoin> tXs, params TXOutputTokenAnchor[] anchors)
+      internal Header MineBlock(List<TXBitcoin> tXs, params TXOutputTokenAnchor[] anchors)
       {
         HeaderBToken header = new(
           headerHash: null,
@@ -72,6 +72,8 @@ internal partial class Testbench
         ChainRoot.BlocksQueued.Add(header.Height, block);
 
         UpdateTipBlockchain(ChainRoot);
+
+        return header;
       }
 
       internal void MineAnchors(List<Block> blocksLedger)
