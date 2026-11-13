@@ -82,9 +82,9 @@ internal partial class Testbench
         return IPRemote;
       }
 
-      internal bool TryReceive(string nameCase, string command, out byte[] payload, ref string message)
+      internal bool TryReceive(string nameCase, string command, out byte[] payload, ref string message, int secondsTimeout = SECONDS_TIMEOUT_RECEIVE)
       {
-        using CancellationTokenSource cancellation = new(TimeSpan.FromSeconds(SECONDS_TIMEOUT_RECEIVE));
+        using CancellationTokenSource cancellation = new(TimeSpan.FromSeconds(secondsTimeout));
 
         try
         {
@@ -100,7 +100,7 @@ internal partial class Testbench
         catch (Exception exception) when (exception is OperationCanceledException or ChannelClosedException)
         {
           payload = null;
-          message = $"{nameCase}: the node sent no {command} message within {SECONDS_TIMEOUT_RECEIVE} seconds.";
+          message = $"{nameCase}: the node sent no {command} message within {secondsTimeout} seconds.";
           return false;
         }
       }

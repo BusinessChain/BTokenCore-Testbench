@@ -19,6 +19,11 @@ internal partial class Testbench
     const string COMMAND_PING = "ping";
     const string COMMAND_PONG = "pong";
     const int LENGTH_NONCE_PING = 8;
+    const string COMMAND_GETDATA = "getdata";
+    const string COMMAND_BLOCK = "block";
+    const string COMMAND_HEADERS = "headers";
+    const int LENGTH_INVENTORY_TYPE = 4;
+    const int LENGTH_INVENTORY = 36;
     const uint PROTOCOL_VERSION = 1;
     const int LENGTH_ADDRESS = 30;
     const int OFFSET_IP_ADDRESS = 12;
@@ -46,7 +51,8 @@ internal partial class Testbench
         && TestInboundDuplicate(ref message)
         && TestInboundEviction(ref message)
         && TestAddressPort(ref message)
-        && TestAddressDOS(ref message);
+        && TestAddressDOS(ref message)
+        && TestBlockDownload(Testbench.Wallet, ref message);
     }
 
     static bool TestHandshakeOutbound(ref string message)
@@ -396,6 +402,105 @@ internal partial class Testbench
       }
     }
 
+    static bool TestBlockDownload(Wallet wallet, ref string message)
+    {
+      Console.WriteLine("  11. Block Download: Download missing blocks, the newest only after its announcement.");
+
+      const string NAME_CASE = "Block download";
+      const int SECONDS_HOLD = 3;
+
+      if (!BlockchainNetwork.TryCreateBlocks(wallet, out List<Block> blocks, ref message))
+        return false;
+
+      Block blockNewest = blocks[^1];
+
+      CommunicationFake communication = new();
+      NetworkTestbench network = BlockchainNetwork.StartNode(communication, prepare: b => b.ParentFake.MineAnchors(blocks));
+      SocketFake socketPeer = communication.ConnectInbound(IP_PEER);
+
+      try
+      {
+        if (!TryHandshakeInbound(NAME_CASE, socketPeer, ref message)
+          || !TryServeBlocksRequested(NAME_CASE, socketPeer, blocks.Take(blocks.Count - 1).ToList(), ref message))
+          return false;
+
+        string messageHold = "";
+
+        if (TryReceiveRequestBlock(NAME_CASE, socketPeer, out _, ref messageHold, SECONDS_HOLD))
+        {
+          message = $"{NAME_CASE}: the node requests the newest block before any peer announced it.";
+          return false;
+        }
+
+        SendHeaders(socketPeer, blockNewest.Header);
+
+        return TryServeBlocksRequested(NAME_CASE, socketPeer, [blockNewest], ref message)
+          && IsAtHeight(NAME_CASE, network, blockNewest.Header.Height, ref message);
+      }
+      finally
+      {
+        socketPeer.Dispose();
+      }
+    }
+
+    static bool TryServeBlocksRequested(string nameCase, SocketFake socketPeer, List<Block> blocksServed, ref string message)
+    {
+      for (int i = 0; i < blocksServed.Count; i++)
+      {
+        if (!TryReceiveRequestBlock(nameCase, socketPeer, out byte[] hash, ref message))
+          return false;
+
+        Block block = blocksServed.Find(b => b.Header.Hash.IsAllBytesEqual(hash));
+
+        if (block == null)
+        {
+          message = $"{nameCase}: the node requests block {hash.ToHexString()}, expected one of the {blocksServed.Count} blocks served.";
+          return false;
+        }
+
+        socketPeer.SendMessage(COMMAND_BLOCK, block.LengthDataPayload, block.Buffer).Wait();
+      }
+
+      return true;
+    }
+
+    static bool TryReceiveRequestBlock(string nameCase, SocketFake socketPeer, out byte[] hash, ref string message, int secondsTimeout = SECONDS_TIMEOUT_REQUEST)
+    {
+      while (socketPeer.TryReceive(nameCase, COMMAND_GETDATA, out byte[] payload, ref message, secondsTimeout))
+      {
+        int startIndex = 0;
+        int countInventories = VarInt.GetInt(payload, ref startIndex);
+
+        for (int i = 0; i < countInventories; i++, startIndex += LENGTH_INVENTORY)
+          if (BitConverter.ToUInt32(payload, startIndex) == (uint)Network.Inventory.InventoryType.MSG_BLOCK)
+          {
+            hash = payload[(startIndex + LENGTH_INVENTORY_TYPE)..(startIndex + LENGTH_INVENTORY)];
+            return true;
+          }
+      }
+
+      hash = null;
+      return false;
+    }
+
+    static void SendHeaders(SocketFake socketPeer, Header header)
+    {
+      byte[] payload = [.. VarInt.GetBytes(1), .. header.Serialize(), 0x00];
+
+      socketPeer.SendMessage(COMMAND_HEADERS, payload.Length, payload).Wait();
+    }
+
+    static bool IsAtHeight(string nameCase, NetworkTestbench network, int height, ref string message)
+    {
+      if (SpinWait.SpinUntil(
+        () => network.Blockchain.RunLocked(network.Blockchain.GetHeight).Result == height,
+        TimeSpan.FromSeconds(SECONDS_TIMEOUT_REQUEST)))
+        return true;
+
+      message = $"{nameCase}: the node does not reach height {height}.";
+      return false;
+    }
+
     static bool TrySynchronize(string nameCase, SocketFake socketPeer, ref string message)
     {
       socketPeer.SendMessage(COMMAND_PING, LENGTH_NONCE_PING, new byte[LENGTH_NONCE_PING]).Wait();
@@ -534,18 +639,38 @@ internal partial class Testbench
     {
       const string NAME_TOKEN = "TestNetwork";
 
+      internal BlockchainParentFake ParentFake;
 
-      BlockchainNetwork(LiteDatabase liteDatabase, Blockchain blockchainParent)
+
+      BlockchainNetwork(LiteDatabase liteDatabase, BlockchainParentFake blockchainParent)
         : base(NAME_TOKEN, liteDatabase, blockchainParent)
-      { }
+      {
+        ParentFake = blockchainParent;
+      }
 
-      internal static NetworkTestbench StartNode(CommunicationFake communication, int countMaxOutbound = 1, int countMaxInbound = 32)
+      internal static bool TryCreateBlocks(Wallet wallet, out List<Block> blocks, ref string message)
+      {
+        blocks = null;
+
+        if (!TryCreateLedger(wallet, out Ledger ledger, ref message))
+          return false;
+
+        blocks = ledger.GetBlocksInserted();
+        return true;
+      }
+
+      internal static NetworkTestbench StartNode(
+        CommunicationFake communication,
+        int countMaxOutbound = 1,
+        int countMaxInbound = 32,
+        Action<BlockchainNetwork> prepare = null)
       {
         CreateWalletFile(BlockchainBitcoin.NAME_TOKEN);
         CreateWalletFile(NAME_TOKEN);
 
         BlockchainNetwork blockchain = new(CreateLiteDatabase(), new BlockchainParentFake(CreateLiteDatabase()));
         blockchain.Load();
+        prepare?.Invoke(blockchain);
 
         NetworkTestbench network = new(blockchain, communication);
         network.ConfigurationNetwork.CountMaxOutboundConnections = countMaxOutbound;
