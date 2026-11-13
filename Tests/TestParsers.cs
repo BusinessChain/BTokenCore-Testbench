@@ -21,9 +21,23 @@ internal partial class Testbench
     {
       message = "";
 
-      return Test_HeaderBToken(ref message)
-        && Test_HeaderBitcoin(ref message)
-        && Test_TXBToken(ref message);
+      string pathWallet = Path.GetTempFileName();
+
+      try
+      {
+        File.WriteAllText(pathWallet, Crypto.GenerateKeyPrivate());
+
+        Wallet wallet = new(pathWallet);
+
+        return Test_HeaderBToken(ref message)
+          && Test_HeaderBitcoin(ref message)
+          && Test_TXBToken(wallet, ref message)
+          && Test_Block(wallet, ref message);
+      }
+      finally
+      {
+        File.Delete(pathWallet);
+      }
     }
 
     const int COUNT_BYTES_LEADING = 7;
@@ -37,20 +51,27 @@ internal partial class Testbench
     {
       Console.WriteLine("  Serialize a HeaderBToken and parse it back at index 0 and behind leading bytes.");
 
+      HeaderBToken header = CreateHeaderBToken("5a38043063d4da8309c3cbb2ffd20db190d74bdce1dec3f716d2ffc553864717".ToBinary());
+
+      byte[] headerSerialized = header.Serialize();
+
+      return IsHeaderBTokenParsedEqual(header, headerSerialized, 0, ref message)
+        && IsHeaderBTokenParsedEqual(header, EmbedInBuffer(headerSerialized), COUNT_BYTES_LEADING, ref message);
+    }
+
+    static HeaderBToken CreateHeaderBToken(byte[] merkleRoot)
+    {
       HeaderBToken header = new(
         headerHash: null,
         hashPrevious: "00000000000000000002a7c4c1e48d76c5a37902165a270156b7a8d72728a054".ToBinary(),
-        merkleRootHash: "5a38043063d4da8309c3cbb2ffd20db190d74bdce1dec3f716d2ffc553864717".ToBinary(),
+        merkleRootHash: merkleRoot,
         hashAccounts: "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d".ToBinary(),
         nonce: 0x42a47d62);
 
       header.Version = 0x21d18000;
       header.ComputeHash();
 
-      byte[] headerSerialized = header.Serialize();
-
-      return IsHeaderBTokenParsedEqual(header, headerSerialized, 0, ref message)
-        && IsHeaderBTokenParsedEqual(header, EmbedInBuffer(headerSerialized), COUNT_BYTES_LEADING, ref message);
+      return header;
     }
 
     static bool IsHeaderBTokenParsedEqual(HeaderBToken header, byte[] buffer, int indexStart, ref string message)
@@ -61,13 +82,18 @@ internal partial class Testbench
 
       string nameParser = $"{nameof(HeaderBToken)} parsed from index {indexStart}";
 
+      return AreHeadersBTokenEqual(nameParser, header, headerParsed, ref message)
+        && IsFieldEqual(nameParser, "index after parsing", indexStart + HeaderBToken.COUNT_HEADER_BYTES, index, ref message);
+    }
+
+    static bool AreHeadersBTokenEqual(string nameParser, HeaderBToken header, HeaderBToken headerParsed, ref string message)
+    {
       return IsFieldEqual(nameParser, nameof(Header.Version), header.Version, headerParsed.Version, ref message)
         && IsFieldEqual(nameParser, nameof(Header.HashPrevious), header.HashPrevious, headerParsed.HashPrevious, ref message)
         && IsFieldEqual(nameParser, nameof(Header.MerkleRoot), header.MerkleRoot, headerParsed.MerkleRoot, ref message)
         && IsFieldEqual(nameParser, nameof(HeaderBToken.HashAccounts), header.HashAccounts, headerParsed.HashAccounts, ref message)
         && IsFieldEqual(nameParser, nameof(Header.Nonce), header.Nonce, headerParsed.Nonce, ref message)
-        && IsFieldEqual(nameParser, nameof(Header.Hash), header.Hash, headerParsed.Hash, ref message)
-        && IsFieldEqual(nameParser, "index after parsing", indexStart + HeaderBToken.COUNT_HEADER_BYTES, index, ref message);
+        && IsFieldEqual(nameParser, nameof(Header.Hash), header.Hash, headerParsed.Hash, ref message);
     }
 
     bool Test_HeaderBitcoin(ref string message)
@@ -95,33 +121,66 @@ internal partial class Testbench
         && IsFieldEqual(nameParser, "serialized bytes", headerRaw, headerParsed.Serialize(), ref message);
     }
 
-    bool Test_TXBToken(ref string message)
+    bool Test_TXBToken(Wallet wallet, ref string message)
     {
       Console.WriteLine("  Serialize a wallet-signed and a coinbase TXBToken and parse them back at index 0 and behind leading bytes.");
 
-      string pathWallet = Path.GetTempFileName();
+      BlockchainBToken.TXBToken tX = CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic);
+      tX.Serialize(wallet);
 
-      try
+      BlockchainBToken.TXBToken tXCoinbase = CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic);
+      tXCoinbase.SerializeUnsigned();
+
+      return IsTXBTokenParsedEqual(tX, tX.TXRaw, 0, isCoinbase: false, ref message)
+        && IsTXBTokenParsedEqual(tX, EmbedInBuffer(tX.TXRaw), COUNT_BYTES_LEADING, isCoinbase: false, ref message)
+        && IsTXBTokenParsedEqual(tXCoinbase, tXCoinbase.TXRaw, 0, isCoinbase: true, ref message)
+        && IsTXBTokenParsedEqual(tXCoinbase, EmbedInBuffer(tXCoinbase.TXRaw), COUNT_BYTES_LEADING, isCoinbase: true, ref message);
+    }
+
+    bool Test_Block(Wallet wallet, ref string message)
+    {
+      Console.WriteLine("  Serialize a BToken block with a coinbase and a wallet-signed TXBToken and parse it back with ParserBToken.");
+
+      BlockchainBToken.TXBToken tXCoinbase = CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic);
+      tXCoinbase.Nonce = 0;
+      tXCoinbase.SerializeUnsigned();
+
+      BlockchainBToken.TXBToken tX = CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic);
+      tX.Serialize(wallet);
+
+      Block block = new(HeaderBToken.COUNT_HEADER_BYTES + 1 + tXCoinbase.TXRaw.Length + tX.TXRaw.Length);
+      block.TXs.Add(tXCoinbase);
+      block.TXs.Add(tX);
+
+      HeaderBToken header = CreateHeaderBToken(block.ComputeMerkleRoot());
+      header.Height = 737858;
+
+      block.Header = header;
+      block.Serialize();
+
+      Block blockParsed = new(block.Buffer[..block.LengthDataPayload])
       {
-        File.WriteAllText(pathWallet, Crypto.GenerateKeyPrivate());
+        Header = new HeaderBToken
+        {
+          Hash = header.Hash,
+          HashPrevious = header.HashPrevious,
+          Height = header.Height
+        }
+      };
 
-        Wallet wallet = new(pathWallet);
+      new ParserBToken().ParseBlock(blockParsed, verifySignatures: true);
 
-        BlockchainBToken.TXBToken tX = CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic);
-        tX.Serialize(wallet);
+      string nameParser = "Block parsed by ParserBToken";
 
-        BlockchainBToken.TXBToken tXCoinbase = CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic);
-        tXCoinbase.SerializeUnsigned();
+      if (!AreHeadersBTokenEqual(nameParser, header, (HeaderBToken)blockParsed.Header, ref message)
+        || !IsFieldEqual(nameParser, "TXs.Count", block.TXs.Count, blockParsed.TXs.Count, ref message))
+        return false;
 
-        return IsTXBTokenParsedEqual(tX, tX.TXRaw, 0, isCoinbase: false, ref message)
-          && IsTXBTokenParsedEqual(tX, EmbedInBuffer(tX.TXRaw), COUNT_BYTES_LEADING, isCoinbase: false, ref message)
-          && IsTXBTokenParsedEqual(tXCoinbase, tXCoinbase.TXRaw, 0, isCoinbase: true, ref message)
-          && IsTXBTokenParsedEqual(tXCoinbase, EmbedInBuffer(tXCoinbase.TXRaw), COUNT_BYTES_LEADING, isCoinbase: true, ref message);
-      }
-      finally
-      {
-        File.Delete(pathWallet);
-      }
+      for (int i = 0; i < block.TXs.Count; i++)
+        if (!AreTXsBTokenEqual($"{nameParser}, TXs[{i}]", (BlockchainBToken.TXBToken)block.TXs[i], (BlockchainBToken.TXBToken)blockParsed.TXs[i], ref message))
+          return false;
+
+      return true;
     }
 
     static BlockchainBToken.TXBToken CreateTXBToken(byte[] keyPublic, byte[] iDAccountReceiving)
@@ -158,6 +217,12 @@ internal partial class Testbench
 
       string nameParser = $"{nameof(BlockchainBToken.TXBToken)} parsed from index {indexStart}";
 
+      return AreTXsBTokenEqual(nameParser, tX, tXParsed, ref message)
+        && IsFieldEqual(nameParser, "index after parsing", indexStart + tX.TXRaw.Length, index, ref message);
+    }
+
+    static bool AreTXsBTokenEqual(string nameParser, BlockchainBToken.TXBToken tX, BlockchainBToken.TXBToken tXParsed, ref string message)
+    {
       return IsFieldEqual(nameParser, nameof(tX.KeyPublic), tX.KeyPublic, tXParsed.KeyPublic, ref message)
         && IsFieldEqual(nameParser, nameof(tX.IDAccountSource), Crypto.ComputeHash160(tX.KeyPublic), tXParsed.IDAccountSource, ref message)
         && IsFieldEqual(nameParser, nameof(tX.HeightAccountCreated), tX.HeightAccountCreated, tXParsed.HeightAccountCreated, ref message)
@@ -167,8 +232,7 @@ internal partial class Testbench
         && IsFieldEqual(nameParser, nameof(tX.Hash), tX.Hash, tXParsed.Hash, ref message)
         && IsFieldEqual(nameParser, nameof(tX.TXRaw), tX.TXRaw, tXParsed.TXRaw, ref message)
         && IsFieldEqual(nameParser, nameof(tX.CountBytes), tX.TXRaw.Length, tXParsed.CountBytes, ref message)
-        && AreTXOutputsParsedEqual(nameParser, tX.TXOutputs, tXParsed.TXOutputs, ref message)
-        && IsFieldEqual(nameParser, "index after parsing", indexStart + tX.TXRaw.Length, index, ref message);
+        && AreTXOutputsParsedEqual(nameParser, tX.TXOutputs, tXParsed.TXOutputs, ref message);
     }
 
     static bool AreTXOutputsParsedEqual(string nameParser, List<TXOutput> tXOutputs, List<TXOutput> tXOutputsParsed, ref string message)
