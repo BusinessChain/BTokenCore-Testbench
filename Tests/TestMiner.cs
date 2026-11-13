@@ -30,13 +30,16 @@ internal partial class Testbench
         && BlockchainMining.TestWithheldRun(Testbench.Wallet, ref message)
         && BlockchainMining.TestLateTie(Testbench.Wallet, ref message)
         && BlockchainMining.TestLateBehind(Testbench.Wallet, ref message)
-        && BlockchainMining.TestLateRun(Testbench.Wallet, ref message);
+        && BlockchainMining.TestLateRun(Testbench.Wallet, ref message)
+        && BlockchainMining.TestTimerTick(Testbench.Wallet, ref message);
     }
 
     class BlockchainMining : BlockchainTestbench
     {
       const string NAME_TOKEN = "TestMiner";
       const int LENGTH_ANCHOR = 10 + 148 + 9 + TXOutputTokenAnchor.LENGTH_SCRIPT_ANCHOR_TOKEN + 34;
+      const int COUNT_ANCHORS_PER_10_MINUTES_TIMER = 600;
+      const int SECONDS_TIMEOUT_TIMER = 3;
 
       BlockchainBitcoin.TXBitcoin TXFunding;
 
@@ -510,6 +513,73 @@ internal partial class Testbench
           && TryMineAnchor(nameCaseNext, MinerBlockchain.MineBlock, out BlockchainBitcoin.TXBitcoin tXNext, ref message)
           && TryInsertAnchoredSynchronized(nameCaseNext, ledger, tXNext, ref message)
           && IsRequestingNoBlock(nameCaseNext, ref message);
+      }
+
+      internal static bool TestTimerTick(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  14. Timer Tick: Tick mines anchors on the inserted tip.");
+
+        const string NAME_CASE = "Timer tick";
+
+        if (!TryStartNode(wallet, NAME_CASE, VALUE_FUNDING, out BlockchainMining blockchain, out Ledger ledger, ref message))
+          return false;
+
+        blockchain.RunLocked(() => blockchain.StartMining(COUNT_ANCHORS_PER_10_MINUTES_TIMER, FEE_ANCHOR)).Wait();
+
+        try
+        {
+          string nameCaseNext = $"{NAME_CASE}, tick after the insertion";
+
+          return blockchain.TryAwaitAnchor($"{NAME_CASE}, first tick", out BlockchainBitcoin.TXBitcoin tXAnchor, ref message)
+            && blockchain.IsPassedLocked((ref string m) => blockchain.TryInsertAnchoredSynchronized($"{NAME_CASE}, first anchor inserted", ledger, tXAnchor, ref m), ref message)
+            && blockchain.TryAwaitAnchor(nameCaseNext, out BlockchainBitcoin.TXBitcoin tXAnchorNext, ref message)
+            && blockchain.IsAnchorOnTip(nameCaseNext, tXAnchorNext, ref message);
+        }
+        finally
+        {
+          blockchain.RunLocked(blockchain.StopMining).Wait();
+        }
+      }
+
+      delegate bool Check(ref string message);
+
+      bool IsPassedLocked(Check check, ref string message)
+      {
+        string messageLocked = message;
+
+        bool isPassed = RunLocked(() => check(ref messageLocked)).Result;
+
+        message = messageLocked;
+        return isPassed;
+      }
+
+      bool TryAwaitAnchor(string nameCase, out BlockchainBitcoin.TXBitcoin tXAnchor, ref string message)
+      {
+        BlockchainBitcoin.TXBitcoin tXFound = null;
+        string messageAwait = "";
+
+        bool isFound = SpinWait.SpinUntil(
+          () => IsPassedLocked((ref string m) => TryMineAnchor(nameCase, () => { }, out tXFound, ref m), ref messageAwait),
+          TimeSpan.FromSeconds(SECONDS_TIMEOUT_TIMER));
+
+        tXAnchor = tXFound;
+
+        if (isFound)
+          return true;
+
+        message = $"{nameCase}: no anchor appeared within {SECONDS_TIMEOUT_TIMER} seconds: {messageAwait}";
+        return false;
+      }
+
+      bool IsAnchorOnTip(string nameCase, BlockchainBitcoin.TXBitcoin tXAnchor, ref string message)
+      {
+        byte[] hashTip = RunLocked(() => ChainRoot.HeaderTipBlockchain.Hash).Result;
+
+        if (tXAnchor.TXOutputs.OfType<TXOutputTokenAnchor>().Single().HashBlockPreviousReferenced.IsAllBytesEqual(hashTip))
+          return true;
+
+        message = $"{nameCase}: the anchor does not build on the tip {hashTip.ToHexString()}.";
+        return false;
       }
 
       bool TryInsertAnchoredSynchronized(string nameCase, Ledger ledger, BlockchainBitcoin.TXBitcoin tXAnchor, ref string message)
