@@ -38,7 +38,8 @@ internal partial class Testbench
         && BlockchainAccounts.TestCountRestoration(Testbench.Wallet, ref message)
         && BlockchainAccounts.TestForkReplacement(Testbench.Wallet, ref message)
         && BlockchainAccounts.TestRetentionWindow(Testbench.Wallet, ref message)
-        && BlockchainAccounts.TestServedSegments(Testbench.Wallet, ref message);
+        && BlockchainAccounts.TestServedSegments(Testbench.Wallet, ref message)
+        && BlockchainAccounts.TestMalformedSegments(ref message);
     }
 
     const int SIZE_BLOCK_MAX = 1 << 20;

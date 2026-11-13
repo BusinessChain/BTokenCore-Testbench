@@ -59,6 +59,78 @@ internal partial class Testbench
           && ledgerInstalled.AreSegmentsServedCorrect("heights above the installed height", heightFirst: 11, ref message);
       }
 
+      const int INDEX_SEGMENT = 5;
+
+      internal static bool TestMalformedSegments(ref string message)
+      {
+        Console.WriteLine("  19. Accept well-formed segments and reject segments with wrong length, count, segment index or order of IDs.");
+
+        byte[] iDFirst = CreateIDAccount(INDEX_SEGMENT, 1);
+        byte[] iDSecond = CreateIDAccount(INDEX_SEGMENT, 2);
+        byte[] iDThird = CreateIDAccount(INDEX_SEGMENT, 3);
+        byte[] segmentValid = SerializeSegment(3, iDFirst, iDSecond, iDThird);
+
+        return IsSegmentValidExpected("segment without accounts", SerializeSegment(0), isValidExpected: true, ref message)
+          && IsSegmentValidExpected("segment with three accounts in ascending order", segmentValid, isValidExpected: true, ref message)
+          && IsSegmentValidExpected("segment ending with the highest ID of its segment", SerializeSegment(2, iDFirst, CreateIDAccountHighest(INDEX_SEGMENT)), isValidExpected: true, ref message)
+          && IsSegmentValidExpected("empty buffer", [], isValidExpected: false, ref message)
+          && IsSegmentValidExpected("segment one byte shorter than its accounts", segmentValid[..^1], isValidExpected: false, ref message)
+          && IsSegmentValidExpected("segment one byte longer than its accounts", [.. segmentValid, 0x00], isValidExpected: false, ref message)
+          && IsSegmentValidExpected("count one higher than the accounts", SerializeSegment(4, iDFirst, iDSecond, iDThird), isValidExpected: false, ref message)
+          && IsSegmentValidExpected("count above int.MaxValue", [.. VarInt.GetBytes((ulong)int.MaxValue + 1)], isValidExpected: false, ref message)
+          && IsSegmentValidExpected("account with the lowest ID of the next segment", SerializeSegment(2, iDFirst, CreateIDAccount(INDEX_SEGMENT + 1, 0)), isValidExpected: false, ref message)
+          && IsSegmentValidExpected("account with the highest ID of the previous segment", SerializeSegment(2, CreateIDAccountHighest(INDEX_SEGMENT - 1), iDFirst), isValidExpected: false, ref message)
+          && IsSegmentValidExpected("two accounts in descending order", SerializeSegment(2, iDSecond, iDFirst), isValidExpected: false, ref message)
+          && IsSegmentValidExpected("same ID twice", SerializeSegment(2, iDFirst, iDFirst), isValidExpected: false, ref message);
+      }
+
+      static bool IsSegmentValidExpected(string nameCase, byte[] segment, bool isValidExpected, ref string message)
+      {
+        bool isValid;
+
+        try
+        {
+          isValid = DatabaseAccounts.IsSegmentValid(segment, INDEX_SEGMENT);
+        }
+        catch (Exception exception)
+        {
+          message = $"Malformed segments, {nameCase}: threw {exception.GetType().Name}: {exception.Message}";
+          return false;
+        }
+
+        if (isValid == isValidExpected)
+          return true;
+
+        message = $"Malformed segments, {nameCase}: {(isValid ? "accepted the malformed" : "rejected the valid")} segment.";
+        return false;
+      }
+
+      static byte[] SerializeSegment(int countAccounts, params byte[][] iDsAccount)
+      {
+        List<byte> bytes = [.. VarInt.GetBytes(countAccounts)];
+
+        foreach (byte[] iDAccount in iDsAccount)
+        {
+          bytes.AddRange(iDAccount);
+          bytes.AddRange(BitConverter.GetBytes(1));
+          bytes.AddRange(BitConverter.GetBytes(0));
+          bytes.AddRange(BitConverter.GetBytes(100L));
+        }
+
+        return [.. bytes];
+      }
+
+      static byte[] CreateIDAccountHighest(int indexSegment)
+      {
+        byte[] iDAccount = Enumerable.Repeat((byte)0xFF, 20).ToArray();
+        int prefix = indexSegment << SHIFT_INDEX_SEGMENT | (1 << SHIFT_INDEX_SEGMENT) - 1;
+
+        iDAccount[0] = (byte)(prefix >> 8);
+        iDAccount[1] = (byte)prefix;
+
+        return iDAccount;
+      }
+
       partial class Ledger
       {
         internal bool AreSegmentsServedCorrect(string nameCase, int heightFirst, ref string message)
