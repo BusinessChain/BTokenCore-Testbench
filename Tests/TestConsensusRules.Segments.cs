@@ -156,7 +156,17 @@ internal partial class Testbench
           || !TryInsertCoinbasesUpTo(ledgerServing, wallet, iDMiner, HEIGHT_INSTALLED + BITCOIN_REORG_MARGIN, ref message))
           return false;
 
-        return new Ledger(ledgerServing, HEIGHT_INSTALLED).AreAccountsInstalledCorrect(ref message);
+        Ledger ledgerInstalled = new(ledgerServing, HEIGHT_INSTALLED);
+
+        return ledgerInstalled.AreAccountsInstalledCorrect(ref message)
+          && TestContinuedBlocks(ledgerServing, ledgerInstalled, ref message);
+      }
+
+      static bool TestContinuedBlocks(Ledger ledgerServing, Ledger ledgerInstalled, ref string message)
+      {
+        Console.WriteLine("  21. Insert the blocks above the installed height into the installed database and compare all accounts after each.");
+
+        return ledgerInstalled.TryInsertBlocksAbove(ledgerServing, ref message);
       }
 
       partial class Ledger
@@ -178,6 +188,15 @@ internal partial class Testbench
           IDsAccountSeen = new(ledgerServing.IDsAccountSeen, new EqualityComparerByteArray());
           HeightTip = heightInstalled;
           HashTip = headerInstalled.Hash;
+        }
+
+        internal bool TryInsertBlocksAbove(Ledger ledgerServing, ref string message)
+        {
+          foreach ((Block block, List<TXBToken> tXs, _) in ledgerServing.BlocksInserted.Where(b => b.block.Header.Height > HeightTip).ToList())
+            if (!TryInsertBlock($"block of the serving ledger at height {block.Header.Height} inserted after the installation", tXs, isValidExpected: true, null, ref message))
+              return false;
+
+          return true;
         }
 
         internal bool AreAccountsInstalledCorrect(ref string message)
