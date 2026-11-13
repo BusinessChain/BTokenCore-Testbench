@@ -92,8 +92,13 @@ internal partial class Testbench
         BlockchainBToken.TXBToken tX = CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic);
         tX.Serialize(wallet);
 
+        BlockchainBToken.TXBToken tXCoinbase = CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic);
+        tXCoinbase.SerializeUnsigned();
+
         return IsTXBTokenParsedEqual(tX, tX.TXRaw, 0, isCoinbase: false, ref message)
-          && IsTXBTokenParsedEqual(tX, EmbedInBuffer(tX.TXRaw), COUNT_BYTES_LEADING, isCoinbase: false, ref message);
+          && IsTXBTokenParsedEqual(tX, EmbedInBuffer(tX.TXRaw), COUNT_BYTES_LEADING, isCoinbase: false, ref message)
+          && IsTXBTokenParsedEqual(tXCoinbase, tXCoinbase.TXRaw, 0, isCoinbase: true, ref message)
+          && IsTXBTokenParsedEqual(tXCoinbase, EmbedInBuffer(tXCoinbase.TXRaw), COUNT_BYTES_LEADING, isCoinbase: true, ref message);
       }
       finally
       {
