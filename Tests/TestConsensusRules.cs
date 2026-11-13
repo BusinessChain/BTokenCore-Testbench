@@ -22,7 +22,8 @@ internal partial class Testbench
       return Test_BlockRules(Testbench.Wallet, ref message)
         && Test_TXRules(Testbench.Wallet, ref message)
         && Test_HeaderBitcoinRules(ref message)
-        && BlockchainAccounts.TestSpendingRules(Testbench.Wallet, ref message);
+        && BlockchainAccounts.TestSpendingRules(Testbench.Wallet, ref message)
+        && BlockchainAccounts.TestCoinbaseRules(Testbench.Wallet, ref message);
     }
 
     abstract class BlockchainAccounts : BlockchainBToken
@@ -74,6 +75,59 @@ internal partial class Testbench
           && ledger.TryInsertBlock("spend of the whole Balance", [ledger.CreateCoinbase(wallet, iDMiner, FEE), tXSpendBalance], isValidExpected: true, null, ref message);
       }
 
+      internal static bool TestCoinbaseRules(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  5. Check the coinbase against block reward, fees and rent, including the halving.");
+
+        Ledger ledger = new(heightRoot: 0);
+
+        int indexSegmentWallet = GetIndexSegment(wallet.Hash160PKeyPublic);
+        int indexSegmentRent = indexSegmentWallet == 3 ? 4 : 3;
+        byte[] iDMiner = CreateIDAccount(1000, 1);
+        byte[] iDReceiver = CreateIDAccount(1001, 2);
+        byte[] iDRentPaying = CreateIDAccount(indexSegmentRent, 3);
+        byte[] iDRentSwept = CreateIDAccount(indexSegmentRent, 4);
+
+        TXBToken tXCoinbaseRentAccounts = ledger.CreateCoinbase(wallet, wallet.Hash160PKeyPublic, 0);
+        ((TXOutputP2PKH)tXCoinbaseRentAccounts.TXOutputs[0]).Value -= 120;
+        tXCoinbaseRentAccounts.TXOutputs.Add(new TXOutputP2PKH(100, iDRentPaying));
+        tXCoinbaseRentAccounts.TXOutputs.Add(new TXOutputP2PKH(20, iDRentSwept));
+        tXCoinbaseRentAccounts.SerializeUnsigned();
+
+        if (!ledger.TryInsertBlock("coinbase paying one more than the block reward", [ledger.CreateCoinbase(wallet, iDMiner, 1)], isValidExpected: false, null, ref message)
+          || !ledger.TryInsertBlock("coinbase paying one less than the block reward", [ledger.CreateCoinbase(wallet, iDMiner, -1)], isValidExpected: false, null, ref message)
+          || !ledger.TryInsertBlock("coinbase paying the block reward to three accounts", [tXCoinbaseRentAccounts], isValidExpected: true, null, ref message))
+          return false;
+
+        TXBToken tXSpend = ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => { });
+
+        if (!ledger.TryInsertBlock("coinbase paying one more than block reward plus fees", [ledger.CreateCoinbase(wallet, iDMiner, FEE + 1), tXSpend], isValidExpected: false, null, ref message)
+          || !ledger.TryInsertBlock("coinbase paying one less than block reward plus fees", [ledger.CreateCoinbase(wallet, iDMiner, FEE - 1), tXSpend], isValidExpected: false, null, ref message)
+          || !ledger.TryInsertBlock("coinbase paying block reward plus fees", [ledger.CreateCoinbase(wallet, iDMiner, FEE), tXSpend], isValidExpected: true, null, ref message))
+          return false;
+
+        while (ledger.GetHeightTip() < indexSegmentRent - 1)
+          if (!ledger.TryInsertBlock("coinbase before the sweep", [ledger.CreateCoinbase(wallet, iDMiner, 0)], isValidExpected: true, null, ref message))
+            return false;
+
+        long rent = ledger.GetRentNext();
+
+        if (rent != 56)
+        {
+          message = $"Account rules, rent of the sweep of segment {indexSegmentRent}: the reference computes {rent}, expected 56.";
+          return false;
+        }
+
+        if (!ledger.TryInsertBlock("coinbase without the rent", [ledger.CreateCoinbase(wallet, iDMiner, -rent)], isValidExpected: false, null, ref message)
+          || !ledger.TryInsertBlock("coinbase with the rent of a sweep", [ledger.CreateCoinbase(wallet, iDMiner, 0)], isValidExpected: true, null, ref message))
+          return false;
+
+        Ledger ledgerHalving = new(heightRoot: PERIOD_HALVING - 1);
+
+        return ledgerHalving.TryInsertBlock("coinbase paying the block reward before the halving", [ledgerHalving.CreateCoinbase(wallet, iDMiner, BLOCK_REWARD_INITIAL / 2)], isValidExpected: false, null, ref message)
+          && ledgerHalving.TryInsertBlock("coinbase paying the halved block reward", [ledgerHalving.CreateCoinbase(wallet, iDMiner, 0)], isValidExpected: true, null, ref message);
+      }
+
       static int GetIndexSegment(byte[] iDAccount)
       {
         return (iDAccount[0] << 8 | iDAccount[1]) >> SHIFT_INDEX_SEGMENT;
@@ -114,12 +168,22 @@ internal partial class Testbench
           Accounts.Install([], new HeaderBToken { Hash = new byte[32], Height = heightRoot }, null, out _);
         }
 
-        internal TXBToken CreateCoinbase(Wallet wallet, byte[] iDMiner, long fees)
+        internal long GetRentNext()
         {
           ApplyBlock([], HeightTip + 1, out long rent);
 
+          return rent;
+        }
+
+        internal int GetHeightTip()
+        {
+          return HeightTip;
+        }
+
+        internal TXBToken CreateCoinbase(Wallet wallet, byte[] iDMiner, long fees)
+        {
           TXBToken tX = CreateTXBToken(wallet.KeyPublic, iDMiner);
-          tX.TXOutputs[0] = new TXOutputP2PKH(GetBlockReward(HeightTip + 1) + fees + rent, iDMiner);
+          tX.TXOutputs[0] = new TXOutputP2PKH(GetBlockReward(HeightTip + 1) + fees + GetRentNext(), iDMiner);
           tX.SerializeUnsigned();
 
           return tX;
