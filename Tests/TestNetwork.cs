@@ -58,7 +58,8 @@ internal partial class Testbench
         && TestUnrequestedBlock(ref message)
         && TestRequestTimeout(Testbench.Wallet, ref message)
         && TestBlockServing(Testbench.Wallet, ref message)
-        && TestServingDOS(Testbench.Wallet, ref message);
+        && TestServingDOS(Testbench.Wallet, ref message)
+        && TestBlockAnnouncement(Testbench.Wallet, ref message);
     }
 
     static bool TestHandshakeOutbound(ref string message)
@@ -420,9 +421,7 @@ internal partial class Testbench
 
       Block blockNewest = blocks[^1];
 
-      CommunicationFake communication = new();
-      NetworkTestbench network = BlockchainNetwork.StartNode(communication, prepare: b => b.ParentFake.MineAnchors(blocks));
-      SocketFake socketPeer = communication.ConnectInbound(IP_PEER);
+      NetworkTestbench network = StartNodeWithInboundPeer(out SocketFake socketPeer, out _, b => b.ParentFake.MineAnchors(blocks));
 
       try
       {
@@ -462,9 +461,7 @@ internal partial class Testbench
 
       Block blockRefused = blocks[0];
 
-      CommunicationFake communication = new();
-      NetworkTestbench network = BlockchainNetwork.StartNode(communication, prepare: b => b.ParentFake.MineAnchors(blocks));
-      SocketFake socketPeer = communication.ConnectInbound(IP_PEER);
+      NetworkTestbench network = StartNodeWithInboundPeer(out SocketFake socketPeer, out _, b => b.ParentFake.MineAnchors(blocks));
 
       try
       {
@@ -508,9 +505,7 @@ internal partial class Testbench
 
       const string NAME_CASE = "Unrequested block";
 
-      CommunicationFake communication = new();
-      BlockchainNetwork.StartNode(communication);
-      SocketFake socketPeer = communication.ConnectInbound(IP_PEER);
+      StartNodeWithInboundPeer(out SocketFake socketPeer, out _);
 
       try
       {
@@ -536,9 +531,7 @@ internal partial class Testbench
       if (!BlockchainNetwork.TryCreateBlocks(wallet, out List<Block> blocks, ref message))
         return false;
 
-      CommunicationFake communication = new();
-      NetworkTestbench network = BlockchainNetwork.StartNode(communication, prepare: b => b.ParentFake.MineAnchors(blocks));
-      SocketFake socketPeer = communication.ConnectInbound(IP_PEER);
+      NetworkTestbench network = StartNodeWithInboundPeer(out SocketFake socketPeer, out _, b => b.ParentFake.MineAnchors(blocks));
 
       try
       {
@@ -569,9 +562,7 @@ internal partial class Testbench
       byte[] hashStored = blocks[2].Header.Hash;
       byte[] hashUnknown = Enumerable.Repeat((byte)0xAB, hashStored.Length).ToArray();
 
-      CommunicationFake communication = new();
-      BlockchainNetwork.StartNode(communication, prepare: b => b.AnchorAndDeliver(blocks));
-      SocketFake socketPeer = communication.ConnectInbound(IP_PEER);
+      StartNodeWithInboundPeer(out SocketFake socketPeer, out _, b => b.AnchorAndDeliver(blocks));
 
       try
       {
@@ -608,9 +599,7 @@ internal partial class Testbench
 
       byte[] hashOld = blocks[0].Header.Hash;
 
-      CommunicationFake communication = new();
-      BlockchainNetwork.StartNode(communication, prepare: b => b.AnchorAndDeliver(blocks));
-      SocketFake socketPeer = communication.ConnectInbound(IP_PEER);
+      StartNodeWithInboundPeer(out SocketFake socketPeer, out _, b => b.AnchorAndDeliver(blocks));
 
       try
       {
@@ -633,6 +622,70 @@ internal partial class Testbench
       {
         socketPeer.Dispose();
       }
+    }
+
+    static bool TestBlockAnnouncement(Wallet wallet, ref string message)
+    {
+      Console.WriteLine("  17. Block Announcement: Announce the newest inserted block to every peer.");
+
+      const string NAME_CASE = "Block announcement";
+      const string IP_PEER_OTHER = "10.0.0.3";
+
+      if (!BlockchainNetwork.TryCreateBlocks(wallet, out List<Block> blocks, ref message))
+        return false;
+
+      Block blockNewest = blocks[^1];
+
+      NetworkTestbench network = StartNodeWithInboundPeer(out SocketFake socketPeer, out CommunicationFake communication, b => b.ParentFake.MineAnchors(blocks));
+      SocketFake socketOther = null;
+
+      try
+      {
+        if (!TryHandshakeInbound(NAME_CASE, socketPeer, ref message)
+          || !TryServeBlocksRequested(NAME_CASE, socketPeer, blocks.Take(blocks.Count - 1).ToList(), ref message)
+          || !IsAtHeight(NAME_CASE, network, blocks[^2].Header.Height, ref message))
+          return false;
+
+        socketOther = communication.ConnectInbound(IP_PEER_OTHER);
+
+        if (!TryHandshakeInbound(NAME_CASE, socketOther, ref message)
+          || !IsPeerListed(NAME_CASE, network, IP_PEER_OTHER, ref message))
+          return false;
+
+        SendHeaders(socketPeer, blockNewest.Header);
+
+        return TryServeBlocksRequested(NAME_CASE, socketPeer, [blockNewest], ref message)
+          && IsAnnounced(NAME_CASE, socketPeer, blockNewest.Header, ref message)
+          && IsAnnounced(NAME_CASE, socketOther, blockNewest.Header, ref message);
+      }
+      finally
+      {
+        socketPeer.Dispose();
+        socketOther?.Dispose();
+      }
+    }
+
+    static bool IsAnnounced(string nameCase, SocketFake socketPeer, Header header, ref string message)
+    {
+      if (!socketPeer.TryReceive(nameCase, COMMAND_HEADERS, out byte[] payload, ref message))
+        return false;
+
+      byte[] payloadExpected = [.. VarInt.GetBytes(1), .. header.Serialize(), 0x00];
+
+      if (payload.IsAllBytesEqual(payloadExpected))
+        return true;
+
+      message = $"{nameCase}: the node announces {payload.ToHexString()}, expected the newest header {payloadExpected.ToHexString()}.";
+      return false;
+    }
+
+    static NetworkTestbench StartNodeWithInboundPeer(out SocketFake socketPeer, out CommunicationFake communication, Action<BlockchainNetwork> prepare = null)
+    {
+      communication = new();
+      NetworkTestbench network = BlockchainNetwork.StartNode(communication, prepare: prepare);
+      socketPeer = communication.ConnectInbound(IP_PEER);
+
+      return network;
     }
 
     static bool TryReceiveBlockServed(string nameCase, SocketFake socketPeer, byte[] hash, ref string message)
