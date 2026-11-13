@@ -34,7 +34,8 @@ internal partial class Testbench
         && Test_TimestampPremature(ref message)
         && Test_MedianTimePast(ref message)
         && Test_Retargeting(ref message)
-        && Test_AnchorsBitcoin(ref message);
+        && Test_AnchorsBitcoin(out Block blockParsed, ref message)
+        && Test_AnchorsStored(blockParsed, ref message);
     }
 
     bool Test_ProofOfWork(ref string message)
@@ -109,11 +110,26 @@ internal partial class Testbench
         && IsAccepted($"Retarget with timespan {timespan} and NBits {nBitsExpected:X8}", () => blockchain.InsertHeadersInTree([CreateHeader(hashPrevious, unixTimeSeconds, N_BITS_ROOT), CreateHeader(headerBeforeRetarget.Hash, unixTimeSeconds, nBitsExpected)]), ref message);
     }
 
-    static BlockchainBitcoin CreateBlockchainBitcoin()
+    class BlockchainBitcoinStore : BlockchainBitcoin
+    {
+      internal BlockchainBitcoinStore()
+        : base(CreateLiteDatabase(), new SemaphoreSlim(1))
+      { }
+
+      internal Block ReloadBlockStored(Block block)
+      {
+        Block blockReloaded = new(SerializeBlockStored(block));
+        Header header = new HeaderBitcoin(block.Header.Hash, 0, block.Header.HashPrevious, null, 0, 0, 0) { Height = block.Header.Height };
+
+        return TryParseBlockStored(header, blockReloaded) ? blockReloaded : null;
+      }
+    }
+
+    static BlockchainBitcoinStore CreateBlockchainBitcoin()
     {
       CreateWalletFile(BlockchainBitcoin.NAME_TOKEN);
 
-      return new BlockchainBitcoin(CreateLiteDatabase(), new SemaphoreSlim(1));
+      return new BlockchainBitcoinStore();
     }
 
     static HeaderBitcoin CreateHeader(byte[] hashPrevious, uint unixTimeSeconds, uint nBits)
@@ -132,7 +148,7 @@ internal partial class Testbench
       return header;
     }
 
-    bool Test_AnchorsBitcoin(ref string message)
+    bool Test_AnchorsBitcoin(out Block blockParsed, ref string message)
     {
       Console.WriteLine("  5. Bitcoin Anchors: Draw anchor winners from TXBitcoin outputs of a Bitcoin block.");
 
@@ -163,11 +179,12 @@ internal partial class Testbench
         block.ComputeMerkleRoot(),
         h => string.CompareOrdinal(ComputeScoreAnchor(h, anchorIneligible), ComputeScoreAnchor(h, GetAnchorScoreLowest(h, anchorsFirst))) < 0);
 
+      block.Header.Height = HEIGHT_BLOCK;
       block.Serialize();
 
-      Block blockParsed = new(block.Buffer[..block.LengthDataPayload])
+      blockParsed = new(block.Buffer[..block.LengthDataPayload])
       {
-        Header = new HeaderBitcoin(block.Header.Hash, 0, block.Header.HashPrevious, null, 0, 0, 0) { Height = HEIGHT_BLOCK }
+        Header = block.Header
       };
 
       new ParserBitcoin().ParseBlock(blockParsed, verifySignatures: false);
@@ -177,6 +194,39 @@ internal partial class Testbench
       return IsFieldEqual(nameParser, "AnchorsWinner.Count", 2, blockParsed.Header.AnchorsWinner.Count, ref message)
         && IsAnchorWinnerLowestScore(nameParser, blockParsed.Header, anchorsFirst, ref message)
         && IsAnchorWinnerLowestScore(nameParser, blockParsed.Header, anchorsSecond, ref message);
+    }
+
+    bool Test_AnchorsStored(Block blockParsed, ref string message)
+    {
+      Console.WriteLine("  6. Stored Anchors: Keep anchor winners through SerializeBlockStored and ParseBlockStored.");
+
+      const string NAME_CASE = "Anchor winners reloaded by ParseBlockStored";
+
+      if (CreateBlockchainBitcoin().ReloadBlockStored(blockParsed) is not Block blockReloaded)
+      {
+        message = $"{NAME_CASE}: the stored block cannot be parsed.";
+        return false;
+      }
+
+      if (!IsFieldEqual(NAME_CASE, "AnchorsWinner.Count", blockParsed.Header.AnchorsWinner.Count, blockReloaded.Header.AnchorsWinner.Count, ref message))
+        return false;
+
+      foreach (TXOutputTokenAnchor anchor in blockParsed.Header.AnchorsWinner.Values)
+      {
+        string iDToken = anchor.IDToken.ToHexString();
+
+        if (!blockReloaded.Header.AnchorsWinner.TryGetValue(anchor.IDToken, out TXOutputTokenAnchor anchorReloaded))
+        {
+          message = $"{NAME_CASE}: no anchor winner of IDToken {iDToken}.";
+          return false;
+        }
+
+        if (!IsFieldEqual(NAME_CASE, $"HashBlockReferenced of IDToken {iDToken}", anchor.HashBlockReferenced, anchorReloaded.HashBlockReferenced, ref message)
+          || !IsFieldEqual(NAME_CASE, $"HashBlockPreviousReferenced of IDToken {iDToken}", anchor.HashBlockPreviousReferenced, anchorReloaded.HashBlockPreviousReferenced, ref message))
+          return false;
+      }
+
+      return true;
     }
 
     TXOutputP2PKH CreateTXOutputP2PKH()
