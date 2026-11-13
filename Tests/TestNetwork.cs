@@ -40,7 +40,8 @@ internal partial class Testbench
         && TestHandshakeTimeout(ref message)
         && TestOutboundLimit(ref message)
         && TestOutboundFailure(ref message)
-        && TestInboundDuplicate(ref message);
+        && TestInboundDuplicate(ref message)
+        && TestInboundEviction(ref message);
     }
 
     static bool TestHandshakeOutbound(ref string message)
@@ -258,6 +259,51 @@ internal partial class Testbench
       }
     }
 
+    static bool TestInboundEviction(ref string message)
+    {
+      Console.WriteLine("  8. Inbound Eviction: Evict the unprotected inbound peer, keep the TX deliverer.");
+
+      const string NAME_CASE = "Inbound eviction";
+      const string IP_UNPROTECTED = "10.0.0.3";
+      const string IP_NEW = "10.0.0.4";
+
+      CommunicationFake communication = new();
+      NetworkTestbench network = BlockchainNetwork.StartNode(communication, countMaxInbound: 2);
+      SocketFake socketProtected = communication.ConnectInbound(IP_PEER);
+      SocketFake socketUnprotected = communication.ConnectInbound(IP_UNPROTECTED);
+      SocketFake socketNew = null;
+
+      try
+      {
+        if (!TryHandshakeInbound(NAME_CASE, socketProtected, ref message)
+          || !TryHandshakeInbound(NAME_CASE, socketUnprotected, ref message)
+          || !IsPeerListed(NAME_CASE, network, IP_PEER, ref message)
+          || !IsPeerListed(NAME_CASE, network, IP_UNPROTECTED, ref message))
+          return false;
+
+        network.MarkTXDelivered(IP_PEER);
+
+        socketNew = communication.ConnectInbound(IP_NEW);
+
+        if (!socketUnprotected.IsDisconnected(NAME_CASE, ref message)
+          || !TryHandshakeInbound(NAME_CASE, socketNew, ref message)
+          || !IsPeerListed(NAME_CASE, network, IP_NEW, ref message))
+          return false;
+
+        if (network.IsPeerListed(IP_PEER))
+          return true;
+
+        message = $"{NAME_CASE}: the node evicted the TX deliverer {IP_PEER}.";
+        return false;
+      }
+      finally
+      {
+        socketProtected.Dispose();
+        socketUnprotected.Dispose();
+        socketNew?.Dispose();
+      }
+    }
+
     static NetworkTestbench StartNodeWithSeedPeer(int countMaxOutbound, out CommunicationFake communication, out SocketFake socketSeed)
     {
       communication = new();
@@ -376,6 +422,12 @@ internal partial class Testbench
       {
         lock (LOCK_Peers)
           return Peers.Any(p => p.GetIP() == iP);
+      }
+
+      internal void MarkTXDelivered(string iP)
+      {
+        lock (LOCK_Peers)
+          ((TXMessage)Peers.Single(p => p.GetIP() == iP).MessagesByCommand[TXMessage.Command]).TimeDeliveredLast = DateTime.UtcNow;
       }
     }
 
