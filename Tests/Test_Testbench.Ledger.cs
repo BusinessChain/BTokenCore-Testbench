@@ -117,6 +117,18 @@ internal partial class Testbench
         return false;
       }
 
+      protected bool IsWithoutAccounts(string nameCase, int heightExpected, ref string message)
+      {
+        if (!IsAtHeight(nameCase, heightExpected, ref message))
+          return false;
+
+        if (!Synchronizer.IsAccountsAtTip())
+          return true;
+
+        message = $"{nameCase}: the accounts are at the tip without a database download.";
+        return false;
+      }
+
       protected bool IsSynchronized(Ledger ledger, string nameCase, int heightExpected, ref string message)
       {
         if (!IsAtHeight(nameCase, heightExpected, ref message))

@@ -23,12 +23,15 @@ internal partial class Testbench
         && BlockchainAnchoring.TestAnchorExpiry(Testbench.Wallet, ref message)
         && BlockchainAnchoring.TestParentRollback(Testbench.Wallet, ref message)
         && BlockchainAnchoring.TestRestartAnchored(Testbench.Wallet, ref message)
-        && BlockchainAnchoring.TestRestartUnanchored(Testbench.Wallet, ref message);
+        && BlockchainAnchoring.TestRestartUnanchored(Testbench.Wallet, ref message)
+        && BlockchainAnchoring.TestWindowResync(Testbench.Wallet, ref message);
     }
 
     class BlockchainBitcoinTestbench : BlockchainBitcoin
     {
       const uint NBITS_EASY = 0x207fffff;
+      const uint NBITS_DIFFICULTY_1 = 0x1d00ffff;
+      const int COUNT_HEADERS_RETARGET = 2016;
       const uint SECONDS_BLOCK = 600;
 
       internal BlockchainBitcoinTestbench(LiteDatabase liteDatabase)
@@ -53,11 +56,17 @@ internal partial class Testbench
           hashPrevious: headerTip.Hash,
           merkleRootHash: RandomNumberGenerator.GetBytes(32),
           unixTimeSeconds: headerTip.UnixTimeSeconds + SECONDS_BLOCK,
-          nBits: headerTip.NBits,
+          nBits: (headerTip.Height + 1) % COUNT_HEADERS_RETARGET == 0 ? NBITS_DIFFICULTY_1 : headerTip.NBits,
           nonce: 0);
 
-        for (header.ComputeHash(); new UInt256(header.Hash).IsGreaterThan(UInt256.ParseFromCompact(header.NBits)); header.ComputeHash())
-          header.Nonce += 1;
+        header.ComputeHash();
+
+        if (header.NBits == NBITS_EASY)
+          while (new UInt256(header.Hash).IsGreaterThan(UInt256.ParseFromCompact(header.NBits)))
+          {
+            header.Nonce += 1;
+            header.ComputeHash();
+          }
 
         foreach (TXOutputTokenAnchor anchor in anchors)
           header.AnchorsWinner[anchor.IDToken] = anchor;
@@ -92,6 +101,8 @@ internal partial class Testbench
     class BlockchainAnchoring : BlockchainTestbench
     {
       const string NAME_TOKEN = "TestAnchoring";
+      const int COUNT_MAX_BLOCKS_STORED = COUNT_SEGMENTS + BITCOIN_REORG_MARGIN;
+      const int HEIGHT_TIP_WINDOW = 2060;
       static readonly byte[] ID_TOKEN_BTOKEN = [(byte)'B', (byte)'T', (byte)'K', 0];
 
       BlockchainBitcoinTestbench BlockchainParentBitcoin;
@@ -284,6 +295,27 @@ internal partial class Testbench
 
         return blockchainRestarted.IsSynchronized(ledger, nameCaseReanchored, 6, ref message)
           && blockchainRestarted.IsRequestingNoBlock(nameCaseReanchored, ref message);
+      }
+
+      internal static bool TestWindowResync(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  7. Window Resync: Drop accounts, re-root when anchors lead beyond the stored window.");
+
+        if (!TryCreateLedger(wallet, out Ledger ledger, ref message)
+          || !TryInsertCoinbasesUpTo(ledger, wallet, CreateIDAccount(1000, 1), HEIGHT_TIP_WINDOW, ref message))
+          return false;
+
+        List<Block> blocksLedger = ledger.GetBlocksInserted();
+        BlockchainAnchoring blockchain = StartNode();
+
+        blockchain.MineAnchors(blocksLedger);
+
+        if (!blockchain.IsWithoutAccounts($"Window resync, anchors up to height {HEIGHT_TIP_WINDOW} without delivered blocks", HEIGHT_TIP_WINDOW - COUNT_MAX_BLOCKS_STORED, ref message))
+          return false;
+
+        blockchain.DeliverBlocks(blocksLedger);
+
+        return blockchain.IsWithoutAccounts("Window resync, blocks delivered after the resync", HEIGHT_TIP_WINDOW, ref message);
       }
 
       bool IsRequestingNoBlock(string nameCase, ref string message)
