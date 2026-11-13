@@ -14,6 +14,10 @@ internal partial class Testbench
     const uint UNIX_TIME_SECONDS_ROOT = 1791011796;
     const uint N_BITS_ROOT = 0x17021EF0;
     const int COUNT_HEADERS_MEDIAN_TIME_PAST = 11;
+    const uint TIMESPAN_ROOT_TO_HEADER_BEFORE_RETARGET_SECONDS = 971711 - 969696;
+    const uint TIMESPAN_RETARGET_SECONDS = 14 * 24 * 60 * 60;
+    const uint N_BITS_TARGET_QUADRUPLED = 0x17087BC0;
+    const uint N_BITS_TARGET_QUARTERED = 0x170087BC;
 
     internal TestBlockchainBitcoin(Testbench testbench)
       : base(testbench)
@@ -25,7 +29,8 @@ internal partial class Testbench
 
       return Test_ProofOfWork(ref message)
         && Test_TimestampPremature(ref message)
-        && Test_MedianTimePast(ref message);
+        && Test_MedianTimePast(ref message)
+        && Test_Retargeting(ref message);
     }
 
     bool Test_ProofOfWork(ref string message)
@@ -67,6 +72,37 @@ internal partial class Testbench
 
       return IsRejected("Timestamp below median time past", () => blockchain.InsertHeadersInTree([CreateHeader(hashPrevious, unixTimeSecondsMedian - 1, N_BITS_ROOT)]), ref message)
         && IsAccepted("Timestamp equal to median time past", () => blockchain.InsertHeadersInTree([CreateHeader(hashPrevious, unixTimeSecondsMedian, N_BITS_ROOT)]), ref message);
+    }
+
+    bool Test_Retargeting(ref string message)
+    {
+      Console.WriteLine("  4. Retargeting: Keep NBits between retargets, clamp the retarget timespan.");
+
+      BlockchainBitcoin blockchain = CreateBlockchainBitcoin();
+      List<Header> headersBase = [];
+      byte[] hashPrevious = HASH_HEADER_ROOT.ToBinary();
+
+      for (uint i = 1; i < TIMESPAN_ROOT_TO_HEADER_BEFORE_RETARGET_SECONDS; i++)
+      {
+        headersBase.Add(CreateHeader(hashPrevious, UNIX_TIME_SECONDS_ROOT + i, N_BITS_ROOT));
+        hashPrevious = headersBase[^1].Hash;
+      }
+
+      blockchain.InsertHeadersInTree(headersBase);
+
+      return IsRejected("NBits changed between retargets", () => blockchain.InsertHeadersInTree([CreateHeader(hashPrevious, UNIX_TIME_SECONDS_ROOT + TIMESPAN_ROOT_TO_HEADER_BEFORE_RETARGET_SECONDS, N_BITS_ROOT + 1)]), ref message)
+        && IsRetargetCorrect(blockchain, hashPrevious, TIMESPAN_RETARGET_SECONDS, N_BITS_ROOT, N_BITS_TARGET_QUADRUPLED, ref message)
+        && IsRetargetCorrect(blockchain, hashPrevious, 4 * TIMESPAN_RETARGET_SECONDS + 1, N_BITS_TARGET_QUADRUPLED, N_BITS_ROOT, ref message)
+        && IsRetargetCorrect(blockchain, hashPrevious, TIMESPAN_ROOT_TO_HEADER_BEFORE_RETARGET_SECONDS, N_BITS_TARGET_QUARTERED, N_BITS_ROOT, ref message);
+    }
+
+    static bool IsRetargetCorrect(BlockchainBitcoin blockchain, byte[] hashPrevious, uint timespan, uint nBitsExpected, uint nBitsWrong, ref string message)
+    {
+      uint unixTimeSeconds = UNIX_TIME_SECONDS_ROOT + timespan;
+      Header headerBeforeRetarget = CreateHeader(hashPrevious, unixTimeSeconds, N_BITS_ROOT);
+
+      return IsRejected($"Retarget with timespan {timespan} and NBits {nBitsWrong:X8}", () => blockchain.InsertHeadersInTree([headerBeforeRetarget, CreateHeader(headerBeforeRetarget.Hash, unixTimeSeconds, nBitsWrong)]), ref message)
+        && IsAccepted($"Retarget with timespan {timespan} and NBits {nBitsExpected:X8}", () => blockchain.InsertHeadersInTree([CreateHeader(hashPrevious, unixTimeSeconds, N_BITS_ROOT), CreateHeader(headerBeforeRetarget.Hash, unixTimeSeconds, nBitsExpected)]), ref message);
     }
 
     static BlockchainBitcoin CreateBlockchainBitcoin()
