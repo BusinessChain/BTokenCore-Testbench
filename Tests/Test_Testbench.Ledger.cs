@@ -205,7 +205,7 @@ internal partial class Testbench
 
           IDsAccountSeen.UnionWith(accountsAfter.Keys);
 
-          if (!AreAccountsStoredCorrect($"{nameCase}, after the block at height {height}", accountsAfter, ref message))
+          if (!AreAccountsStoredCorrect($"Account rules, {nameCase}, after the block at height {height}", Accounts, accountsAfter, ref message))
             return false;
 
           BlocksInserted.Add((blockParsed, tXs, AccountsReference));
@@ -233,18 +233,29 @@ internal partial class Testbench
 
           TXPool?.ReturnTXs(block);
 
-          string nameCaseRollBack = $"{nameCase}, after the rollback of the block at height {header.Height}";
+          string nameCaseRollBack = $"Account rules, {nameCase}, after the rollback of the block at height {header.Height}";
 
-          if (!AreAccountsStoredCorrect(nameCaseRollBack, accountsBefore, ref message))
-            return false;
+          return AreAccountsStoredCorrect(nameCaseRollBack, Accounts, accountsBefore, ref message)
+            && IsBlockAppliedLastCorrect(nameCaseRollBack, Accounts, HashTip, ref message);
+        }
 
-          if (!Accounts.GetHashBlockAppliedLast().IsAllBytesEqual(HashTip))
-          {
-            message = $"Account rules, {nameCaseRollBack}: the last applied block is {Accounts.GetHashBlockAppliedLast().ToHexString()}, expected {HashTip.ToHexString()}.";
-            return false;
-          }
+        internal bool AreAccountsEqualAtHeight(string nameCase, DatabaseAccounts accounts, int height, byte[] hashBlock, ref string message)
+        {
+          Dictionary<byte[], Account> accountsExpected = height == HeightTip
+            ? AccountsReference
+            : BlocksInserted.Single(b => b.block.Header.Height == height + 1).accountsBefore;
 
-          return true;
+          return IsBlockAppliedLastCorrect(nameCase, accounts, hashBlock, ref message)
+            && AreAccountsStoredCorrect(nameCase, accounts, accountsExpected, ref message);
+        }
+
+        static bool IsBlockAppliedLastCorrect(string nameCase, DatabaseAccounts accounts, byte[] hashBlockExpected, ref string message)
+        {
+          if (accounts.GetHashBlockAppliedLast().IsAllBytesEqual(hashBlockExpected))
+            return true;
+
+          message = $"{nameCase}: the last applied block is {accounts.GetHashBlockAppliedLast().ToHexString()}, expected {hashBlockExpected.ToHexString()}.";
+          return false;
         }
 
         internal bool TryRollBackAndInsertAgain(string nameCase, int heightTarget, ref string message)
@@ -266,18 +277,18 @@ internal partial class Testbench
           return true;
         }
 
-        bool AreAccountsStoredCorrect(string nameCase, Dictionary<byte[], Account> accountsExpected, ref string message)
+        bool AreAccountsStoredCorrect(string nameCase, DatabaseAccounts accounts, Dictionary<byte[], Account> accountsExpected, ref string message)
         {
           foreach (byte[] iDAccount in IDsAccountSeen)
           {
-            Account accountStored = Accounts.LoadAccount(iDAccount, heightAccountCreated: 0);
+            Account accountStored = accounts.LoadAccount(iDAccount, heightAccountCreated: 0);
             Account accountExpected = accountsExpected.GetValueOrDefault(iDAccount) ?? new Account();
 
             if (accountStored.HeightAccountCreated != accountExpected.HeightAccountCreated
               || accountStored.Nonce != accountExpected.Nonce
               || accountStored.Balance != accountExpected.Balance)
             {
-              message = $"Account rules, {nameCase}: account {iDAccount.ToHexString()} holds " +
+              message = $"{nameCase}: account {iDAccount.ToHexString()} holds " +
                 $"HeightAccountCreated {accountStored.HeightAccountCreated}, Nonce {accountStored.Nonce}, Balance {accountStored.Balance}, " +
                 $"expected {accountExpected.HeightAccountCreated}, {accountExpected.Nonce}, {accountExpected.Balance}.";
               return false;
@@ -372,7 +383,7 @@ internal partial class Testbench
 
         internal bool AreAccountsInstalledCorrect(ref string message)
         {
-          if (!AreAccountsStoredCorrect($"installed accounts at height {HeightTip}", AccountsReference, ref message))
+          if (!AreAccountsStoredCorrect($"Account rules, installed accounts at height {HeightTip}", Accounts, AccountsReference, ref message))
             return false;
 
           int[] countsAccountExpected = new int[COUNT_SEGMENTS];
