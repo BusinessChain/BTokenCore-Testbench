@@ -9,7 +9,7 @@ namespace BTokenCore_Testbench;
 
 internal partial class Testbench
 {
-  class TestConsensusRules : Test_Testbench
+  partial class TestConsensusRules : Test_Testbench
   {
     internal TestConsensusRules(Testbench testbench)
       : base(testbench)
@@ -24,7 +24,10 @@ internal partial class Testbench
         && Test_HeaderBitcoinRules(ref message)
         && BlockchainAccounts.TestSpendingRules(Testbench.Wallet, ref message)
         && BlockchainAccounts.TestCoinbaseRules(Testbench.Wallet, ref message)
-        && BlockchainAccounts.TestBlockLimits(Testbench.Wallet, ref message);
+        && BlockchainAccounts.TestBlockLimits(Testbench.Wallet, ref message)
+        && BlockchainChain.TestForkPermutations(ref message)
+        && BlockchainChain.TestAlternatingSwitches(ref message)
+        && BlockchainChain.TestKnownHeaders(ref message);
     }
 
     abstract class BlockchainAccounts : BlockchainBToken

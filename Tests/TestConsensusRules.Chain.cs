@@ -1,4 +1,6 @@
-﻿using BTokenCore;
+﻿using System.Security.Cryptography;
+
+using BTokenCore;
 
 using Fork = (int IndexTrunk, int HeightFork, int CountHeaders, int CountBlocks);
 
@@ -6,39 +8,23 @@ namespace BTokenCore_Testbench;
 
 internal partial class Testbench
 {
-  class TestForkChoice : Test_Testbench
+  partial class TestConsensusRules
   {
-    internal TestForkChoice(Testbench testbench)
-      : base(testbench)
-    { }
-
-    internal override bool TryRun(out string message)
-    {
-      message = "";
-
-      Console.WriteLine("  1. Choose the strongest fork in every permutation of BToken header trees with up to three forks.");
-
-      if (!BlockchainForkChoice.TestForkPermutations(ref message))
-        return false;
-
-      Console.WriteLine("  2. Switch two competing branches back and forth.");
-
-      return BlockchainForkChoice.TestAlternatingSwitches(ref message);
-    }
-
-    abstract class BlockchainForkChoice : Blockchain
+    abstract class BlockchainChain : Blockchain
     {
       const int COUNT_HEADERS_MAIN = 4;
       const int COUNT_HEADERS_FORK_MAX = 3;
       const int COUNT_FORKS_MAX = 3;
       const int COUNT_ROUNDS_SWITCH = 6;
 
-      BlockchainForkChoice()
+      BlockchainChain()
         : base(null, 0, null, null, null)
       { }
 
       internal static bool TestForkPermutations(ref string message)
       {
+        Console.WriteLine("  7. Choose the strongest fork in every permutation of BToken header trees with up to three forks.");
+
         for (int countBlocksMain = 0; countBlocksMain <= COUNT_HEADERS_MAIN; countBlocksMain++)
           if (!TryForkPermutations(countBlocksMain, [], ref message))
             return false;
@@ -46,8 +32,101 @@ internal partial class Testbench
         return true;
       }
 
+      internal static bool TestKnownHeaders(ref string message)
+      {
+        Console.WriteLine("  9. Insert known, partly known, unconnected and too deep headers.");
+
+        HeaderBToken headerRoot = CreateHeaderBToken(new byte[32]);
+        Chain chainRoot = new(headerRoot);
+
+        List<Header> headersMain = CreateHeaders(headerRoot, COUNT_HEADERS_MAIN, nonceBranch: 0);
+
+        foreach (Header header in headersMain)
+          chainRoot.AppendHeader(header);
+
+        chainRoot.HeaderTipBlockchain = chainRoot.HeaderTip;
+
+        List<Header> headersFork = InsertFork(chainRoot, headersMain[0], (IndexTrunk: -1, HeightFork: 1, CountHeaders: 2, CountBlocks: 0), nonceBranch: 1);
+
+        HashSet<Header> headersExpected = [headerRoot, .. headersMain, .. headersFork];
+        HashSet<Header> headersHeldExpected = [headerRoot, .. headersMain];
+
+        List<Header> headersAppended = CreateHeaders(headersMain[^1], 2, nonceBranch: 2);
+        List<Header> headersForkNew = CreateHeaders(headersMain[0], 1, nonceBranch: 3);
+        List<Header> headersUnconnected = CreateHeaders(CreateHeaderBToken(SHA256.HashData(new byte[32])), 1, nonceBranch: 4);
+        List<Header> headersForkAtOldest = CreateHeaders(headersMain[1], 1, nonceBranch: 5);
+        List<Header> headersForkBelowOldest = CreateHeaders(headersMain[0], 1, nonceBranch: 6);
+
+        if (!IsInsertionCorrect("all headers of the main chain known", chainRoot, headerRoot, CopyHeaders(headersMain), 0, headersMain[^1], headersExpected, headersHeldExpected, ref message)
+          || !IsInsertionCorrect("known headers inside the main chain", chainRoot, headerRoot, CopyHeaders(headersMain[1..3]), 0, headersMain[2], headersExpected, headersHeldExpected, ref message)
+          || !IsInsertionCorrect("known prefix leading into a fork", chainRoot, headerRoot, CopyHeaders([headersMain[0], .. headersFork]), 0, headersFork[^1], headersExpected, headersHeldExpected, ref message))
+          return false;
+
+        headersExpected.UnionWith(headersAppended);
+
+        if (!IsInsertionCorrect("known headers followed by new ones at the tip", chainRoot, headerRoot, [.. CopyHeaders(headersMain[2..]), .. headersAppended], 0, headersAppended[^1], headersExpected, headersHeldExpected, ref message))
+          return false;
+
+        headersExpected.UnionWith(headersForkNew);
+
+        if (!IsInsertionCorrect("known header followed by a new fork", chainRoot, headerRoot, [.. CopyHeaders(headersMain[..1]), .. headersForkNew], 0, headersForkNew[^1], headersExpected, headersHeldExpected, ref message)
+          || !IsInsertionCorrect("unconnected headers", chainRoot, headerRoot, headersUnconnected, 0, null, headersExpected, headersHeldExpected, ref message)
+          || !IsInsertionCorrect("fork below heightBlockStoredOldest", chainRoot, headerRoot, headersForkBelowOldest, 2, null, headersExpected, headersHeldExpected, ref message))
+          return false;
+
+        headersExpected.UnionWith(headersForkAtOldest);
+
+        return IsInsertionCorrect("fork at heightBlockStoredOldest", chainRoot, headerRoot, headersForkAtOldest, 2, headersForkAtOldest[^1], headersExpected, headersHeldExpected, ref message);
+      }
+
+      static bool IsInsertionCorrect(string nameCase, Chain chainRoot, Header headerRoot, List<Header> headers, int heightBlockStoredOldest, Header headerLastExpected, HashSet<Header> headersExpected, HashSet<Header> headersHeldExpected, ref string message)
+      {
+        chainRoot.InsertHeadersInTree([.. headers], heightBlockStoredOldest, out Header headerLastInTree);
+
+        if (headerLastInTree != headerLastExpected)
+        {
+          message = $"Known headers, {nameCase}: headerLastInTree is {DescribeHeader(headerLastInTree)}, expected {DescribeHeader(headerLastExpected)}.";
+          return false;
+        }
+
+        if (!IsTreeConsistent(chainRoot, headerRoot, headersExpected, headersHeldExpected, out string error))
+        {
+          message = $"Known headers, {nameCase}: {error}";
+          return false;
+        }
+
+        return true;
+      }
+
+      static List<Header> CopyHeaders(List<Header> headers)
+      {
+        List<Header> copies = [];
+
+        foreach (Header header in headers)
+        {
+          HeaderBToken copy = CreateHeaderBToken(new byte[32]);
+          copy.HashPrevious = header.HashPrevious;
+          copy.Nonce = header.Nonce;
+          copy.ComputeHash();
+
+          copies.Add(copy);
+        }
+
+        return copies;
+      }
+
+      static string DescribeHeader(Header header)
+      {
+        if (header == null)
+          return "null";
+
+        return $"the header at height {header.Height} with hash {header.Hash.ToHexString()}";
+      }
+
       internal static bool TestAlternatingSwitches(ref string message)
       {
+        Console.WriteLine("  8. Switch two competing branches back and forth.");
+
         HeaderBToken headerRoot = CreateHeaderBToken(new byte[32]);
         Chain chainRoot = new(headerRoot);
 

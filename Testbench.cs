@@ -17,8 +17,7 @@ internal partial class Testbench
     Tests = new()
     {
       new TestParsers(this),
-      new TestConsensusRules(this),
-      new TestForkChoice(this)
+      new TestConsensusRules(this)
     };
   }
 
