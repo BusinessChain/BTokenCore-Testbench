@@ -24,7 +24,8 @@ internal partial class Testbench
         && BlockchainSynchronizing.TestReplayFromRoot(Testbench.Wallet, ref message)
         && BlockchainSynchronizing.TestSegmentInstallation(Testbench.Wallet, ref message)
         && BlockchainSynchronizing.TestReplayRejection(Testbench.Wallet, ref message)
-        && BlockchainSynchronizing.TestTXPoolGating(Testbench.Wallet, ref message);
+        && BlockchainSynchronizing.TestTXPoolGating(Testbench.Wallet, ref message)
+        && BlockchainSynchronizing.TestRollbackGating(Testbench.Wallet, ref message);
     }
 
     class BlockchainSynchronizing : BlockchainTestbench
@@ -193,6 +194,31 @@ internal partial class Testbench
 
         return blockchainReloaded.IsSynchronized("restart after the account database was dropped", 6, ref message)
           && blockchainReloaded.IsInPool("owned TX reloaded after the replay", tXSpend.Hash, true, ref message);
+      }
+
+      internal static bool TestRollbackGating(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  10. Rollback Gating: Return rolled-back TXs to the pool only with accounts.");
+
+        if (!TryCreateLedger(wallet, out Ledger ledger, ref message))
+          return false;
+
+        List<Block> blocksLedger = ledger.GetBlocksInserted();
+        byte[] hashSpend = blocksLedger.Single(b => b.Header.Height == 2).TXs[1].Hash;
+
+        BlockchainSynchronizing blockchain = StartNode(CreateLiteDatabase(), int.MaxValue);
+        blockchain.InsertBlocks(blocksLedger);
+        blockchain.RollBackTo(1);
+
+        if (!blockchain.IsSynchronized("rollback to height 1 with accounts at the tip", 1, ref message)
+          || !blockchain.IsInPool("rollback to height 1 with accounts at the tip", hashSpend, true, ref message))
+          return false;
+
+        BlockchainSynchronizing blockchainWithoutAccounts = StartNodeWithoutAccounts(blocksLedger);
+        blockchainWithoutAccounts.RollBackTo(1);
+
+        return blockchainWithoutAccounts.IsWithoutAccounts("rollback to height 1 without accounts", 1, ref message)
+          && blockchainWithoutAccounts.IsInPool("rollback to height 1 without accounts", hashSpend, false, ref message);
       }
 
       internal static bool TestSegmentInstallation(Wallet wallet, ref string message)
