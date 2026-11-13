@@ -18,7 +18,8 @@ internal partial class Testbench
     {
       message = "";
 
-      return BlockchainSynchronizing.TestFreshStart(Testbench.Wallet, ref message);
+      return BlockchainSynchronizing.TestFreshStart(Testbench.Wallet, ref message)
+        && BlockchainSynchronizing.TestRollbackAtTip(Testbench.Wallet, ref message);
     }
 
     class BlockchainSynchronizing : BlockchainTestbench
@@ -36,28 +37,72 @@ internal partial class Testbench
         BlockchainSynchronizing blockchain = Create();
         blockchain.Load();
 
-        if (!blockchain.IsSynchronized("fresh start before any block", ref message))
-          return false;
-
-        Ledger ledger = new(heightRoot: 0);
-
-        byte[] iDMiner = CreateIDAccount(1000, 1);
-        byte[] iDReceiver = CreateIDAccount(1001, 2);
-
-        if (!ledger.TryInsertBlock("coinbase creating the wallet account", [ledger.CreateCoinbase(wallet, wallet.Hash160PKeyPublic, 0)], isValidExpected: true, null, ref message)
-          || !ledger.TryInsertBlock("spend from the wallet account", [ledger.CreateCoinbase(wallet, iDMiner, FEE), ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => { })], isValidExpected: true, null, ref message)
-          || !TryInsertCoinbasesUpTo(ledger, wallet, iDMiner, 5, ref message))
+        if (!blockchain.IsSynchronized("fresh start before any block", 0, ref message)
+          || !TryCreateLedger(wallet, out Ledger ledger, ref message))
           return false;
 
         foreach (Block blockLedger in ledger.GetBlocksInserted())
         {
           blockchain.InsertBlocks([blockLedger]);
 
-          if (!blockchain.IsSynchronized($"fresh start after the block at height {blockLedger.Header.Height}", ref message))
+          if (!blockchain.IsSynchronized($"fresh start after the block at height {blockLedger.Header.Height}", blockLedger.Header.Height, ref message))
             return false;
         }
 
         return true;
+      }
+
+      internal static bool TestRollbackAtTip(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  2. Rollback At Tip: Roll back accounts with blocks, then insert a replacing fork.");
+
+        if (!TryCreateLedger(wallet, out Ledger ledger, ref message))
+          return false;
+
+        BlockchainSynchronizing blockchain = Create();
+        blockchain.Load();
+        blockchain.InsertBlocks(ledger.GetBlocksInserted());
+        blockchain.RollBackTo(3);
+
+        if (!blockchain.IsSynchronized("rollback to height 3", 3, ref message))
+          return false;
+
+        while (ledger.GetHeightTip() > 3)
+          if (!ledger.TryRollBack("rollback at tip", out _, ref message))
+            return false;
+
+        byte[] iDMinerFork = CreateIDAccount(1002, 3);
+        byte[] iDReceiverFork = CreateIDAccount(1003, 4);
+
+        if (!ledger.TryInsertBlock("spend of the replacing fork", [ledger.CreateCoinbase(wallet, iDMinerFork, FEE), ledger.CreateTXSpend(wallet, iDReceiverFork, VALUE_SPEND, t => { })], isValidExpected: true, null, ref message)
+          || !TryInsertCoinbasesUpTo(ledger, wallet, iDMinerFork, 6, ref message))
+          return false;
+
+        blockchain.InsertBlocks(ledger.GetBlocksInserted().Where(b => b.Header.Height > 3).ToList());
+
+        return blockchain.IsSynchronized("replacing fork inserted after the rollback to height 3", 6, ref message);
+      }
+
+      static bool TryCreateLedger(Wallet wallet, out Ledger ledger, ref string message)
+      {
+        ledger = new(heightRoot: 0);
+
+        byte[] iDMiner = CreateIDAccount(1000, 1);
+        byte[] iDReceiver = CreateIDAccount(1001, 2);
+
+        return ledger.TryInsertBlock("coinbase creating the wallet account", [ledger.CreateCoinbase(wallet, wallet.Hash160PKeyPublic, 0)], isValidExpected: true, null, ref message)
+          && ledger.TryInsertBlock("spend from the wallet account", [ledger.CreateCoinbase(wallet, iDMiner, FEE), ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => { })], isValidExpected: true, null, ref message)
+          && TryInsertCoinbasesUpTo(ledger, wallet, iDMiner, 6, ref message);
+      }
+
+      void RollBackTo(int height)
+      {
+        Header headerCutOff = ChainRoot.HeaderTipBlockchain.GetHeaderAncestor(height + 1);
+
+        RollBack(height);
+        ChainRoot.CutOff(headerCutOff);
+
+        UpdateTipBlockchain(ChainRoot);
       }
 
       static BlockchainSynchronizing Create()
@@ -112,8 +157,14 @@ internal partial class Testbench
         UpdateTipBlockchain(ChainRoot);
       }
 
-      bool IsSynchronized(string nameCase, ref string message)
+      bool IsSynchronized(string nameCase, int heightExpected, ref string message)
       {
+        if (GetHeight() != heightExpected)
+        {
+          message = $"Account synchronizer, {nameCase}: the tip is at height {GetHeight()}, expected {heightExpected}.";
+          return false;
+        }
+
         if (!Synchronizer.IsAccountsAtTip())
         {
           message = $"Account synchronizer, {nameCase}: the accounts are not at the tip.";
