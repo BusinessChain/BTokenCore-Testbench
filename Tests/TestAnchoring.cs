@@ -16,7 +16,8 @@ internal partial class Testbench
     {
       message = "";
 
-      return BlockchainAnchoring.TestAnchoredFollow(Testbench.Wallet, ref message);
+      return BlockchainAnchoring.TestAnchoredFollow(Testbench.Wallet, ref message)
+        && BlockchainAnchoring.TestAwaitingAnchor(Testbench.Wallet, ref message);
     }
 
     class BlockchainBitcoinTestbench : BlockchainBitcoin
@@ -93,12 +94,7 @@ internal partial class Testbench
           if (!blockchain.IsAtHeight($"Anchored follow, block at height {height} received before its anchor", height - 1, ref message))
             return false;
 
-          blockchain.BlockchainParentBitcoin.MineBlock(new TXOutputTokenAnchor
-          {
-            IDToken = ID_TOKEN_BTOKEN,
-            HashBlockReferenced = blockLedger.Header.Hash,
-            HashBlockPreviousReferenced = blockLedger.Header.HashPrevious
-          });
+          blockchain.BlockchainParentBitcoin.MineBlock(CreateAnchor(blockLedger));
 
           blockchain.DeliverBlocks(blocksLedger);
 
@@ -107,6 +103,50 @@ internal partial class Testbench
         }
 
         return true;
+      }
+
+      internal static bool TestAwaitingAnchor(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  2. Awaiting Anchor: Insert a stored block at once when its anchor arrives.");
+
+        if (!TryCreateLedger(wallet, out Ledger ledger, ref message))
+          return false;
+
+        BlockchainAnchoring blockchain = StartNode();
+
+        foreach (Block blockLedger in ledger.GetBlocksInserted())
+        {
+          int height = blockLedger.Header.Height;
+          string nameCase = $"Awaiting anchor, block at height {height}";
+
+          blockchain.StoreBlockAwaitingAnchor(blockLedger, blockchain.BlockchainParentBitcoin.GetHeight());
+
+          if (!blockchain.IsAtHeight($"{nameCase} stored before its anchor", height - 1, ref message))
+            return false;
+
+          blockchain.BlockchainParentBitcoin.MineBlock(CreateAnchor(blockLedger));
+
+          if (!blockchain.IsSynchronized(ledger, $"{nameCase} stored when its anchor arrived", height, ref message))
+            return false;
+
+          if (blockchain.FetchHeaderBlockMissingNext(h => true) is Header headerRequested)
+          {
+            message = $"{nameCase}: requested the block at height {headerRequested.Height} although it was stored awaiting its anchor.";
+            return false;
+          }
+        }
+
+        return true;
+      }
+
+      static TXOutputTokenAnchor CreateAnchor(Block blockLedger)
+      {
+        return new TXOutputTokenAnchor
+        {
+          IDToken = ID_TOKEN_BTOKEN,
+          HashBlockReferenced = blockLedger.Header.Hash,
+          HashBlockPreviousReferenced = blockLedger.Header.HashPrevious
+        };
       }
 
       static BlockchainAnchoring StartNode()
