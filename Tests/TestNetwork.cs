@@ -56,7 +56,8 @@ internal partial class Testbench
         && TestBlockDownload(Testbench.Wallet, ref message)
         && TestBlockRefusal(Testbench.Wallet, ref message)
         && TestUnrequestedBlock(ref message)
-        && TestRequestTimeout(Testbench.Wallet, ref message);
+        && TestRequestTimeout(Testbench.Wallet, ref message)
+        && TestBlockServing(Testbench.Wallet, ref message);
     }
 
     static bool TestHandshakeOutbound(ref string message)
@@ -555,6 +556,61 @@ internal partial class Testbench
       }
     }
 
+    static bool TestBlockServing(Wallet wallet, ref string message)
+    {
+      Console.WriteLine("  15. Block Serving: Serve a stored block, answer an unknown one with notfound.");
+
+      const string NAME_CASE = "Block serving";
+
+      if (!BlockchainNetwork.TryCreateBlocks(wallet, out List<Block> blocks, ref message))
+        return false;
+
+      byte[] hashStored = blocks[2].Header.Hash;
+      byte[] hashUnknown = Enumerable.Repeat((byte)0xAB, hashStored.Length).ToArray();
+
+      CommunicationFake communication = new();
+      BlockchainNetwork.StartNode(communication, prepare: b => b.AnchorAndDeliver(blocks));
+      SocketFake socketPeer = communication.ConnectInbound(IP_PEER);
+
+      try
+      {
+        if (!TryHandshakeInbound(NAME_CASE, socketPeer, ref message)
+          || !TryReceiveBlockServed(NAME_CASE, socketPeer, hashStored, ref message))
+          return false;
+
+        SendInventoryBlock(socketPeer, COMMAND_GETDATA, hashUnknown);
+
+        if (!socketPeer.TryReceive(NAME_CASE, COMMAND_NOTFOUND, out byte[] payload, ref message))
+          return false;
+
+        if (payload[^hashUnknown.Length..].IsAllBytesEqual(hashUnknown))
+          return true;
+
+        message = $"{NAME_CASE}: the notfound answer carries hash {payload[^hashUnknown.Length..].ToHexString()}, expected {hashUnknown.ToHexString()}.";
+        return false;
+      }
+      finally
+      {
+        socketPeer.Dispose();
+      }
+    }
+
+    static bool TryReceiveBlockServed(string nameCase, SocketFake socketPeer, byte[] hash, ref string message)
+    {
+      SendInventoryBlock(socketPeer, COMMAND_GETDATA, hash);
+
+      if (!socketPeer.TryReceive(nameCase, COMMAND_BLOCK, out byte[] payload, ref message))
+        return false;
+
+      byte[] hashServed = Crypto.ComputeHash256(payload.AsSpan(0, HeaderBToken.COUNT_HEADER_BYTES));
+
+      if (hashServed.IsAllBytesEqual(hash))
+        return true;
+
+      message = $"{nameCase}: the node serves block {hashServed.ToHexString()}, expected {hash.ToHexString()}.";
+      return false;
+    }
+
     static void SendInventoryBlock(SocketFake socketPeer, string command, byte[] hash)
     {
       byte[] payload = [.. VarInt.GetBytes(1), .. BitConverter.GetBytes((uint)Network.Inventory.InventoryType.MSG_BLOCK), .. hash];
@@ -787,6 +843,12 @@ internal partial class Testbench
 
         blocks = ledger.GetBlocksInserted();
         return true;
+      }
+
+      internal void AnchorAndDeliver(List<Block> blocks)
+      {
+        ParentFake.MineAnchors(blocks);
+        DeliverBlocks(blocks);
       }
 
       internal static NetworkTestbench StartNode(
