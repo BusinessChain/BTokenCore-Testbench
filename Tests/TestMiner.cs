@@ -28,7 +28,8 @@ internal partial class Testbench
         && BlockchainMining.TestBurntSlot(Testbench.Wallet, ref message)
         && BlockchainMining.TestLosingAnchor(Testbench.Wallet, ref message)
         && BlockchainMining.TestWithheldRun(Testbench.Wallet, ref message)
-        && BlockchainMining.TestLateTie(Testbench.Wallet, ref message);
+        && BlockchainMining.TestLateTie(Testbench.Wallet, ref message)
+        && BlockchainMining.TestLateBehind(Testbench.Wallet, ref message);
     }
 
     class BlockchainMining : BlockchainTestbench
@@ -357,7 +358,35 @@ internal partial class Testbench
           && blockchain.TryMineBlock($"{NAME_CASE}, block mined on the replacement", out _, ref message);
       }
 
-      bool TryWinSlotAfterWithheld(string nameCase, Ledger ledger, TXOutputTokenAnchor anchorWithheld, ref string message)
+      internal static bool TestLateBehind(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  12. Late Behind: Ignore an unrequested withheld block behind the honest fork.");
+
+        const string NAME_CASE = "Late behind";
+
+        if (!TryStartNode(wallet, NAME_CASE, VALUE_FUNDING, out BlockchainMining blockchain, out Ledger ledger, ref message)
+          || !TryCreateBlockWithheld(NAME_CASE, ledger, wallet, out Block blockWithheld, ref message))
+          return false;
+
+        blockchain.SetFeeAnchor();
+
+        TXOutputTokenAnchor anchorWithheld = BlockchainParentFake.CreateAnchor(blockWithheld.Header.Hash, blockWithheld.Header.HashPrevious);
+        string nameCaseNext = $"{NAME_CASE}, block mined on the replacement";
+
+        if (!blockchain.TryWinSlotAfterWithheld(NAME_CASE, ledger, anchorWithheld, ref message, isRequestingWithheld: false)
+          || !blockchain.TryMineAnchor(nameCaseNext, blockchain.MinerBlockchain.MineBlock, out BlockchainBitcoin.TXBitcoin tXNext, ref message)
+          || !blockchain.TryInsertAnchoredSynchronized(nameCaseNext, ledger, tXNext, ref message))
+          return false;
+
+        blockchain.ReceiveBlock(blockWithheld);
+
+        string nameCaseLate = $"{NAME_CASE}, unrequested withheld block arrived behind the honest fork";
+
+        return blockchain.IsSynchronized(ledger, nameCaseLate, ledger.GetHeightTip(), ref message)
+          && blockchain.IsRequestingNoBlock(nameCaseLate, ref message);
+      }
+
+      bool TryWinSlotAfterWithheld(string nameCase, Ledger ledger, TXOutputTokenAnchor anchorWithheld, ref string message, bool isRequestingWithheld = true)
       {
         int heightTip = GetHeight();
         string nameCaseWithheld = $"{nameCase}, slot won by the withheld block";
@@ -366,7 +395,7 @@ internal partial class Testbench
         return TryMineAnchor(nameCase, MinerBlockchain.MineBlock, out _, ref message)
           && TryMissAnchor(nameCaseWithheld, [], 1, ref message, anchorWithheld)
           && IsAtHeight(nameCaseWithheld, heightTip, ref message)
-          && IsRequestingBlock(nameCaseWithheld, anchorWithheld.HashBlockReferenced, ref message)
+          && (!isRequestingWithheld || IsRequestingBlock(nameCaseWithheld, anchorWithheld.HashBlockReferenced, ref message))
           && TryMineAnchor(nameCaseReplaced, MinerBlockchain.ReplaceAnchorsMissed, out BlockchainBitcoin.TXBitcoin tXReplacement, ref message)
           && TryInsertAnchoredSynchronized(nameCaseReplaced, ledger, tXReplacement, ref message)
           && IsRequestingNoBlock(nameCaseReplaced, ref message);
