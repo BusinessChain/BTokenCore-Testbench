@@ -33,7 +33,8 @@ internal partial class Testbench
         && BlockchainMining.TestLateRun(Testbench.Wallet, ref message)
         && BlockchainMining.TestTimerTick(Testbench.Wallet, ref message)
         && BlockchainMining.TestBlankWindow(Testbench.Wallet, ref message)
-        && BlockchainMining.TestOwnMiss(Testbench.Wallet, ref message);
+        && BlockchainMining.TestOwnMiss(Testbench.Wallet, ref message)
+        && BlockchainMining.TestTimerStop(Testbench.Wallet, ref message);
     }
 
     class BlockchainMining : BlockchainTestbench
@@ -602,6 +603,42 @@ internal partial class Testbench
           blockchain.RunLocked(() => blockchain.ParentFake.MineBlock([])).Wait();
 
           return blockchain.IsMissedReplaced($"{NAME_CASE}, replacement after a Bitcoin block without anchor winner", tXMissed, SECONDS_REPLACEMENT_AT_ONCE, ref message);
+        }
+        finally
+        {
+          blockchain.RunLocked(blockchain.StopMining).Wait();
+        }
+      }
+
+      internal static bool TestTimerStop(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  17. Timer Stop: A throwing mining round stops the timers.");
+
+        const string NAME_CASE = "Timer stop";
+
+        if (!TryStartNode(wallet, NAME_CASE, VALUE_FUNDING, out BlockchainMining blockchain, out _, ref message))
+          return false;
+
+        blockchain.RunLocked(() => blockchain.ParentFake.IsAnchorFailingOnce = true).Wait();
+        blockchain.RunLocked(() => blockchain.StartMining(COUNT_ANCHORS_PER_10_MINUTES_TIMER, FEE_ANCHOR)).Wait();
+
+        try
+        {
+          if (!SpinWait.SpinUntil(
+            () => !blockchain.RunLocked(() => blockchain.ParentFake.IsAnchorFailingOnce).Result,
+            TimeSpan.FromSeconds(SECONDS_TIMEOUT_TIMER)))
+          {
+            message = $"{NAME_CASE}: no mining round ran within {SECONDS_TIMEOUT_TIMER} seconds.";
+            return false;
+          }
+
+          string messageIgnored = "";
+
+          if (!blockchain.TryAwaitAnchor($"{NAME_CASE}, after the throwing round", out _, ref messageIgnored))
+            return true;
+
+          message = $"{NAME_CASE}: mining continued after a throwing round.";
+          return false;
         }
         finally
         {

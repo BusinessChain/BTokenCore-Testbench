@@ -22,10 +22,23 @@ internal partial class Testbench
         }
       }
 
+      internal bool IsAnchorFailingOnce;
+
       internal BlockchainParentFake(LiteDatabase liteDatabase)
         : base(liteDatabase, new SemaphoreSlim(1))
       {
         Parser = new ParserParentFake();
+      }
+
+      internal override bool TryCreateTXAnchor(TXOutputTokenAnchor tokenAnchor, long feeAnchor, out int lockTime)
+      {
+        if (IsAnchorFailingOnce)
+        {
+          IsAnchorFailingOnce = false;
+          throw new InvalidOperationException("Anchor creation fails on purpose.");
+        }
+
+        return base.TryCreateTXAnchor(tokenAnchor, feeAnchor, out lockTime);
       }
 
       protected override Header CreateHeaderRoot()
