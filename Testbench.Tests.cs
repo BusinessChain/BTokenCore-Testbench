@@ -23,6 +23,65 @@ internal partial class Testbench
     internal abstract bool TryRun(out string message);
   }
 
+  class TestParsers : Test_Testbench
+  {
+    internal TestParsers(Testbench testbench)
+      : base(testbench)
+    { }
+
+    internal override bool TryRun(out string message)
+    {
+      message = "";
+
+      return Test_RoundTripHeaderBToken(ref message);
+    }
+
+    bool Test_RoundTripHeaderBToken(ref string message)
+    {
+      HeaderBToken header = new(
+        headerHash: null,
+        hashPrevious: "00000000000000000002a7c4c1e48d76c5a37902165a270156b7a8d72728a054".ToBinary(),
+        merkleRootHash: "5a38043063d4da8309c3cbb2ffd20db190d74bdce1dec3f716d2ffc553864717".ToBinary(),
+        hashAccounts: "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d".ToBinary(),
+        nonce: 0x42a47d62);
+
+      header.Version = 0x21d18000;
+      header.ComputeHash();
+
+      byte[] buffer = header.Serialize();
+      int index = 0;
+
+      HeaderBToken headerParsed = new(buffer, ref index);
+
+      return IsFieldEqual(nameof(HeaderBToken), nameof(Header.Version), header.Version, headerParsed.Version, ref message)
+        && IsFieldEqual(nameof(HeaderBToken), nameof(Header.HashPrevious), header.HashPrevious, headerParsed.HashPrevious, ref message)
+        && IsFieldEqual(nameof(HeaderBToken), nameof(Header.MerkleRoot), header.MerkleRoot, headerParsed.MerkleRoot, ref message)
+        && IsFieldEqual(nameof(HeaderBToken), nameof(HeaderBToken.HashAccounts), header.HashAccounts, headerParsed.HashAccounts, ref message)
+        && IsFieldEqual(nameof(HeaderBToken), nameof(Header.Nonce), header.Nonce, headerParsed.Nonce, ref message)
+        && IsFieldEqual(nameof(HeaderBToken), nameof(Header.Hash), header.Hash, headerParsed.Hash, ref message)
+        && IsFieldEqual(nameof(HeaderBToken), "index after parsing", HeaderBToken.COUNT_HEADER_BYTES, index, ref message);
+    }
+
+    static bool IsFieldEqual(string nameParser, string nameField, byte[] expected, byte[] parsed, ref string message)
+    {
+      if (expected.AsSpan().SequenceEqual(parsed))
+        return true;
+
+      message = $"{nameParser}: field {nameField} is {parsed.ToHexString()} after parsing, expected {expected.ToHexString()}.";
+      return false;
+    }
+
+    static bool IsFieldEqual<T>(string nameParser, string nameField, T expected, T parsed, ref string message)
+      where T : struct
+    {
+      if (EqualityComparer<T>.Default.Equals(expected, parsed))
+        return true;
+
+      message = $"{nameParser}: field {nameField} is {parsed} after parsing, expected {expected}.";
+      return false;
+    }
+  }
+
   class MakeAnInstanceOfNode : Test_Testbench
   {
     internal MakeAnInstanceOfNode(Testbench testbench)
