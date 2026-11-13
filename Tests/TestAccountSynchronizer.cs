@@ -135,7 +135,8 @@ internal partial class Testbench
       internal static bool TestSegmentInstallation(Wallet wallet, ref string message)
       {
         return TryCreateServer(wallet, out Ledger ledger, out BlockchainSynchronizing server, ref message)
-          && TestSegmentDownload(ledger, server, ref message);
+          && TestSegmentDownload(ledger, server, ref message)
+          && TestFaultySegment(ledger, server, ref message);
       }
 
       static bool TestSegmentDownload(Ledger ledger, BlockchainSynchronizing server, ref string message)
@@ -167,6 +168,61 @@ internal partial class Testbench
         blockchain.DownloadSegments(getSegmentServed);
 
         return blockchain.IsSynchronized("segments downloaded again after the rollback below the installed height", HEIGHT_TIP_WINDOW, ref message);
+      }
+
+      static bool TestFaultySegment(Ledger ledger, BlockchainSynchronizing server, ref string message)
+      {
+        Console.WriteLine("  6. Faulty Segment: Reject the block committing to an invalid segment, then install.");
+
+        const int HEIGHT_FORGED = HEIGHT_INSTALLED - 4;
+        byte[] segmentInvalid = [1];
+
+        Func<Header, byte[]> getSegmentServed = GetSegmentServed(ledger, server);
+        List<Block> blocksLedger = ledger.GetBlocksInserted();
+
+        BlockchainSynchronizing blockchain = StartNodeWithoutAccounts(blocksLedger.Where(b => b.Header.Height < HEIGHT_FORGED).ToList());
+        blockchain.InsertBlocks(ForgeBlocks(blocksLedger, HEIGHT_FORGED, (tXs, header) => header.HashAccounts = SHA256.HashData(segmentInvalid)));
+
+        blockchain.DownloadSegments(h => h.Height == HEIGHT_FORGED ? segmentInvalid : getSegmentServed(h));
+
+        if (!blockchain.IsWithoutAccounts($"invalid segment committed by the block at height {HEIGHT_FORGED}", HEIGHT_FORGED - 1, ref message))
+          return false;
+
+        blockchain.InsertBlocks(blocksLedger.Where(b => b.Header.Height >= HEIGHT_FORGED).ToList());
+        blockchain.DownloadSegments(getSegmentServed);
+
+        return blockchain.IsSynchronized("segments downloaded after the block with the invalid segment was replaced", HEIGHT_TIP_WINDOW, ref message);
+      }
+
+      static List<Block> ForgeBlocks(List<Block> blocksLedger, int heightForged, Action<List<TXBToken>, HeaderBToken> alter)
+      {
+        List<Block> blocksForged = [];
+        byte[] hashPrevious = blocksLedger.Single(b => b.Header.Height == heightForged - 1).Header.Hash;
+
+        foreach (Block blockLedger in blocksLedger.Where(b => b.Header.Height >= heightForged))
+        {
+          List<TXBToken> tXs = [.. blockLedger.TXs.Cast<TXBToken>()];
+          HeaderBToken header = new()
+          {
+            HashPrevious = hashPrevious,
+            HashAccounts = ((HeaderBToken)blockLedger.Header).HashAccounts,
+            Height = blockLedger.Header.Height
+          };
+
+          if (header.Height == heightForged)
+            alter(tXs, header);
+
+          Block block = CreateBlock(tXs);
+          header.MerkleRoot = block.Header.MerkleRoot;
+          header.ComputeHash();
+          block.Header = header;
+          block.Serialize();
+
+          blocksForged.Add(block);
+          hashPrevious = header.Hash;
+        }
+
+        return blocksForged;
       }
 
       static bool TryCreateServer(Wallet wallet, out Ledger ledger, out BlockchainSynchronizing server, ref string message)
