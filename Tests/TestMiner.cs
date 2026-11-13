@@ -31,7 +31,8 @@ internal partial class Testbench
         && BlockchainMining.TestLateTie(Testbench.Wallet, ref message)
         && BlockchainMining.TestLateBehind(Testbench.Wallet, ref message)
         && BlockchainMining.TestLateRun(Testbench.Wallet, ref message)
-        && BlockchainMining.TestTimerTick(Testbench.Wallet, ref message);
+        && BlockchainMining.TestTimerTick(Testbench.Wallet, ref message)
+        && BlockchainMining.TestBlankWindow(Testbench.Wallet, ref message);
     }
 
     class BlockchainMining : BlockchainTestbench
@@ -541,6 +542,47 @@ internal partial class Testbench
         }
       }
 
+      internal static bool TestBlankWindow(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  15. Blank Window: Foreign winner delays the replacement five seconds.");
+
+        const string NAME_CASE = "Blank window";
+        const int SECONDS_WINDOW_BLANK_CHECKED = 4;
+
+        if (!TryStartNode(wallet, NAME_CASE, VALUE_FUNDING, out BlockchainMining blockchain, out _, ref message))
+          return false;
+
+        blockchain.RunLocked(() => blockchain.StartMining(COUNT_ANCHORS_PER_10_MINUTES_TIMER, FEE_ANCHOR)).Wait();
+
+        try
+        {
+          if (!blockchain.TryAwaitAnchor($"{NAME_CASE}, first tick", out BlockchainBitcoin.TXBitcoin tXMissed, ref message))
+            return false;
+
+          TXOutputTokenAnchor anchorForeign = BlockchainParentFake.CreateAnchor(RandomNumberGenerator.GetBytes(32), tXMissed.TXOutputs.OfType<TXOutputTokenAnchor>().Single().HashBlockPreviousReferenced);
+
+          blockchain.RunLocked(() => blockchain.ParentFake.MineBlock([], anchorForeign)).Wait();
+
+          string messageEarly = "";
+
+          if (blockchain.TryAwaitAnchor($"{NAME_CASE}, inside the blank window", out _, ref messageEarly, SECONDS_WINDOW_BLANK_CHECKED))
+          {
+            message = $"{NAME_CASE}: an anchor appeared within {SECONDS_WINDOW_BLANK_CHECKED} seconds after the foreign winner, inside the blank window.";
+            return false;
+          }
+
+          string nameCaseReplaced = $"{NAME_CASE}, replacement after the blank window";
+          long feeReplacement = Math.Max(FEE_ANCHOR, tXMissed.Fee + LENGTH_ANCHOR);
+
+          return blockchain.TryAwaitAnchor(nameCaseReplaced, out BlockchainBitcoin.TXBitcoin tXReplacement, ref message)
+            && blockchain.IsPassedLocked((ref string m) => blockchain.IsAnchorSpending(nameCaseReplaced, tXReplacement, blockchain.TXFunding.Hash, 0, feeReplacement, ref m), ref message);
+        }
+        finally
+        {
+          blockchain.RunLocked(blockchain.StopMining).Wait();
+        }
+      }
+
       delegate bool Check(ref string message);
 
       bool IsPassedLocked(Check check, ref string message)
@@ -553,21 +595,21 @@ internal partial class Testbench
         return isPassed;
       }
 
-      bool TryAwaitAnchor(string nameCase, out BlockchainBitcoin.TXBitcoin tXAnchor, ref string message)
+      bool TryAwaitAnchor(string nameCase, out BlockchainBitcoin.TXBitcoin tXAnchor, ref string message, int secondsTimeout = SECONDS_TIMEOUT_TIMER)
       {
         BlockchainBitcoin.TXBitcoin tXFound = null;
         string messageAwait = "";
 
         bool isFound = SpinWait.SpinUntil(
           () => IsPassedLocked((ref string m) => TryMineAnchor(nameCase, () => { }, out tXFound, ref m), ref messageAwait),
-          TimeSpan.FromSeconds(SECONDS_TIMEOUT_TIMER));
+          TimeSpan.FromSeconds(secondsTimeout));
 
         tXAnchor = tXFound;
 
         if (isFound)
           return true;
 
-        message = $"{nameCase}: no anchor appeared within {SECONDS_TIMEOUT_TIMER} seconds: {messageAwait}";
+        message = $"{nameCase}: no anchor appeared within {secondsTimeout} seconds: {messageAwait}";
         return false;
       }
 
