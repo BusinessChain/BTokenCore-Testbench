@@ -79,7 +79,7 @@ internal partial class Testbench
         && TestBlockAnnouncement(Testbench.Wallet, ref message)
         && TestSegmentServing(Testbench.Wallet, ref message)
         && TestUnrequestedSegment(ref message)
-        && BlockchainNetwork.TryCreateBlocks(Testbench.Wallet, [], out List<Block> blocksWindow, out _, ref message, HEIGHT_TIP_WINDOW)
+        && BlockchainNetwork.TryCreateBlocks(Testbench.Wallet, [t => { }], out List<Block> blocksWindow, out List<BlockchainBToken.TXBToken> spendsWindow, ref message, HEIGHT_TIP_WINDOW)
         && TestSegmentRequest(blocksWindow, ref message)
         && TestSegmentRefusal(blocksWindow, ref message)
         && TestTXRequest(Testbench.Wallet, ref message)
@@ -98,12 +98,12 @@ internal partial class Testbench
         && TestLocatorLimit(ref message)
         && TestHeadersInsertion(ref message)
         && TestReturnIdle(ref message)
-        && TestEndToEnd(blocksWindow, ref message);
+        && TestEndToEnd(blocksWindow, spendsWindow[0], ref message);
     }
 
-    static bool TestEndToEnd(List<Block> blocksWindow, ref string message)
+    static bool TestEndToEnd(List<Block> blocksWindow, BlockchainBToken.TXBToken spend, ref string message)
     {
-      Console.WriteLine("  38. End To End: A fresh node syncs blocks and segments from a peer.");
+      Console.WriteLine("  38. End To End: A fresh node syncs blocks, segments and TXs from a peer.");
 
       const string NAME_CASE = "End to end";
       const string IP_FRESH = "10.0.6.1";
@@ -113,7 +113,7 @@ internal partial class Testbench
       CommunicationFake communicationFresh = new();
       communicationFresh.LinkOutbound(communicationServing, IP_FRESH);
 
-      BlockchainNetwork.StartNode(communicationServing, prepare: b => b.AnchorAndDeliver(blocksWindow));
+      NetworkTestbench networkServing = BlockchainNetwork.StartNode(communicationServing, prepare: b => b.AnchorAndDeliver(blocksWindow));
       NetworkTestbench networkFresh = BlockchainNetwork.StartNode(
         communicationFresh,
         prepareParent: p =>
@@ -122,8 +122,19 @@ internal partial class Testbench
           p.MineBlock([]);
         });
 
-      return IsAtHeight(NAME_CASE, networkFresh, blocksWindow[^1].Header.Height, ref message, SECONDS_TIMEOUT_SYNC)
-        && ((BlockchainNetwork)networkFresh.Blockchain).IsAccountsSynchronized(NAME_CASE, SECONDS_TIMEOUT_SYNC, ref message);
+      if (!IsAtHeight(NAME_CASE, networkFresh, blocksWindow[^1].Header.Height, ref message, SECONDS_TIMEOUT_SYNC)
+        || !((BlockchainNetwork)networkFresh.Blockchain).IsAccountsSynchronized(NAME_CASE, SECONDS_TIMEOUT_SYNC, ref message))
+        return false;
+
+      networkServing.Blockchain.RunLocked(() => ((BlockchainBToken)networkServing.Blockchain).SubmitTX(spend.TXRaw)).Wait();
+
+      if (SpinWait.SpinUntil(
+        () => networkFresh.Blockchain.RunLocked(() => networkFresh.Blockchain.GetTX(spend.Hash)).Result != null,
+        TimeSpan.FromSeconds(SECONDS_TIMEOUT_REQUEST)))
+        return true;
+
+      message = $"{NAME_CASE}: the fresh node does not receive the TX {spend.Hash.ToHexString()} submitted to the serving node.";
+      return false;
     }
 
     static bool TestReturnIdle(ref string message)
