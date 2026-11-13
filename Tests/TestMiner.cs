@@ -29,7 +29,8 @@ internal partial class Testbench
         && BlockchainMining.TestLosingAnchor(Testbench.Wallet, ref message)
         && BlockchainMining.TestWithheldRun(Testbench.Wallet, ref message)
         && BlockchainMining.TestLateTie(Testbench.Wallet, ref message)
-        && BlockchainMining.TestLateBehind(Testbench.Wallet, ref message);
+        && BlockchainMining.TestLateBehind(Testbench.Wallet, ref message)
+        && BlockchainMining.TestLateRun(Testbench.Wallet, ref message);
     }
 
     class BlockchainMining : BlockchainTestbench
@@ -339,11 +340,12 @@ internal partial class Testbench
         const string NAME_CASE = "Late tie";
 
         if (!TryStartNode(wallet, NAME_CASE, VALUE_FUNDING, out BlockchainMining blockchain, out Ledger ledger, ref message)
-          || !TryCreateBlockWithheld(NAME_CASE, ledger, wallet, out Block blockWithheld, ref message))
+          || !TryCreateBlocksWithheld(NAME_CASE, ledger, wallet, 1, out List<Block> blocksWithheld, ref message))
           return false;
 
         blockchain.SetFeeAnchor();
 
+        Block blockWithheld = blocksWithheld[0];
         TXOutputTokenAnchor anchorWithheld = BlockchainParentFake.CreateAnchor(blockWithheld.Header.Hash, blockWithheld.Header.HashPrevious);
 
         if (!blockchain.TryWinSlotAfterWithheld(NAME_CASE, ledger, anchorWithheld, ref message))
@@ -365,11 +367,12 @@ internal partial class Testbench
         const string NAME_CASE = "Late behind";
 
         if (!TryStartNode(wallet, NAME_CASE, VALUE_FUNDING, out BlockchainMining blockchain, out Ledger ledger, ref message)
-          || !TryCreateBlockWithheld(NAME_CASE, ledger, wallet, out Block blockWithheld, ref message))
+          || !TryCreateBlocksWithheld(NAME_CASE, ledger, wallet, 1, out List<Block> blocksWithheld, ref message))
           return false;
 
         blockchain.SetFeeAnchor();
 
+        Block blockWithheld = blocksWithheld[0];
         TXOutputTokenAnchor anchorWithheld = BlockchainParentFake.CreateAnchor(blockWithheld.Header.Hash, blockWithheld.Header.HashPrevious);
         string nameCaseNext = $"{NAME_CASE}, block mined on the replacement";
 
@@ -401,16 +404,21 @@ internal partial class Testbench
           && IsRequestingNoBlock(nameCaseReplaced, ref message);
       }
 
-      static bool TryCreateBlockWithheld(string nameCase, Ledger ledger, Wallet wallet, out Block blockWithheld, ref string message)
+      static bool TryCreateBlocksWithheld(string nameCase, Ledger ledger, Wallet wallet, int countBlocks, out List<Block> blocksWithheld, ref string message)
       {
-        blockWithheld = null;
+        blocksWithheld = null;
+        int heightTip = ledger.GetHeightTip();
 
-        if (!ledger.TryInsertBlock($"{nameCase}, withheld block", [ledger.CreateCoinbase(wallet, CreateIDAccount(1003, 4), 0)], isValidExpected: true, null, ref message))
+        if (!TryInsertCoinbasesUpTo(ledger, wallet, CreateIDAccount(1003, 4), heightTip + countBlocks, ref message))
           return false;
 
-        blockWithheld = ledger.GetBlocksInserted()[^1];
+        blocksWithheld = ledger.GetBlocksInserted().Where(b => b.Header.Height > heightTip).ToList();
 
-        return ledger.TryRollBack($"{nameCase}, withheld block removed from the Ledger", out _, ref message);
+        while (ledger.GetHeightTip() > heightTip)
+          if (!ledger.TryRollBack($"{nameCase}, withheld block removed from the Ledger", out _, ref message))
+            return false;
+
+        return true;
       }
 
       internal static bool TestLosingAnchor(Wallet wallet, ref string message)
@@ -457,28 +465,56 @@ internal partial class Testbench
 
         blockchain.SetFeeAnchor();
 
-        int heightTip = blockchain.GetHeight();
         TXOutputTokenAnchor anchorWithheldFirst = BlockchainParentFake.CreateAnchor(RandomNumberGenerator.GetBytes(32), blockchain.ChainRoot.HeaderTipBlockchain.Hash);
         TXOutputTokenAnchor anchorWithheldSecond = BlockchainParentFake.CreateAnchor(RandomNumberGenerator.GetBytes(32), anchorWithheldFirst.HashBlockReferenced);
 
-        if (!blockchain.TryMineAnchor(NAME_CASE, blockchain.MinerBlockchain.MineBlock, out _, ref message)
-          || !blockchain.TryMissAnchor($"{NAME_CASE}, first withheld slot", [], 1, ref message, anchorWithheldFirst)
-          || !blockchain.TryMissAnchor($"{NAME_CASE}, second withheld slot", [], 1, ref message, anchorWithheldSecond)
-          || !blockchain.IsAtHeight($"{NAME_CASE}, two slots won by withheld blocks", heightTip, ref message))
+        return blockchain.TryOutrunWithheldRun(NAME_CASE, ledger, anchorWithheldFirst, anchorWithheldSecond, ref message);
+      }
+
+      internal static bool TestLateRun(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  13. Late Run: Keep the honest tip when two withheld blocks tie.");
+
+        const string NAME_CASE = "Late run";
+
+        if (!TryStartNode(wallet, NAME_CASE, VALUE_FUNDING, out BlockchainMining blockchain, out Ledger ledger, ref message)
+          || !TryCreateBlocksWithheld(NAME_CASE, ledger, wallet, 2, out List<Block> blocksWithheld, ref message))
           return false;
 
-        string nameCaseReplaced = $"{NAME_CASE}, replacement anchor";
+        blockchain.SetFeeAnchor();
 
-        if (!blockchain.TryMineAnchor(nameCaseReplaced, blockchain.MinerBlockchain.ReplaceAnchorsMissed, out BlockchainBitcoin.TXBitcoin tXReplacement, ref message)
-          || !blockchain.TryInsertAnchoredSynchronized(nameCaseReplaced, ledger, tXReplacement, ref message)
-          || !blockchain.IsRequestingBlock($"{nameCaseReplaced}, taller placeholder fork", anchorWithheldFirst.HashBlockReferenced, ref message))
+        TXOutputTokenAnchor anchorWithheldFirst = BlockchainParentFake.CreateAnchor(blocksWithheld[0].Header.Hash, blocksWithheld[0].Header.HashPrevious);
+        TXOutputTokenAnchor anchorWithheldSecond = BlockchainParentFake.CreateAnchor(blocksWithheld[1].Header.Hash, blocksWithheld[1].Header.HashPrevious);
+
+        if (!blockchain.TryOutrunWithheldRun(NAME_CASE, ledger, anchorWithheldFirst, anchorWithheldSecond, ref message))
           return false;
 
-        string nameCaseNext = $"{NAME_CASE}, next block as tall as the placeholder fork";
+        blocksWithheld.ForEach(blockchain.ReceiveBlock);
 
-        return blockchain.TryMineAnchor(nameCaseNext, blockchain.MinerBlockchain.MineBlock, out BlockchainBitcoin.TXBitcoin tXNext, ref message)
-          && blockchain.TryInsertAnchoredSynchronized(nameCaseNext, ledger, tXNext, ref message)
-          && blockchain.IsRequestingNoBlock(nameCaseNext, ref message);
+        string nameCaseLate = $"{NAME_CASE}, both withheld blocks arrived at the same height as the honest fork";
+
+        return blockchain.IsSynchronized(ledger, nameCaseLate, ledger.GetHeightTip(), ref message)
+          && blockchain.IsRequestingNoBlock(nameCaseLate, ref message);
+      }
+
+      bool TryOutrunWithheldRun(string nameCase, Ledger ledger, TXOutputTokenAnchor anchorWithheldFirst, TXOutputTokenAnchor anchorWithheldSecond, ref string message)
+      {
+        int heightTip = GetHeight();
+        string nameCaseReplaced = $"{nameCase}, replacement anchor";
+        string nameCaseTaller = $"{nameCaseReplaced}, taller placeholder fork";
+        string nameCaseNext = $"{nameCase}, next block as tall as the placeholder fork";
+
+        return TryMineAnchor(nameCase, MinerBlockchain.MineBlock, out _, ref message)
+          && TryMissAnchor($"{nameCase}, first withheld slot", [], 1, ref message, anchorWithheldFirst)
+          && TryMissAnchor($"{nameCase}, second withheld slot", [], 1, ref message, anchorWithheldSecond)
+          && IsAtHeight($"{nameCase}, two slots won by withheld blocks", heightTip, ref message)
+          && TryMineAnchor(nameCaseReplaced, MinerBlockchain.ReplaceAnchorsMissed, out BlockchainBitcoin.TXBitcoin tXReplacement, ref message)
+          && TryInsertAnchoredSynchronized(nameCaseReplaced, ledger, tXReplacement, ref message)
+          && IsRequestingBlock(nameCaseTaller, anchorWithheldFirst.HashBlockReferenced, ref message)
+          && IsRequestingBlock(nameCaseTaller, anchorWithheldSecond.HashBlockReferenced, ref message)
+          && TryMineAnchor(nameCaseNext, MinerBlockchain.MineBlock, out BlockchainBitcoin.TXBitcoin tXNext, ref message)
+          && TryInsertAnchoredSynchronized(nameCaseNext, ledger, tXNext, ref message)
+          && IsRequestingNoBlock(nameCaseNext, ref message);
       }
 
       bool TryInsertAnchoredSynchronized(string nameCase, Ledger ledger, BlockchainBitcoin.TXBitcoin tXAnchor, ref string message)
