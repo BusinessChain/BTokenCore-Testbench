@@ -15,6 +15,7 @@ internal partial class Testbench
       const int COUNT_HEADERS_MAIN = 4;
       const int COUNT_HEADERS_FORK_MAX = 3;
       const int COUNT_FORKS_MAX = 3;
+      const int COUNT_FORKS_PRUNING_MAX = 2;
       const int COUNT_ROUNDS_SWITCH = 6;
 
       BlockchainChain()
@@ -26,10 +27,71 @@ internal partial class Testbench
         Console.WriteLine("  7. Choose the strongest fork in every permutation of BToken header trees with up to three forks.");
 
         for (int countBlocksMain = 0; countBlocksMain <= COUNT_HEADERS_MAIN; countBlocksMain++)
-          if (!TryForkPermutations(countBlocksMain, [], ref message))
+          if (!TryForkPermutations(countBlocksMain, [], COUNT_FORKS_MAX, IsForkChoiceCorrect, ref message))
             return false;
 
         return true;
+      }
+
+      internal static bool TestForkPruning(ref string message)
+      {
+        Console.WriteLine("  11. Check DropForksDeep and ReRoot at every height on every permutation of BToken header trees with up to two forks.");
+
+        for (int countBlocksMain = 0; countBlocksMain <= COUNT_HEADERS_MAIN; countBlocksMain++)
+          if (!TryForkPermutations(countBlocksMain, [], COUNT_FORKS_PRUNING_MAX, IsPruningCorrect, ref message))
+            return false;
+
+        return true;
+      }
+
+      delegate bool CheckPermutation(int countBlocksMain, List<Fork> forks, ref string message);
+
+      static bool IsPruningCorrect(int countBlocksMain, List<Fork> forks, ref string message)
+      {
+        for (int height = 1; height <= COUNT_HEADERS_MAIN; height++)
+        {
+          Chain chainRoot = BuildTree(countBlocksMain, forks, out Header headerRoot, out List<Header> headersMain, out List<List<Header>> headersForks, out HashSet<Header> headersExpected, out HashSet<Header> headersHeldExpected);
+
+          RemoveForksDeep(forks, headersForks, height, headersExpected, headersHeldExpected);
+          chainRoot.DropForksDeep(height);
+
+          if (!IsTreeConsistent(chainRoot, headerRoot, headersExpected, headersHeldExpected, out string error))
+          {
+            message = $"Fork pruning, DropForksDeep at height {height}, {DescribePermutation(countBlocksMain, forks)}: {error}";
+            return false;
+          }
+
+          chainRoot = BuildTree(countBlocksMain, forks, out headerRoot, out headersMain, out headersForks, out headersExpected, out headersHeldExpected);
+
+          Header headerRootNew = headersMain[height - 1];
+
+          RemoveForksDeep(forks, headersForks, height, headersExpected, headersHeldExpected);
+          headersExpected.RemoveWhere(h => h.Height < height && IsDescendantOf(headerRootNew, h));
+          headersHeldExpected.RemoveWhere(h => h == headerRoot || headersMain.Contains(h));
+          headersHeldExpected.Add(headerRootNew);
+
+          chainRoot.ReRoot(headerRootNew);
+
+          if (!IsTreeConsistent(chainRoot, headerRootNew, headersExpected, headersHeldExpected, out error))
+          {
+            message = $"Fork pruning, ReRoot at height {height}, {DescribePermutation(countBlocksMain, forks)}: {error}";
+            return false;
+          }
+        }
+
+        return true;
+      }
+
+      static void RemoveForksDeep(List<Fork> forks, List<List<Header>> headersForks, int height, HashSet<Header> headersExpected, HashSet<Header> headersHeldExpected)
+      {
+        for (int i = 0; i < forks.Count; i++)
+          if (forks[i].IndexTrunk < 0 && forks[i].HeightFork < height)
+          {
+            Header headerRootFork = headersForks[i][0];
+
+            headersExpected.RemoveWhere(h => IsDescendantOf(h, headerRootFork));
+            headersHeldExpected.RemoveWhere(h => IsDescendantOf(h, headerRootFork));
+          }
       }
 
       internal static bool TestKnownHeaders(ref string message)
@@ -311,12 +373,12 @@ internal partial class Testbench
         return true;
       }
 
-      static bool TryForkPermutations(int countBlocksMain, List<Fork> forks, ref string message)
+      static bool TryForkPermutations(int countBlocksMain, List<Fork> forks, int countForksMax, CheckPermutation check, ref string message)
       {
-        if (forks.Count > 0 && !IsForkChoiceCorrect(countBlocksMain, forks, ref message))
+        if (forks.Count > 0 && !check(countBlocksMain, forks, ref message))
           return false;
 
-        if (forks.Count == COUNT_FORKS_MAX)
+        if (forks.Count == countForksMax)
           return true;
 
         for (int indexTrunk = -1; indexTrunk < forks.Count; indexTrunk++)
@@ -330,7 +392,7 @@ internal partial class Testbench
               {
                 forks.Add((indexTrunk, heightFork, countHeaders, countBlocks));
 
-                bool isCorrect = TryForkPermutations(countBlocksMain, forks, ref message);
+                bool isCorrect = TryForkPermutations(countBlocksMain, forks, countForksMax, check, ref message);
 
                 forks.RemoveAt(forks.Count - 1);
 
@@ -342,21 +404,21 @@ internal partial class Testbench
         return true;
       }
 
-      static bool IsForkChoiceCorrect(int countBlocksMain, List<Fork> forks, ref string message)
+      static Chain BuildTree(int countBlocksMain, List<Fork> forks, out Header headerRoot, out List<Header> headersMain, out List<List<Header>> headersForks, out HashSet<Header> headersExpected, out HashSet<Header> headersHeldExpected)
       {
-        HeaderBToken headerRoot = CreateHeaderBToken(new byte[32]);
+        headerRoot = CreateHeaderBToken(new byte[32]);
         Chain chainRoot = new(headerRoot);
 
-        List<Header> headersMain = CreateHeaders(headerRoot, COUNT_HEADERS_MAIN, nonceBranch: 0);
+        headersMain = CreateHeaders(headerRoot, COUNT_HEADERS_MAIN, nonceBranch: 0);
 
         foreach (Header header in headersMain)
           chainRoot.AppendHeader(header);
 
         chainRoot.HeaderTipBlockchain = chainRoot.HeaderTip.GetHeaderAncestor(countBlocksMain);
 
-        HashSet<Header> headersExpected = [headerRoot, .. headersMain];
-        HashSet<Header> headersHeldExpected = [headerRoot, .. headersMain.Take(countBlocksMain)];
-        List<List<Header>> headersForks = [];
+        headersExpected = [headerRoot, .. headersMain];
+        headersHeldExpected = [headerRoot, .. headersMain.Take(countBlocksMain)];
+        headersForks = [];
 
         for (int i = 0; i < forks.Count; i++)
         {
@@ -367,6 +429,13 @@ internal partial class Testbench
           headersExpected.UnionWith(headersFork);
           headersHeldExpected.UnionWith(headersFork.Take(forks[i].CountBlocks));
         }
+
+        return chainRoot;
+      }
+
+      static bool IsForkChoiceCorrect(int countBlocksMain, List<Fork> forks, ref string message)
+      {
+        Chain chainRoot = BuildTree(countBlocksMain, forks, out Header headerRoot, out _, out List<List<Header>> headersForks, out HashSet<Header> headersExpected, out HashSet<Header> headersHeldExpected);
 
         int heightStrongest = -1;
         bool[] isConnected = new bool[forks.Count];

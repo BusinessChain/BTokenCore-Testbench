@@ -28,7 +28,8 @@ internal partial class Testbench
         && BlockchainChain.TestForkPermutations(ref message)
         && BlockchainChain.TestAlternatingSwitches(ref message)
         && BlockchainChain.TestKnownHeaders(ref message)
-        && BlockchainChain.TestHeaderPlaceholders(ref message);
+        && BlockchainChain.TestHeaderPlaceholders(ref message)
+        && BlockchainChain.TestForkPruning(ref message);
     }
 
     abstract class BlockchainAccounts : BlockchainBToken
