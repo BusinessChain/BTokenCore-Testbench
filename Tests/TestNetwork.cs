@@ -75,7 +75,8 @@ internal partial class Testbench
         && TestSegmentRefusal(blocksWindow, ref message)
         && TestTXRequest(Testbench.Wallet, ref message)
         && TestTXRelay(Testbench.Wallet, ref message)
-        && TestTXTimeout(Testbench.Wallet, ref message);
+        && TestTXTimeout(Testbench.Wallet, ref message)
+        && TestTXNotFound(Testbench.Wallet, ref message);
     }
 
     static bool TestTXTimeout(Wallet wallet, ref string message)
@@ -84,18 +85,11 @@ internal partial class Testbench
 
       const string NAME_CASE = "TX timeout";
 
-      if (!BlockchainNetwork.TryCreateBlocks(wallet, [t => { }], out List<Block> blocks, out List<BlockchainBToken.TXBToken> spends, ref message))
+      if (!TryStartNodeWithTXRequested(NAME_CASE, wallet, out NetworkTestbench network, out SocketFake socketPeer, out _, ref message))
         return false;
-
-      NetworkTestbench network = StartNodeWithInboundPeer(out SocketFake socketPeer, out _, b => b.AnchorAndDeliver(blocks));
 
       try
       {
-        if (!TryHandshakeInbound(NAME_CASE, socketPeer, ref message)
-          || !IsPeerListed(NAME_CASE, network, IP_PEER, ref message)
-          || !IsOnlyTXRequested(NAME_CASE, socketPeer, [spends[0].Hash], spends[0].Hash, ref message))
-          return false;
-
         network.AgeTXRequests(IP_PEER, Network.TIMEOUT_REQUEST_SECONDS);
 
         return socketPeer.IsDisconnected(NAME_CASE, ref message);
@@ -104,6 +98,60 @@ internal partial class Testbench
       {
         socketPeer.Dispose();
       }
+    }
+
+    static bool TestTXNotFound(Wallet wallet, ref string message)
+    {
+      Console.WriteLine("  25. TX Notfound: Clear TX requests answered by notfound, keep the peer.");
+
+      const string NAME_CASE = "TX notfound";
+      const int SECONDS_HOLD = 3;
+
+      if (!TryStartNodeWithTXRequested(NAME_CASE, wallet, out NetworkTestbench network, out SocketFake socketPeer, out byte[] hashRequested, ref message))
+        return false;
+
+      try
+      {
+        SendInventory(socketPeer, MSG_TX, COMMAND_NOTFOUND, hashRequested);
+
+        if (!TrySynchronize(NAME_CASE, socketPeer, ref message))
+          return false;
+
+        network.AgeTXRequests(IP_PEER, Network.TIMEOUT_REQUEST_SECONDS);
+
+        string messageHold = "";
+
+        if (!socketPeer.IsDisconnected(NAME_CASE, ref messageHold, SECONDS_HOLD) && network.IsPeerListed(IP_PEER))
+          return true;
+
+        message = $"{NAME_CASE}: the node disconnects the peer for a TX request it answered with notfound.";
+        return false;
+      }
+      finally
+      {
+        socketPeer.Dispose();
+      }
+    }
+
+    static bool TryStartNodeWithTXRequested(string nameCase, Wallet wallet, out NetworkTestbench network, out SocketFake socketPeer, out byte[] hashRequested, ref string message)
+    {
+      network = null;
+      socketPeer = null;
+      hashRequested = null;
+
+      if (!BlockchainNetwork.TryCreateBlocks(wallet, [t => { }], out List<Block> blocks, out List<BlockchainBToken.TXBToken> spends, ref message))
+        return false;
+
+      hashRequested = spends[0].Hash;
+      network = StartNodeWithInboundPeer(out socketPeer, out _, b => b.AnchorAndDeliver(blocks));
+
+      if (TryHandshakeInbound(nameCase, socketPeer, ref message)
+        && IsPeerListed(nameCase, network, IP_PEER, ref message)
+        && IsOnlyTXRequested(nameCase, socketPeer, [hashRequested], hashRequested, ref message))
+        return true;
+
+      socketPeer.Dispose();
+      return false;
     }
 
     static bool TestTXRelay(Wallet wallet, ref string message)
