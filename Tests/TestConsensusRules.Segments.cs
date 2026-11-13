@@ -42,7 +42,21 @@ internal partial class Testbench
           || !ledger.TryInsertBlock("spend of the whole Balance", [ledger.CreateCoinbase(wallet, iDMiner, FEE), ledger.CreateTXSpend(wallet, iDReceiver, ledger.GetBalanceNext(wallet.Hash160PKeyPublic) - FEE, t => { })], isValidExpected: true, null, ref message))
           return false;
 
-        return ledger.AreSegmentsServedCorrect("served segments", heightFirst: 1, ref message);
+        return ledger.AreSegmentsServedCorrect("served segments", heightFirst: 1, ref message)
+          && TestHeightGuards(ledger, wallet, iDMiner, ref message);
+      }
+
+      static bool TestHeightGuards(Ledger ledgerServing, Wallet wallet, byte[] iDMiner, ref string message)
+      {
+        Console.WriteLine("  18. Serve no segment above the tip, below the retained undo records or below the installed height.");
+
+        Ledger ledgerInstalled = new(heightRoot: 10);
+
+        return ledgerServing.IsNoSegmentServed("height above the tip", ledgerServing.GetHeightTip() + 1, ref message)
+          && ledgerServing.IsNoSegmentServed("height below the retained undo records", 0, ref message)
+          && TryInsertCoinbasesUpTo(ledgerInstalled, wallet, iDMiner, 13, ref message)
+          && ledgerInstalled.IsNoSegmentServed("height below the installed height", 9, ref message)
+          && ledgerInstalled.AreSegmentsServedCorrect("heights above the installed height", heightFirst: 11, ref message);
       }
 
       partial class Ledger
@@ -67,6 +81,15 @@ internal partial class Testbench
           }
 
           return true;
+        }
+
+        internal bool IsNoSegmentServed(string nameCase, int height, ref string message)
+        {
+          if (Accounts.SerializeSegmentAtHeight(height) == null)
+            return true;
+
+          message = $"Served segments, {nameCase}: served segment {height % COUNT_SEGMENTS} for height {height}.";
+          return false;
         }
       }
     }
