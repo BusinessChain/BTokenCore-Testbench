@@ -79,7 +79,8 @@ internal partial class Testbench
         && TestTXRelay(Testbench.Wallet, ref message)
         && TestTXTimeout(Testbench.Wallet, ref message)
         && TestTXNotFound(Testbench.Wallet, ref message)
-        && TestFeeFilter(Testbench.Wallet, ref message);
+        && TestFeeFilter(Testbench.Wallet, ref message)
+        && TestTXThrottle(Testbench.Wallet, ref message);
     }
 
     static bool TestTXTimeout(Wallet wallet, ref string message)
@@ -246,6 +247,54 @@ internal partial class Testbench
         message = $"{NAME_CASE}: the node announces the TXs {string.Join(", ", hashes.Select(h => h.ToHexString()))}, " +
           $"expected only {spends[0].Hash.ToHexString()} above the fee filter.";
         return false;
+      }
+      finally
+      {
+        socketPeer.Dispose();
+        socketOther.Dispose();
+      }
+    }
+
+    static bool TestTXThrottle(Wallet wallet, ref string message)
+    {
+      Console.WriteLine("  27. TX Throttle: Hold back a TX beyond the announcement throttle until drained.");
+
+      const string NAME_CASE = "TX throttle";
+      const int COUNT_OUTPUTS_FILLER = 600;
+      const int COUNT_BYTES_MISSING = 10_000;
+      const int SECONDS_HOLD = 3;
+      const int SECONDS_TIMEOUT_DRAIN = 15;
+
+      if (!BlockchainNetwork.TryCreateBlocks(
+        wallet,
+        [t => t.TXOutputs.AddRange(Enumerable.Range(0, COUNT_OUTPUTS_FILLER).Select(i => new TXOutputP2PKH(0, ((TXOutputP2PKH)t.TXOutputs[0]).IDAccount)))],
+        out List<Block> blocks,
+        out List<BlockchainBToken.TXBToken> spends,
+        ref message))
+        return false;
+
+      BlockchainBToken.TXBToken spend = spends[0];
+
+      NetworkTestbench network = StartNodeWithTwoPeers(blocks, out SocketFake socketPeer, out SocketFake socketOther);
+
+      try
+      {
+        if (!TryHandshakeTwoPeers(NAME_CASE, network, socketPeer, socketOther, ref message))
+          return false;
+
+        network.FillThrottleTXAnnounced(IP_PEER_OTHER, spend.TXRaw.Length - COUNT_BYTES_MISSING);
+
+        socketPeer.SendMessage(COMMAND_TX, spend.TXRaw.Length, spend.TXRaw).Wait();
+
+        string messageHold = "";
+
+        if (TryReceiveInventories(NAME_CASE, socketOther, COMMAND_INV, MSG_TX, out _, ref messageHold, SECONDS_HOLD))
+        {
+          message = $"{NAME_CASE}: the node announces the spend before ThrottleTXAnnouncedToPeer drained enough room.";
+          return false;
+        }
+
+        return IsTXAnnounced(NAME_CASE, socketOther, spend.Hash, ref message, SECONDS_TIMEOUT_DRAIN);
       }
       finally
       {
@@ -1309,6 +1358,12 @@ internal partial class Testbench
       {
         lock (LOCK_Peers)
           ((BlockMessage)Peers.Single(p => p.GetIP() == iP).MessagesByCommand[BlockMessage.Command]).TimeRequest -= TimeSpan.FromSeconds(seconds);
+      }
+
+      internal void FillThrottleTXAnnounced(string iP, int countBytesRoomLeft)
+      {
+        lock (LOCK_Peers)
+          ((PeerBToken)Peers.Single(p => p.GetIP() == iP)).ThrottleTXAnnouncedToPeer.Increment(TXMessage.MAX_LEVEL_ANNOUNCED - countBytesRoomLeft);
       }
 
       internal void AgeTXRequests(string iP, int seconds)
