@@ -35,7 +35,8 @@ internal partial class Testbench
         && BlockchainChain.TestForkPruning(ref message)
         && Test_BlockSize(ref message)
         && BlockchainAccounts.TestSingleRollbacks(Testbench.Wallet, ref message)
-        && BlockchainAccounts.TestCountRestoration(Testbench.Wallet, ref message);
+        && BlockchainAccounts.TestCountRestoration(Testbench.Wallet, ref message)
+        && BlockchainAccounts.TestForkReplacement(Testbench.Wallet, ref message);
     }
 
     const int SIZE_BLOCK_MAX = 1 << 20;
@@ -359,6 +360,32 @@ internal partial class Testbench
           && ledger.TryRollBack("count restoration", out _, ref message)
           && ledger.TryInsertBlock("coinbase creating a 101st account in a segment whose sweep was rolled back", [CreateCoinbaseAccounts(ledger, wallet, indexSegmentAccounts, 101)], isValidExpected: false, null, ref message)
           && ledger.TryInsertBlock("coinbase paying the 100 accounts restored by rolling back their sweep", [CreateCoinbaseAccounts(ledger, wallet, indexSegmentAccounts, 100)], isValidExpected: true, null, ref message);
+      }
+
+      internal static bool TestForkReplacement(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  15. Roll back two blocks, reject a block of the rolled-back fork, and insert two other blocks at the same heights.");
+
+        Ledger ledger = new(heightRoot: 0);
+
+        byte[] iDMiner = CreateIDAccount(1000, 1);
+        byte[] iDReceiver = CreateIDAccount(1001, 2);
+        byte[] iDMinerFork = CreateIDAccount(1002, 3);
+        byte[] iDReceiverFork = CreateIDAccount(1003, 4);
+
+        if (!ledger.TryInsertBlock("coinbase creating the wallet account", [ledger.CreateCoinbase(wallet, wallet.Hash160PKeyPublic, 0)], isValidExpected: true, null, ref message)
+          || !ledger.TryInsertBlock("first spend of the replaced fork", [ledger.CreateCoinbase(wallet, iDMiner, FEE), ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => { })], isValidExpected: true, null, ref message)
+          || !ledger.TryInsertBlock("second spend of the replaced fork", [ledger.CreateCoinbase(wallet, iDMiner, FEE), ledger.CreateTXSpend(wallet, iDReceiver, 2 * VALUE_SPEND, t => { })], isValidExpected: true, null, ref message)
+          || !ledger.TryRollBack("fork replacement", out List<TXBToken> tXsRolledBack, ref message)
+          || !ledger.TryRollBack("fork replacement", out _, ref message))
+          return false;
+
+        return ledger.TryInsertBlock("spend with the Nonce of the rolled-back fork", [ledger.CreateCoinbase(wallet, iDMiner, FEE), tXsRolledBack[1]], isValidExpected: false, null, ref message)
+          && ledger.TryInsertBlock("first spend of the replacing fork", [ledger.CreateCoinbase(wallet, iDMinerFork, FEE), ledger.CreateTXSpend(wallet, iDReceiverFork, 3 * VALUE_SPEND, t => { })], isValidExpected: true, null, ref message)
+          && ledger.TryInsertBlock("second spend of the replacing fork", [
+            ledger.CreateCoinbase(wallet, iDMinerFork, 2 * FEE),
+            ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => { }),
+            ledger.CreateTXSpend(wallet, iDReceiverFork, VALUE_SPEND, t => t.Nonce += 1)], isValidExpected: true, null, ref message);
       }
 
       static void AddAnchor(TXBToken tX, int lockTime)
