@@ -165,7 +165,7 @@ internal partial class Testbench
         if (!blockchain.IsSynchronized(ledger, "Parent rollback, Bitcoin chain rolled back by three blocks", 3, ref message))
           return false;
 
-        blockchain.ParentFake.MineBlock();
+        blockchain.ParentFake.MineBlock([]);
 
         if (!blockchain.IsAtHeight("Parent rollback, replacing Bitcoin block without anchor", 3, ref message))
           return false;
@@ -400,7 +400,7 @@ internal partial class Testbench
       void MineBlocksUpTo(int height)
       {
         while (ParentFake.GetHeight() < height)
-          ParentFake.MineBlock();
+          ParentFake.MineBlock([]);
       }
 
       static BlockchainAnchoring StartNode()

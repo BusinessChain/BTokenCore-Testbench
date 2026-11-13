@@ -14,12 +14,18 @@ internal partial class Testbench
     {
       static readonly byte[] ID_TOKEN_BTOKEN = [(byte)'B', (byte)'T', (byte)'K', 0];
 
-      internal TXOutputTokenAnchor AnchorCreatedLast;
+      class ParserParentFake : ParserBitcoin
+      {
+        internal override Header ParseHeader(byte[] buffer, ref int index)
+        {
+          return new HeaderBToken(buffer, ref index);
+        }
+      }
 
       internal BlockchainParentFake(LiteDatabase liteDatabase)
         : base(liteDatabase, new SemaphoreSlim(1))
       {
-        Parser = new ParserBToken();
+        Parser = new ParserParentFake();
       }
 
       protected override Header CreateHeaderRoot()
@@ -27,15 +33,23 @@ internal partial class Testbench
         return new HeaderBToken { Hash = new byte[32], Height = 0 };
       }
 
-      internal override bool TryCreateTXAnchor(TXOutputTokenAnchor tokenAnchor, long feeAnchor, out int lockTime)
+      internal void Fund(long value)
       {
-        AnchorCreatedLast = tokenAnchor;
-        lockTime = GetHeight();
+        TXBitcoin tXFunding = new();
 
-        return true;
+        tXFunding.Inputs.Add(new TXInputBitcoin
+        {
+          TXIDOutput = RandomNumberGenerator.GetBytes(32),
+          IndexOutput = 0
+        });
+
+        tXFunding.TXOutputs.Add(new TXOutputP2PKH(value, Wallet.Hash160PKeyPublic));
+        tXFunding.Serialize(Wallet);
+
+        MineBlock([tXFunding]);
       }
 
-      internal void MineBlock(params TXOutputTokenAnchor[] anchors)
+      internal void MineBlock(List<TXBitcoin> tXs, params TXOutputTokenAnchor[] anchors)
       {
         HeaderBToken header = new(
           headerHash: null,
@@ -50,7 +64,10 @@ internal partial class Testbench
           header.AnchorsWinner[anchor.IDToken] = anchor;
 
         ChainRoot.AppendHeader(header);
-        ChainRoot.BlocksQueued.Add(header.Height, new Block(0) { Header = header });
+        Block block = new(0) { Header = header };
+        block.TXs.AddRange(tXs);
+
+        ChainRoot.BlocksQueued.Add(header.Height, block);
 
         UpdateTipBlockchain(ChainRoot);
       }
@@ -58,7 +75,7 @@ internal partial class Testbench
       internal void MineAnchors(List<Block> blocksLedger)
       {
         foreach (Block blockLedger in blocksLedger)
-          MineBlock(new TXOutputTokenAnchor
+          MineBlock([], new TXOutputTokenAnchor
           {
             IDToken = ID_TOKEN_BTOKEN,
             HashBlockReferenced = blockLedger.Header.Hash,

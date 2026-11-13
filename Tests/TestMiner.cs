@@ -24,6 +24,7 @@ internal partial class Testbench
     class BlockchainMining : BlockchainTestbench
     {
       const string NAME_TOKEN = "TestMiner";
+      const long VALUE_FUNDING = 100_000;
 
       BlockchainParentFake ParentFake;
 
@@ -183,18 +184,20 @@ internal partial class Testbench
         block = null;
         int height = GetHeight() + 1;
 
-        ParentFake.AnchorCreatedLast = null;
-
         if (!IsAccepted($"{nameCase}, MineBlock", MinerBlockchain.MineBlock, ref message))
           return false;
 
-        if (ParentFake.AnchorCreatedLast is not TXOutputTokenAnchor anchor)
+        List<byte[]> hashesAnchor = ParentFake.GetHashesTXOwnedUnconfirmed();
+
+        if (hashesAnchor.Count != 1 || ParentFake.GetTX(hashesAnchor[0]) is not BlockchainBitcoin.TXBitcoin tXAnchor)
         {
-          message = $"{nameCase}: MineBlock created no anchor.";
+          message = $"{nameCase}: MineBlock created {hashesAnchor.Count} anchors at the Bitcoin tip, expected one.";
           return false;
         }
 
-        ParentFake.MineBlock(anchor);
+        TXOutputTokenAnchor anchor = tXAnchor.TXOutputs.OfType<TXOutputTokenAnchor>().Single();
+
+        ParentFake.MineBlock([tXAnchor], anchor);
 
         if (!IsAtHeight($"{nameCase}, mined block anchored", height, ref message))
           return false;
@@ -230,6 +233,7 @@ internal partial class Testbench
 
         blockchain = new(CreateLiteDatabase(), new BlockchainParentFake(CreateLiteDatabase()));
         blockchain.Load();
+        blockchain.ParentFake.Fund(VALUE_FUNDING);
 
         List<Block> blocksLedger = ledger.GetBlocksInserted();
 
