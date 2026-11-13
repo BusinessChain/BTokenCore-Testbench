@@ -95,7 +95,55 @@ internal partial class Testbench
         && TestPayloadLength(ref message)
         && TestStreamEnd(ref message)
         && TestGetheadersLocator(ref message)
-        && TestLocatorLimit(ref message);
+        && TestLocatorLimit(ref message)
+        && TestHeadersInsertion(ref message);
+    }
+
+    static bool TestHeadersInsertion(ref string message)
+    {
+      Console.WriteLine("  36. Headers Insertion: Insert received headers, request the next from the new tip.");
+
+      bool isInserted = TrySendHeadersOnTip("Headers insertion", out SocketFake socketSeed, out _, ref message);
+      socketSeed.Dispose();
+
+      return isInserted;
+    }
+
+    static bool TrySendHeadersOnTip(string nameCase, out SocketFake socketSeed, out List<Header> headersNew, ref string message)
+    {
+      const int COUNT_BLOCKS = 10;
+      const int COUNT_HEADERS_NEW = 3;
+
+      socketSeed = BlockchainNetwork.StartNodeBitcoin(COUNT_BLOCKS, out List<Header> headers);
+      headersNew = [];
+
+      if (!TryHandshakeBitcoin(nameCase, socketSeed, out _, ref message))
+        return false;
+
+      for (Header headerPrevious = headers[^1]; headersNew.Count < COUNT_HEADERS_NEW; headerPrevious = headersNew[^1])
+      {
+        HeaderBToken header = new(
+          headerHash: null,
+          hashPrevious: headerPrevious.Hash,
+          merkleRootHash: RandomNumberGenerator.GetBytes(Crypto.LENGTH_HASH256),
+          hashAccounts: new byte[Crypto.LENGTH_HASH256],
+          nonce: 0);
+
+        header.ComputeHash();
+        headersNew.Add(header);
+      }
+
+      SendHeaders(socketSeed, [.. headersNew]);
+
+      if (!TryReceiveGetheaders(nameCase, socketSeed, out List<byte[]> locator, ref message))
+        return false;
+
+      if (locator.Count == 1 && locator[0].IsAllBytesEqual(headersNew[^1].Hash))
+        return true;
+
+      message = $"{nameCase}: the next getheaders holds the locator {string.Join(", ", locator.Select(h => h.ToHexString()))}, " +
+        $"expected only the last received header {headersNew[^1].Hash.ToHexString()}.";
+      return false;
     }
 
     static bool TestLocatorLimit(ref string message)
@@ -1554,9 +1602,9 @@ internal partial class Testbench
       return false;
     }
 
-    static void SendHeaders(SocketFake socketPeer, Header header)
+    static void SendHeaders(SocketFake socketPeer, params Header[] headers)
     {
-      byte[] payload = [.. VarInt.GetBytes(1), .. header.Serialize(), 0x00];
+      byte[] payload = [.. VarInt.GetBytes(headers.Length), .. headers.SelectMany(h => (byte[])[.. h.Serialize(), 0x00])];
 
       socketPeer.SendMessage(COMMAND_HEADERS, payload.Length, payload).Wait();
     }
