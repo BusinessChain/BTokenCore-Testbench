@@ -80,7 +80,8 @@ internal partial class Testbench
         && TestTXTimeout(Testbench.Wallet, ref message)
         && TestTXNotFound(Testbench.Wallet, ref message)
         && TestFeeFilter(Testbench.Wallet, ref message)
-        && TestTXThrottle(Testbench.Wallet, ref message);
+        && TestTXThrottle(Testbench.Wallet, ref message)
+        && TestOwnTX(Testbench.Wallet, ref message);
     }
 
     static bool TestTXTimeout(Wallet wallet, ref string message)
@@ -163,7 +164,6 @@ internal partial class Testbench
       Console.WriteLine("  23. TX Relay: Relay a received TX to the other peers and serve it.");
 
       const string NAME_CASE = "TX relay";
-      const int SECONDS_HOLD = 3;
 
       if (!BlockchainNetwork.TryCreateBlocks(wallet, [t => { }], out List<Block> blocks, out List<BlockchainBToken.TXBToken> spends, ref message))
         return false;
@@ -197,9 +197,7 @@ internal partial class Testbench
         if (!IsAnsweredNotFound(NAME_CASE, socketOther, MSG_TX, ref message))
           return false;
 
-        string messageHold = "";
-
-        if (!TryReceiveInventories(NAME_CASE, socketPeer, COMMAND_INV, MSG_TX, out _, ref messageHold, SECONDS_HOLD))
+        if (IsNoTXAnnounced(socketPeer))
           return true;
 
         message = $"{NAME_CASE}: the node announces the spend back to the peer that delivered it.";
@@ -262,7 +260,6 @@ internal partial class Testbench
       const string NAME_CASE = "TX throttle";
       const int COUNT_OUTPUTS_FILLER = 600;
       const int COUNT_BYTES_MISSING = 10_000;
-      const int SECONDS_HOLD = 3;
       const int SECONDS_TIMEOUT_DRAIN = 15;
 
       if (!BlockchainNetwork.TryCreateBlocks(
@@ -286,9 +283,7 @@ internal partial class Testbench
 
         socketPeer.SendMessage(COMMAND_TX, spend.TXRaw.Length, spend.TXRaw).Wait();
 
-        string messageHold = "";
-
-        if (TryReceiveInventories(NAME_CASE, socketOther, COMMAND_INV, MSG_TX, out _, ref messageHold, SECONDS_HOLD))
+        if (!IsNoTXAnnounced(socketOther))
         {
           message = $"{NAME_CASE}: the node announces the spend before ThrottleTXAnnouncedToPeer drained enough room.";
           return false;
@@ -301,6 +296,52 @@ internal partial class Testbench
         socketPeer.Dispose();
         socketOther.Dispose();
       }
+    }
+
+    static bool TestOwnTX(Wallet wallet, ref string message)
+    {
+      Console.WriteLine("  28. Own TX: Announce an own unconfirmed TX once to each peer.");
+
+      const string NAME_CASE = "Own TX";
+
+      if (!BlockchainNetwork.TryCreateBlocks(wallet, [t => { }], out List<Block> blocks, out List<BlockchainBToken.TXBToken> spends, ref message))
+        return false;
+
+      BlockchainBToken.TXBToken spend = spends[0];
+
+      NetworkTestbench network = StartNodeWithTwoPeers(blocks, out SocketFake socketPeer, out SocketFake socketOther);
+
+      try
+      {
+        if (!TryHandshakeTwoPeers(NAME_CASE, network, socketPeer, socketOther, ref message))
+          return false;
+
+        network.Blockchain.RunLocked(() => ((BlockchainBToken)network.Blockchain).SubmitTX(spend.TXRaw)).Wait();
+
+        foreach (SocketFake socket in new[] { socketPeer, socketOther })
+          if (!IsTXAnnounced(NAME_CASE, socket, spend.Hash, ref message))
+            return false;
+
+        if (IsNoTXAnnounced(socketPeer) && IsNoTXAnnounced(socketOther))
+          return true;
+
+        message = $"{NAME_CASE}: the node announces the own TX a second time.";
+        return false;
+      }
+      finally
+      {
+        socketPeer.Dispose();
+        socketOther.Dispose();
+      }
+    }
+
+    static bool IsNoTXAnnounced(SocketFake socketPeer)
+    {
+      const int SECONDS_HOLD = 3;
+
+      string messageHold = "";
+
+      return !TryReceiveInventories("", socketPeer, COMMAND_INV, MSG_TX, out _, ref messageHold, SECONDS_HOLD);
     }
 
     static NetworkTestbench StartNodeWithTwoPeers(List<Block> blocks, out SocketFake socketPeer, out SocketFake socketOther)
