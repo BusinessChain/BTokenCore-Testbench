@@ -26,7 +26,8 @@ internal partial class Testbench
         && BlockchainSynchronizing.TestReplayRejection(Testbench.Wallet, ref message)
         && BlockchainSynchronizing.TestTXPoolGating(Testbench.Wallet, ref message)
         && BlockchainSynchronizing.TestRollbackGating(Testbench.Wallet, ref message)
-        && BlockchainSynchronizing.TestConfirmReopen(Testbench.Wallet, ref message);
+        && BlockchainSynchronizing.TestConfirmReopen(Testbench.Wallet, ref message)
+        && BlockchainSynchronizing.TestPruneConfirmed(Testbench.Wallet, ref message);
     }
 
     class BlockchainSynchronizing : BlockchainTestbench
@@ -296,6 +297,43 @@ internal partial class Testbench
 
         return blockchain.IsSynchronized(ledger, "Own TX lifecycle, rollback of the fork's confirming block", 2, ref message)
           && blockchain.IsTXOwnedAtHeight("rollback of the fork's confirming block", tXSpend.Hash, 0, ref message);
+      }
+
+      internal static bool TestPruneConfirmed(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  12. Prune Confirmed: Delete a confirmed own TX after the stored window.");
+
+        const int COUNT_MAX_BLOCKS_STORED = COUNT_SEGMENTS + BITCOIN_REORG_MARGIN;
+        const int HEIGHT_CONFIRMED = 2;
+        const int HEIGHT_PRUNE = HEIGHT_CONFIRMED + COUNT_MAX_BLOCKS_STORED;
+
+        if (!TryCreateLedger(wallet, out Ledger ledger, ref message)
+          || !TryInsertCoinbasesUpTo(ledger, wallet, CreateIDAccount(1000, 1), HEIGHT_PRUNE, ref message))
+          return false;
+
+        List<Block> blocksLedger = ledger.GetBlocksInserted();
+        TXBToken tXSpend = (TXBToken)blocksLedger.Single(b => b.Header.Height == HEIGHT_CONFIRMED).TXs[1];
+
+        BlockchainSynchronizing blockchain = StartNode(CreateLiteDatabase(), int.MaxValue);
+        blockchain.InsertBlocks(blocksLedger.Where(b => b.Header.Height < HEIGHT_CONFIRMED).ToList());
+
+        if (!IsAccepted("Own TX lifecycle, spend submitted before its confirming block", () => blockchain.SubmitTX(tXSpend.TXRaw), ref message))
+          return false;
+
+        blockchain.InsertBlocks(blocksLedger.Where(b => b.Header.Height >= HEIGHT_CONFIRMED && b.Header.Height < HEIGHT_PRUNE).ToList());
+
+        string nameCaseKept = $"last block at height {HEIGHT_PRUNE - 1} before the prune";
+
+        if (!blockchain.IsSynchronized(ledger, $"Own TX lifecycle, {nameCaseKept}", HEIGHT_PRUNE - 1, ref message)
+          || !blockchain.IsTXOwnedAtHeight(nameCaseKept, tXSpend.Hash, HEIGHT_CONFIRMED, ref message))
+          return false;
+
+        blockchain.InsertBlocks(blocksLedger.Where(b => b.Header.Height == HEIGHT_PRUNE).ToList());
+
+        string nameCasePruned = $"block at height {HEIGHT_PRUNE} pruning the confirmed spend";
+
+        return blockchain.IsSynchronized(ledger, $"Own TX lifecycle, {nameCasePruned}", HEIGHT_PRUNE, ref message)
+          && blockchain.IsTXOwnedAtHeight(nameCasePruned, tXSpend.Hash, null, ref message);
       }
 
       bool IsTXOwnedAtHeight(string nameCase, byte[] hashTX, int? heightConfirmedExpected, ref string message)
