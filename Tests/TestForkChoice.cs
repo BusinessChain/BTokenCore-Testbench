@@ -76,17 +76,25 @@ internal partial class Testbench
         HeaderBToken headerRoot = CreateHeaderBToken(new byte[32]);
         Chain chainRoot = new(headerRoot);
 
-        foreach (Header header in CreateHeaders(headerRoot, COUNT_HEADERS_MAIN, nonceBranch: 0))
+        List<Header> headersMain = CreateHeaders(headerRoot, COUNT_HEADERS_MAIN, nonceBranch: 0);
+
+        foreach (Header header in headersMain)
           chainRoot.AppendHeader(header);
 
         chainRoot.HeaderTipBlockchain = chainRoot.HeaderTip.GetHeaderAncestor(countBlocksMain);
 
+        HashSet<Header> headersExpected = [headerRoot, .. headersMain];
+        HashSet<Header> headersHeldExpected = [headerRoot, .. headersMain.Take(countBlocksMain)];
         List<List<Header>> headersForks = [];
 
         for (int i = 0; i < forks.Count; i++)
         {
           Header headerTipTrunk = forks[i].IndexTrunk < 0 ? chainRoot.HeaderTip : headersForks[forks[i].IndexTrunk][^1];
-          headersForks.Add(InsertFork(chainRoot, headerTipTrunk.GetHeaderAncestor(forks[i].HeightFork), forks[i], nonceBranch: (uint)i + 1));
+          List<Header> headersFork = InsertFork(chainRoot, headerTipTrunk.GetHeaderAncestor(forks[i].HeightFork), forks[i], nonceBranch: (uint)i + 1);
+
+          headersForks.Add(headersFork);
+          headersExpected.UnionWith(headersFork);
+          headersHeldExpected.UnionWith(headersFork.Take(forks[i].CountBlocks));
         }
 
         int heightStrongest = -1;
@@ -126,6 +134,203 @@ internal partial class Testbench
           return false;
         }
 
+        if (!TryCheckSwitches(chainRoot, headerRoot, headersExpected, headersHeldExpected, Math.Max(countBlocksMain, heightStrongest), out string error))
+        {
+          message = $"Switch checks, {DescribePermutation(countBlocksMain, forks)}: {error}";
+          return false;
+        }
+
+        return true;
+      }
+
+      static bool TryCheckSwitches(Chain chainRoot, Header headerRoot, HashSet<Header> headersExpected, HashSet<Header> headersHeldExpected, int heightTipBlockchainExpected, out string error)
+      {
+        for (int countReorgs = 0; TryReorgToForkStrongest(chainRoot); countReorgs++)
+          if (countReorgs > COUNT_FORKS_MAX)
+          {
+            error = "the reorg to the strongest fork doesn't settle.";
+            return false;
+          }
+
+        if (!IsTreeConsistent(chainRoot, headerRoot, headersExpected, headersHeldExpected, out error))
+        {
+          error = $"after the reorg {error}";
+          return false;
+        }
+
+        if (chainRoot.HeaderTipBlockchain.Height != heightTipBlockchainExpected)
+        {
+          error = $"after the reorg the main chain holds blocks up to height {chainRoot.HeaderTipBlockchain.Height}, expected {heightTipBlockchainExpected}.";
+          return false;
+        }
+
+        while (chainRoot.HeaderTip != headerRoot)
+        {
+          Header headerCut = chainRoot.HeaderTip.GetHeaderAncestor((chainRoot.HeaderTip.Height + 1) / 2);
+
+          headersExpected.RemoveWhere(h => IsDescendantOf(h, headerCut));
+          headersHeldExpected.RemoveWhere(h => IsDescendantOf(h, headerCut));
+
+          chainRoot.CutOff(headerCut);
+          InsertBlocksQueued(chainRoot);
+
+          if (!IsTreeConsistent(chainRoot, headerRoot, headersExpected, headersHeldExpected, out error))
+          {
+            error = $"after CutOff at height {headerCut.Height} {error}";
+            return false;
+          }
+        }
+
+        return true;
+      }
+
+      static bool TryReorgToForkStrongest(Chain chainRoot)
+      {
+        InsertBlocksQueued(chainRoot);
+
+        if (chainRoot.FindForkStrongest() is not Chain chain || !chain.IsStrongerThan(chainRoot))
+          return false;
+
+        while (chain != chainRoot)
+        {
+          if (chain.ChainTrunk == chainRoot)
+            while (chainRoot.HeaderTipBlockchain.Height >= chain.HeaderRoot.Height)
+            {
+              Header header = chainRoot.HeaderTipBlockchain;
+              chainRoot.BlocksQueued.Add(header.Height, new Block(0) { Header = header });
+              chainRoot.HeaderTipBlockchain = header.HeaderPrevious;
+            }
+
+          chain.SwitchWithTrunk();
+          chain = chain.ChainTrunk;
+        }
+
+        InsertBlocksQueued(chainRoot);
+
+        return true;
+      }
+
+      static void InsertBlocksQueued(Chain chainRoot)
+      {
+        while (chainRoot.BlocksQueued.Remove(chainRoot.HeaderTipBlockchain.Height + 1, out Block block))
+          chainRoot.HeaderTipBlockchain = block.Header;
+      }
+
+      static bool IsDescendantOf(Header header, Header headerAncestor)
+      {
+        while (header.Height > headerAncestor.Height)
+          header = header.HeaderPrevious;
+
+        return header == headerAncestor;
+      }
+
+      static bool IsTreeConsistent(Chain chainRoot, Header headerRoot, HashSet<Header> headersExpected, HashSet<Header> headersHeldExpected, out string error)
+      {
+        List<Chain> chains = [];
+        chainRoot.FindInTree<Chain>(c =>
+        {
+          chains.Add(c);
+          return null;
+        });
+
+        Dictionary<Chain, List<Header>> headersByChain = [];
+
+        foreach (Chain chain in chains)
+        {
+          List<Header> headersChain = [chain.HeaderRoot];
+
+          while (headersChain[^1].HeaderNext is Header headerNext && headersChain.Count <= headersExpected.Count)
+          {
+            if (headerNext.HeaderPrevious != headersChain[^1] || headerNext.Height != headersChain[^1].Height + 1)
+            {
+              error = $"{DescribeChain(chain)} has broken links at height {headerNext.Height}.";
+              return false;
+            }
+
+            headersChain.Add(headerNext);
+          }
+
+          if (headersChain[^1] != chain.HeaderTip)
+          {
+            error = $"the headers of {DescribeChain(chain)} don't end at its HeaderTip.";
+            return false;
+          }
+
+          headersByChain.Add(chain, headersChain);
+        }
+
+        HashSet<Header> headersFound = [];
+        HashSet<Header> headersHeldFound = [];
+
+        foreach (Chain chain in chains)
+        {
+          List<Header> headersChain = headersByChain[chain];
+
+          bool isTrunkCorrect = chain == chainRoot
+            ? chain.ChainTrunk == null && chain.HeaderRoot == headerRoot
+            : chain.ChainTrunk != null && headersByChain.TryGetValue(chain.ChainTrunk, out List<Header> headersTrunk) && headersTrunk.Contains(chain.HeaderRoot.HeaderPrevious);
+
+          if (!isTrunkCorrect)
+          {
+            error = $"{DescribeChain(chain)} doesn't branch from its ChainTrunk.";
+            return false;
+          }
+
+          foreach (Header header in headersChain)
+            if (!headersFound.Add(header))
+            {
+              error = $"the header at height {header.Height} lies in more than one chain.";
+              return false;
+            }
+
+          foreach (KeyValuePair<int, Block> blockQueued in chain.BlocksQueued)
+          {
+            if (blockQueued.Key != blockQueued.Value.Header.Height || !headersChain.Contains(blockQueued.Value.Header))
+            {
+              error = $"{DescribeChain(chain)} queues a block at height {blockQueued.Key} of another chain.";
+              return false;
+            }
+
+            headersHeldFound.Add(blockQueued.Value.Header);
+          }
+
+          if (chain == chainRoot)
+          {
+            int indexTipBlockchain = headersChain.IndexOf(chain.HeaderTipBlockchain);
+
+            if (indexTipBlockchain < 0)
+            {
+              error = "HeaderTipBlockchain of the main chain lies outside the main chain.";
+              return false;
+            }
+
+            headersHeldFound.UnionWith(headersChain.Take(indexTipBlockchain + 1));
+          }
+          else
+          {
+            Header headerTipBlockchainExpected = headersChain.TakeWhile(h => chain.BlocksQueued.ContainsKey(h.Height)).LastOrDefault();
+
+            if (chain.HeaderTipBlockchain != headerTipBlockchainExpected)
+            {
+              error = $"HeaderTipBlockchain of {DescribeChain(chain)} is at height {chain.HeaderTipBlockchain?.Height}, expected {headerTipBlockchainExpected?.Height}.";
+              return false;
+            }
+          }
+        }
+
+        if (!headersFound.SetEquals(headersExpected))
+        {
+          error = $"the header tree holds {headersFound.Count} headers, expected {headersExpected.Count}.";
+          return false;
+        }
+
+        if (!headersHeldFound.SetEquals(headersHeldExpected))
+        {
+          error = $"the header tree holds {headersHeldFound.Count} blocks, expected {headersHeldExpected.Count}.";
+          return false;
+        }
+
+        error = "";
         return true;
       }
 
