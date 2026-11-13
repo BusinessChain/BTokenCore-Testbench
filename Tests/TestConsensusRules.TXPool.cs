@@ -192,6 +192,75 @@ internal partial class Testbench
           && AreTXsRankedCorrect("pool after evicting the worst bundle of a single TX", pool.GetTXsRanked(), [tXD1, tXE1, tXE2Paying, tXC1], ref message);
       }
 
+      internal static bool TestBlockInsertion(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  26. Block Insertion: Drop confirmed, expired, conflicting, swept and over-limit TXs.");
+
+        const long BALANCE_WALLET_SWEPT = 100000;
+
+        Wallet walletB = CreateWallet();
+        Wallet walletC = CreateWallet();
+        Wallet walletD = CreateWallet();
+        Wallet walletE = CreateWallet();
+
+        int indexSegmentE = GetIndexSegment(walletE.Hash160PKeyPublic);
+        HashSet<int> indicesSegmentWallets = [.. new[] { wallet, walletB, walletC, walletD, walletE }.Select(w => GetIndexSegment(w.Hash160PKeyPublic))];
+        int indexSegmentCreation = Enumerable.Range(100, COUNT_SEGMENTS)
+          .Select(i => (indexSegmentE + i) % COUNT_SEGMENTS)
+          .First(i => !indicesSegmentWallets.Contains(i));
+
+        byte[] iDMiner = CreateIDAccount(indexSegmentCreation, 0);
+        byte[] iDCreatedPending = CreateIDAccount(indexSegmentCreation, 200);
+        byte[] iDCreatedByBlock = CreateIDAccount(indexSegmentCreation, 201);
+
+        Ledger ledger = new(heightRoot: (indexSegmentE - 3 + COUNT_SEGMENTS) % COUNT_SEGMENTS);
+
+        TXBToken tXCoinbaseAccounts = ledger.CreateCoinbase(wallet, iDMiner, 0, [
+          new TXOutputP2PKH(BALANCE_WALLET, wallet.Hash160PKeyPublic),
+          new TXOutputP2PKH(BALANCE_WALLET, walletB.Hash160PKeyPublic),
+          new TXOutputP2PKH(BALANCE_WALLET, walletC.Hash160PKeyPublic),
+          new TXOutputP2PKH(BALANCE_WALLET, walletD.Hash160PKeyPublic),
+          new TXOutputP2PKH(BALANCE_WALLET_SWEPT, walletE.Hash160PKeyPublic),
+          .. Enumerable.Range(1, 98).Select(i => new TXOutputP2PKH(1, CreateIDAccount(indexSegmentCreation, (byte)i)))]);
+
+        if (!ledger.TryInsertBlock("coinbase creating five wallet accounts and 99 accounts in one segment", [tXCoinbaseAccounts], isValidExpected: true, null, ref message))
+          return false;
+
+        int heightTip = ledger.GetHeightTip();
+
+        TXBToken tXA1 = ledger.CreateTXSpend(wallet, walletB.Hash160PKeyPublic, VALUE_SPEND, t => { });
+        TXBToken tXA2 = ledger.CreateTXSpend(wallet, walletB.Hash160PKeyPublic, VALUE_SPEND, t => t.Nonce += 1);
+        TXBToken tXB1 = ledger.CreateTXSpend(walletB, wallet.Hash160PKeyPublic, VALUE_SPEND, t => AddAnchor(t, heightTip));
+        TXBToken tXB2 = ledger.CreateTXSpend(walletB, wallet.Hash160PKeyPublic, VALUE_SPEND, t => t.Nonce += 1);
+        TXBToken tXC1 = ledger.CreateTXSpend(walletC, wallet.Hash160PKeyPublic, VALUE_SPEND, t => { });
+        TXBToken tXC2 = ledger.CreateTXSpend(walletC, wallet.Hash160PKeyPublic, VALUE_SPEND, t => t.Nonce += 1);
+        TXBToken tXC1Conflicting = ledger.CreateTXSpend(walletC, walletD.Hash160PKeyPublic, VALUE_SPEND, t => { });
+        TXBToken tXD1 = ledger.CreateTXSpend(walletD, iDCreatedPending, VALUE_SPEND, t => { });
+        TXBToken tXE1 = ledger.CreateTXSpend(walletE, wallet.Hash160PKeyPublic, BALANCE_WALLET_SWEPT - FEE, t => { });
+
+        PoolTXBToken pool = ledger.CreateTXPool(COUNT_BYTES_MAX_POOL);
+
+        foreach ((string nameCase, TXBToken tX) in new List<(string, TXBToken)>
+        {
+          ("spend later confirmed", tXA1),
+          ("spend following the confirmed spend", tXA2),
+          ("anchor TX expiring with the next block", tXB1),
+          ("spend following the expiring anchor TX", tXB2),
+          ("spend later replaced by a conflicting spend", tXC1),
+          ("spend following the replaced spend", tXC2),
+          ("spend creating the last account of a segment", tXD1),
+          ("spend of the whole Balance before a sweep", tXE1)
+        })
+          if (!IsAdmitted(nameCase, pool, tX, true, ref message))
+            return false;
+
+        TXBToken tXCoinbaseCreating = ledger.CreateCoinbase(wallet, iDMiner, tXA1.Fee + tXC1Conflicting.Fee, new TXOutputP2PKH(1000, iDCreatedByBlock));
+
+        return ledger.TryInsertBlock("block confirming a spend, replacing a spend and creating an account", [tXCoinbaseCreating, tXA1, tXC1Conflicting], isValidExpected: true, null, ref message)
+          && AreTXsRankedCorrect("pool after RemoveTXs", pool.GetTXsRanked(), [tXA2], ref message)
+          && ledger.TryInsertBlockFromPool("block of the TX left in the pool", pool, wallet, iDMiner, 1, ref message);
+      }
+
       static bool IsFeePerByteMinCorrect(string nameCase, PoolTXBToken pool, double feePerByteMinExpected, ref string message)
       {
         double feePerByteMin = pool.GetFeePerByteMin();
@@ -263,9 +332,13 @@ internal partial class Testbench
 
       partial class Ledger
       {
+        PoolTXBToken TXPool;
+
         internal PoolTXBToken CreateTXPool(long countBytesMaxPool)
         {
-          return new PoolTXBToken(Accounts, countBytesMaxPool);
+          TXPool = new PoolTXBToken(Accounts, countBytesMaxPool);
+
+          return TXPool;
         }
 
         internal bool TryInsertBlockFromPool(string nameCase, PoolTXBToken pool, Wallet wallet, byte[] iDMiner, int countTXsExpected, ref string message)

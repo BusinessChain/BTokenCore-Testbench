@@ -44,7 +44,8 @@ internal partial class Testbench
         && BlockchainAccounts.TestSpendAdmission(Testbench.Wallet, ref message)
         && BlockchainAccounts.TestCreationAdmission(Testbench.Wallet, ref message)
         && BlockchainAccounts.TestBundleRanking(Testbench.Wallet, ref message)
-        && BlockchainAccounts.TestPoolEviction(Testbench.Wallet, ref message);
+        && BlockchainAccounts.TestPoolEviction(Testbench.Wallet, ref message)
+        && BlockchainAccounts.TestBlockInsertion(Testbench.Wallet, ref message);
     }
 
     const int SIZE_BLOCK_MAX = 1 << 20;
@@ -537,6 +538,8 @@ internal partial class Testbench
           HeightTip = height;
           HashTip = blockParsed.Header.Hash;
 
+          TXPool?.RemoveTXs(blockParsed);
+
           return true;
         }
 
@@ -552,6 +555,8 @@ internal partial class Testbench
           AccountsReference = accountsBefore;
           HeightTip = header.Height - 1;
           HashTip = header.HashPrevious;
+
+          TXPool?.ReturnTXs(block);
 
           string nameCaseRollBack = $"{nameCase}, after the rollback of the block at height {header.Height}";
 
