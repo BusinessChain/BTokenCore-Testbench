@@ -107,6 +107,10 @@ internal partial class Testbench
         {
           result = payloadExpected == null ? "" : $"{nameCase}: rejected the valid payload: {exception.Message}";
         }
+        catch (Exception exception)
+        {
+          result = $"{nameCase}: threw {exception.GetType().Name}: {exception.Message}";
+        }
 
         socketReceiving.Dispose();
         clientSending.Dispose();
@@ -167,13 +171,18 @@ internal partial class Testbench
           || !ledger.TryInsertBlock("spend from an unknown account", [ledger.CreateCoinbase(wallet, iDMiner, FEE), tXSpend], isValidExpected: false, b => ((TXBToken)b.TXs[1]).IDAccountSource = iDUnknown, ref message)
           || !ledger.TryInsertBlock("block with wrong HashAccounts", [ledger.CreateCoinbase(wallet, iDMiner, FEE), tXSpend], isValidExpected: false, b => ((HeaderBToken)b.Header).HashAccounts = SHA256.HashData(((HeaderBToken)b.Header).HashAccounts), ref message)
           || !ledger.TryInsertBlock("valid spend", [ledger.CreateCoinbase(wallet, iDMiner, FEE), tXSpend], isValidExpected: true, null, ref message)
+          || !ledger.TryInsertBlock("TX paying only a Fee", [ledger.CreateCoinbase(wallet, iDMiner, FEE), ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => t.TXOutputs.Clear())], isValidExpected: true, null, ref message)
           || !ledger.TryInsertBlock("replayed spend", [ledger.CreateCoinbase(wallet, iDMiner, FEE), tXSpend], isValidExpected: false, null, ref message))
           return false;
 
         TXBToken tXSpendBalance = ledger.CreateTXSpend(wallet, iDReceiver, ledger.GetBalanceNext(wallet.Hash160PKeyPublic) - FEE, t => { });
-        TXBToken tXSpendAfterEmptied = ledger.CreateTXSpend(wallet, iDReceiver, 1, t => t.Nonce += 1);
+        TXBToken tXSpendAfterEmptied = ledger.CreateTXSpend(wallet, iDReceiver, 0, t =>
+        {
+          t.Nonce += 1;
+          t.Fee = 0;
+        });
 
-        return ledger.TryInsertBlock("spend from an account spent to zero in the same block", [ledger.CreateCoinbase(wallet, iDMiner, 2 * FEE), tXSpendBalance, tXSpendAfterEmptied], isValidExpected: false, null, ref message)
+        return ledger.TryInsertBlock("spend of nothing from an account spent to zero in the same block", [ledger.CreateCoinbase(wallet, iDMiner, FEE), tXSpendBalance, tXSpendAfterEmptied], isValidExpected: false, null, ref message)
           && ledger.TryInsertBlock("spend of the whole Balance", [ledger.CreateCoinbase(wallet, iDMiner, FEE), tXSpendBalance], isValidExpected: true, null, ref message);
       }
 
@@ -189,11 +198,13 @@ internal partial class Testbench
         byte[] iDReceiver = CreateIDAccount(1001, 2);
         byte[] iDRentPaying = CreateIDAccount(indexSegmentRent, 3);
         byte[] iDRentSwept = CreateIDAccount(indexSegmentRent, 4);
+        byte[] iDRentSweptExactly = CreateIDAccount(indexSegmentRent, 5);
 
         TXBToken tXCoinbaseRentAccounts = ledger.CreateCoinbase(wallet, wallet.Hash160PKeyPublic, 0);
-        ((TXOutputP2PKH)tXCoinbaseRentAccounts.TXOutputs[0]).Value -= 120;
+        ((TXOutputP2PKH)tXCoinbaseRentAccounts.TXOutputs[0]).Value -= 100 + 20 + RENT_SWEEP;
         tXCoinbaseRentAccounts.TXOutputs.Add(new TXOutputP2PKH(100, iDRentPaying));
         tXCoinbaseRentAccounts.TXOutputs.Add(new TXOutputP2PKH(20, iDRentSwept));
+        tXCoinbaseRentAccounts.TXOutputs.Add(new TXOutputP2PKH(RENT_SWEEP, iDRentSweptExactly));
         tXCoinbaseRentAccounts.SerializeUnsigned();
 
         if (!ledger.TryInsertBlock("coinbase paying one more than the block reward", [ledger.CreateCoinbase(wallet, iDMiner, 1)], isValidExpected: false, null, ref message)
@@ -214,9 +225,9 @@ internal partial class Testbench
 
         long rent = ledger.GetRentNext();
 
-        if (rent != 56)
+        if (rent != 92)
         {
-          message = $"Account rules, rent of the sweep of segment {indexSegmentRent}: the reference computes {rent}, expected 56.";
+          message = $"Account rules, rent of the sweep of segment {indexSegmentRent}: the reference computes {rent}, expected 92.";
           return false;
         }
 
@@ -225,9 +236,12 @@ internal partial class Testbench
           return false;
 
         Ledger ledgerHalving = new(heightRoot: PERIOD_HALVING - 1);
+        Ledger ledgerHalvingLast = new(heightRoot: 64 * PERIOD_HALVING - 1);
 
         return ledgerHalving.TryInsertBlock("coinbase paying the block reward before the halving", [ledgerHalving.CreateCoinbase(wallet, iDMiner, BLOCK_REWARD_INITIAL / 2)], isValidExpected: false, null, ref message)
-          && ledgerHalving.TryInsertBlock("coinbase paying the halved block reward", [ledgerHalving.CreateCoinbase(wallet, iDMiner, 0)], isValidExpected: true, null, ref message);
+          && ledgerHalving.TryInsertBlock("coinbase paying the halved block reward", [ledgerHalving.CreateCoinbase(wallet, iDMiner, 0)], isValidExpected: true, null, ref message)
+          && ledgerHalvingLast.TryInsertBlock("coinbase paying the initial block reward after 64 halvings", [ledgerHalvingLast.CreateCoinbase(wallet, iDMiner, BLOCK_REWARD_INITIAL)], isValidExpected: false, null, ref message)
+          && ledgerHalvingLast.TryInsertBlock("coinbase paying no block reward after 64 halvings", [ledgerHalvingLast.CreateCoinbase(wallet, iDMiner, 0)], isValidExpected: true, null, ref message);
       }
 
       internal static bool TestBlockLimits(Wallet wallet, ref string message)
@@ -300,6 +314,7 @@ internal partial class Testbench
         LiteDatabase LiteDatabase = new(new MemoryStream(), new BsonMapper { IncludeFields = true, IncludeNonPublic = true });
         DatabaseAccounts Accounts = new();
         Dictionary<byte[], Account> AccountsReference = new(new EqualityComparerByteArray());
+        HashSet<byte[]> IDsAccountSeen = new(new EqualityComparerByteArray());
         int HeightTip;
 
 
@@ -384,6 +399,24 @@ internal partial class Testbench
           {
             message = $"Account rules, {nameCase}: accepted the invalid block at height {height}.";
             return false;
+          }
+
+          IDsAccountSeen.UnionWith(accountsAfter.Keys);
+
+          foreach (byte[] iDAccount in IDsAccountSeen)
+          {
+            Account accountStored = Accounts.LoadAccount(iDAccount, heightAccountCreated: 0);
+            Account accountExpected = accountsAfter.GetValueOrDefault(iDAccount) ?? new Account();
+
+            if (accountStored.HeightAccountCreated != accountExpected.HeightAccountCreated
+              || accountStored.Nonce != accountExpected.Nonce
+              || accountStored.Balance != accountExpected.Balance)
+            {
+              message = $"Account rules, {nameCase}: after the block at height {height} account {iDAccount.ToHexString()} holds " +
+                $"HeightAccountCreated {accountStored.HeightAccountCreated}, Nonce {accountStored.Nonce}, Balance {accountStored.Balance}, " +
+                $"expected {accountExpected.HeightAccountCreated}, {accountExpected.Nonce}, {accountExpected.Balance}.";
+              return false;
+            }
           }
 
           AccountsReference = accountsAfter;
@@ -474,26 +507,42 @@ internal partial class Testbench
     const uint NBITS_MAINNET = 0x17096a20;
     const uint NBITS_DIFFICULTY_1 = 0x1d00ffff;
     const int COUNT_HEADERS_RETARGET = 2016;
+    const uint SECONDS_HOUR = 60 * 60;
+    const uint NBITS_EASY = 0x1f00ffff;
     const int INDEX_UNIX_TIME = 68;
+    const int INDEX_NBITS = 72;
     const int INDEX_NONCE = 76;
 
     bool Test_HeaderBitcoinRules(ref string message)
     {
       Console.WriteLine("  3. Reject HeaderBitcoin with premature timestamp, failed proof of work, wrong HashPrevious, time below median or wrong NBits.");
 
-      byte[] headerRawNonceChanged = Convert.FromHexString(HEADER_BITCOIN_737857);
-      headerRawNonceChanged[INDEX_NONCE] ^= 0x01;
+      uint unixTimeNow = (uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
-      byte[] headerRawPremature = Convert.FromHexString(HEADER_BITCOIN_737857);
-      BitConverter.GetBytes((uint)DateTimeOffset.UtcNow.AddHours(3).ToUnixTimeSeconds()).CopyTo(headerRawPremature, INDEX_UNIX_TIME);
+      byte[] headerRawMeetingTarget = MineHeaderBitcoin(unixTimeNow - SECONDS_HOUR, (hash, target) => hash <= target);
+      byte[] headerRawAboveTarget = MineHeaderBitcoin(unixTimeNow - SECONDS_HOUR, (hash, target) => hash > target && hash <= 2 * target);
+      byte[] headerRawAheadInsideLimit = MineHeaderBitcoin(unixTimeNow + 2 * SECONDS_HOUR - 60, (hash, target) => hash <= target);
+      byte[] headerRawAheadBeyondLimit = MineHeaderBitcoin(unixTimeNow + 2 * SECONDS_HOUR + 60, (hash, target) => hash <= target);
 
-      HeaderBitcoin headerTip = CreateChainBitcoin(11, SECONDS_BLOCK, NBITS_MAINNET);
-      uint unixTimeMedian = UNIX_TIME_START + 5 * SECONDS_BLOCK;
+      HeaderBitcoin headerTip;
 
-      AppendHeaderBitcoin(headerTip, unixTimeMedian, NBITS_MAINNET);
+      try
+      {
+        headerTip = CreateChainBitcoin(20, i => i == 8 ? UNIX_TIME_START + 30 * SECONDS_BLOCK : UNIX_TIME_START + (uint)i * SECONDS_BLOCK, NBITS_MAINNET);
+      }
+      catch (ProtocolException exception)
+      {
+        message = $"Chain of HeaderBitcoin for the median time past: rejected a valid header: {exception.Message}";
+        return false;
+      }
 
-      return IsRejected("HeaderBitcoin with Nonce changed", () => ParseHeaderBitcoin(headerRawNonceChanged), ref message)
-        && IsRejected("HeaderBitcoin with timestamp three hours ahead", () => ParseHeaderBitcoin(headerRawPremature), ref message)
+      uint unixTimeMedian = UNIX_TIME_START + 14 * SECONDS_BLOCK;
+
+      return IsAccepted("HeaderBitcoin with Hash at most its target", () => ParseHeaderBitcoin(headerRawMeetingTarget), ref message)
+        && IsRejected("HeaderBitcoin with Hash above its target", () => ParseHeaderBitcoin(headerRawAboveTarget), ref message)
+        && IsAccepted("HeaderBitcoin with timestamp one minute inside two hours ahead", () => ParseHeaderBitcoin(headerRawAheadInsideLimit), ref message)
+        && IsRejected("HeaderBitcoin with timestamp one minute beyond two hours ahead", () => ParseHeaderBitcoin(headerRawAheadBeyondLimit), ref message)
+        && IsAccepted("HeaderBitcoin with timestamp at median time past", () => AppendHeaderBitcoin(headerTip, unixTimeMedian, NBITS_MAINNET), ref message)
         && IsRejected("HeaderBitcoin with wrong HashPrevious", () =>
           CreateHeaderBitcoin(SHA256.HashData(headerTip.Hash), headerTip.UnixTimeSeconds + SECONDS_BLOCK, NBITS_MAINNET).AppendToHeader(headerTip), ref message)
         && IsRejected("HeaderBitcoin with timestamp below median time past", () => AppendHeaderBitcoin(headerTip, unixTimeMedian - 1, NBITS_MAINNET), ref message)
@@ -501,7 +550,25 @@ internal partial class Testbench
         && IsRetargetCorrect(NBITS_MAINNET, SECONDS_TWO_WEEKS, ref message)
         && IsRetargetCorrect(NBITS_MAINNET, SECONDS_TWO_WEEKS / 2, ref message)
         && IsRetargetCorrect(NBITS_MAINNET, 5 * SECONDS_TWO_WEEKS, ref message)
+        && IsRetargetCorrect(NBITS_MAINNET, SECONDS_TWO_WEEKS / 10, ref message)
         && IsRetargetCorrect(NBITS_DIFFICULTY_1, 2 * SECONDS_TWO_WEEKS, ref message);
+    }
+
+    static byte[] MineHeaderBitcoin(uint unixTimeSeconds, Func<BigInteger, BigInteger, bool> isHashWanted)
+    {
+      byte[] headerRaw = Convert.FromHexString(HEADER_BITCOIN_737857);
+      BitConverter.GetBytes(unixTimeSeconds).CopyTo(headerRaw, INDEX_UNIX_TIME);
+      BitConverter.GetBytes(NBITS_EASY).CopyTo(headerRaw, INDEX_NBITS);
+
+      BigInteger target = DecodeCompact(NBITS_EASY);
+
+      for (uint nonce = 0; ; nonce++)
+      {
+        BitConverter.GetBytes(nonce).CopyTo(headerRaw, INDEX_NONCE);
+
+        if (isHashWanted(new BigInteger(Crypto.ComputeHash256(headerRaw), isUnsigned: true), target))
+          return headerRaw;
+      }
     }
 
     static void ParseHeaderBitcoin(byte[] headerRaw)
@@ -534,22 +601,44 @@ internal partial class Testbench
       return header;
     }
 
-    static HeaderBitcoin CreateChainBitcoin(int countHeaders, uint secondsBetweenHeaders, uint nBits)
+    static HeaderBitcoin CreateChainBitcoin(int countHeaders, Func<int, uint> getUnixTimeSeconds, uint nBits)
     {
-      HeaderBitcoin header = CreateHeaderBitcoin(new byte[32], UNIX_TIME_START, nBits);
+      HeaderBitcoin header = CreateHeaderBitcoin(new byte[32], getUnixTimeSeconds(0), nBits);
 
       for (int i = 1; i < countHeaders; i++)
-        header = AppendHeaderBitcoin(header, header.UnixTimeSeconds + secondsBetweenHeaders, nBits);
+      {
+        if (i % COUNT_HEADERS_RETARGET == 0)
+          nBits = ComputeNBitsRetarget(nBits, header.UnixTimeSeconds - ((HeaderBitcoin)header.GetHeaderAncestor(i - COUNT_HEADERS_RETARGET)).UnixTimeSeconds);
+
+        header = AppendHeaderBitcoin(header, getUnixTimeSeconds(i), nBits);
+      }
 
       return header;
     }
 
     static bool IsRetargetCorrect(uint nBits, uint secondsTimespan, ref string message)
     {
-      HeaderBitcoin headerTip = CreateChainBitcoin(COUNT_HEADERS_RETARGET - 1, secondsTimespan / (COUNT_HEADERS_RETARGET - 1), nBits);
-      headerTip = AppendHeaderBitcoin(headerTip, UNIX_TIME_START + secondsTimespan, nBits);
+      uint secondsBetweenHeaders = secondsTimespan / (COUNT_HEADERS_RETARGET - 1);
+      uint unixTimeIntervalSecond = UNIX_TIME_START + COUNT_HEADERS_RETARGET * SECONDS_BLOCK;
 
-      uint nBitsExpected = ComputeNBitsRetarget(nBits, secondsTimespan);
+      HeaderBitcoin headerTip;
+
+      try
+      {
+        headerTip = CreateChainBitcoin(
+          2 * COUNT_HEADERS_RETARGET,
+          i => i < COUNT_HEADERS_RETARGET ? UNIX_TIME_START + (uint)i * SECONDS_BLOCK
+            : i == 2 * COUNT_HEADERS_RETARGET - 1 ? unixTimeIntervalSecond + secondsTimespan
+            : unixTimeIntervalSecond + (uint)(i - COUNT_HEADERS_RETARGET) * secondsBetweenHeaders,
+          nBits);
+      }
+      catch (ProtocolException exception)
+      {
+        message = $"Chain of HeaderBitcoin for a retarget of NBits {nBits:x8} after a timespan of {secondsTimespan} seconds: rejected a valid header: {exception.Message}";
+        return false;
+      }
+
+      uint nBitsExpected = ComputeNBitsRetarget(headerTip.NBits, secondsTimespan);
       string nameRule = $"Retarget of NBits {nBits:x8} after a timespan of {secondsTimespan} seconds to {nBitsExpected:x8}";
 
       try
@@ -603,14 +692,6 @@ internal partial class Testbench
     {
       Console.WriteLine("  2. Reject TXs with invalid Fee, Value, script, signature or count of outputs, and check IsLockTimeValid.");
 
-      ParseTXRaw(CreateTXRawSigned(wallet, t =>
-      {
-        t.Fee = SUPPLY_MAX;
-        t.TXOutputs.Clear();
-      }));
-
-      ParseTXRaw(CreateTXRawSigned(wallet, t => t.Fee = SUPPLY_MAX - VALUE_OUTPUT));
-
       byte[] tXRawSignatureFlipped = CreateTXRawSigned(wallet, t => { });
       tXRawSignatureFlipped[^1] ^= 0x01;
 
@@ -622,7 +703,20 @@ internal partial class Testbench
         0xff,
         .. BitConverter.GetBytes((ulong)int.MaxValue + 1)];
 
-      return IsRejected("TX with Fee minus one", () => ParseTXRaw(CreateTXRawSigned(wallet, t => t.Fee = -1)), ref message)
+      return IsAccepted("TX with Fee of SUPPLY_MAX and no outputs", () => ParseTXRaw(CreateTXRawSigned(wallet, t =>
+          {
+            t.Fee = SUPPLY_MAX;
+            t.TXOutputs.Clear();
+          })), ref message)
+        && IsAccepted("TX with Fee and Values summing to SUPPLY_MAX", () => ParseTXRaw(CreateTXRawSigned(wallet, t => t.Fee = SUPPLY_MAX - VALUE_OUTPUT)), ref message)
+        && IsAccepted("TX with three Values and Fee summing to SUPPLY_MAX", () => ParseTXRaw(CreateTXRawSigned(wallet, t =>
+          {
+            t.Fee = 0;
+            t.TXOutputs[0] = new TXOutputP2PKH(SUPPLY_MAX / 3, wallet.Hash160PKeyPublic);
+            t.TXOutputs.Add(new TXOutputP2PKH(SUPPLY_MAX / 3, wallet.Hash160PKeyPublic));
+            t.TXOutputs.Add(new TXOutputP2PKH(SUPPLY_MAX / 3, wallet.Hash160PKeyPublic));
+          })), ref message)
+        && IsRejected("TX with Fee minus one", () => ParseTXRaw(CreateTXRawSigned(wallet, t => t.Fee = -1)), ref message)
         && IsRejected("TX with Fee above SUPPLY_MAX", () => ParseTXRaw(CreateTXRawSigned(wallet, t =>
           {
             t.Fee = SUPPLY_MAX + 1;
@@ -634,6 +728,13 @@ internal partial class Testbench
           {
             t.TXOutputs[0] = new TXOutputP2PKH(SUPPLY_MAX / 2 + 1, wallet.Hash160PKeyPublic);
             t.TXOutputs.Add(new TXOutputP2PKH(SUPPLY_MAX / 2 + 1, wallet.Hash160PKeyPublic));
+          })), ref message)
+        && IsRejected("TX with three Values summing above SUPPLY_MAX", () => ParseTXRaw(CreateTXRawSigned(wallet, t =>
+          {
+            t.Fee = 0;
+            t.TXOutputs[0] = new TXOutputP2PKH(SUPPLY_MAX / 3 + 1, wallet.Hash160PKeyPublic);
+            t.TXOutputs.Add(new TXOutputP2PKH(SUPPLY_MAX / 3 + 1, wallet.Hash160PKeyPublic));
+            t.TXOutputs.Add(new TXOutputP2PKH(SUPPLY_MAX / 3 + 1, wallet.Hash160PKeyPublic));
           })), ref message)
         && IsRejected("TX with unknown output script", () => ParseTXRaw(CreateTXRawSigned(wallet, t => t.TXOutputs.Add(new TXOutput { Script = [0x6a, 0x01, 0x02] }))), ref message)
         && IsRejected("TX with flipped signature byte", () => ParseTXRaw(tXRawSignatureFlipped), ref message)
@@ -685,7 +786,12 @@ internal partial class Testbench
       Console.WriteLine("  1. Reject blocks with unexpected header, without TXs, with a TX twice, mutated or with wrong MerkleRoot.");
 
       BlockchainBToken.TXBToken tXCoinbase = CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic);
+      tXCoinbase.Nonce = 0;
       tXCoinbase.SerializeUnsigned();
+
+      BlockchainBToken.TXBToken tXDuplicatingCoinbase = CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic);
+      tXDuplicatingCoinbase.Nonce = 0;
+      tXDuplicatingCoinbase.Serialize(wallet);
 
       BlockchainBToken.TXBToken tX = CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic);
       tX.Serialize(wallet);
@@ -731,10 +837,13 @@ internal partial class Testbench
       blockMerkleRootWrong.Header.MerkleRoot = SHA256.HashData(blockMerkleRootWrong.Header.MerkleRoot);
       blockMerkleRootWrong.Header.ComputeHash();
 
-      return IsRejected("Block with unexpected Hash", () => ParseBlockBuffer(bufferBlock, headerHashOther), ref message)
+      return IsAccepted("Block of coinbase and one TX", () => ParseBlockBuffer(bufferBlock, headerExpected), ref message)
+        && IsAccepted("Block of coinbase and two TXs", () => ParseBlockSerialized(CreateBlock([tXCoinbase, tX, tXOther])), ref message)
+        && IsRejected("Block with unexpected Hash", () => ParseBlockBuffer(bufferBlock, headerHashOther), ref message)
         && IsRejected("Block with unexpected HashPrevious", () => ParseBlockBuffer(bufferBlock, headerHashPreviousOther), ref message)
         && IsRejected("Block without TXs", () => ParseBlockBuffer([.. block.Header.Serialize(), 0x00], headerExpected), ref message)
         && IsRejected("Block with a TX twice", () => ParseBlockSerialized(CreateBlock([tXCoinbase, tX, tX])), ref message)
+        && IsRejected("Block with a TX duplicating the coinbase", () => ParseBlockSerialized(CreateBlock([tXCoinbase, tXDuplicatingCoinbase])), ref message)
         && IsRejected("Mutated block repeating its last TX", () => ParseBlockSerialized(blockMutated), ref message)
         && IsRejected("Block with wrong MerkleRoot", () => ParseBlockSerialized(blockMerkleRootWrong), ref message);
     }
@@ -757,6 +866,21 @@ internal partial class Testbench
 
       message = $"{nameRule}: accepted the invalid case.";
       return false;
+    }
+
+    static bool IsAccepted(string nameRule, Action action, ref string message)
+    {
+      try
+      {
+        action();
+      }
+      catch (Exception exception)
+      {
+        message = $"{nameRule}: rejected the valid case with {exception.GetType().Name}: {exception.Message}";
+        return false;
+      }
+
+      return true;
     }
   }
 }

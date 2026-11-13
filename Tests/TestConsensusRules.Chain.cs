@@ -65,9 +65,15 @@ internal partial class Testbench
 
           Header headerRootNew = headersMain[height - 1];
 
+          foreach (Header header in headersMain.Where(h => h.Height > countBlocksMain + 1))
+          {
+            chainRoot.BlocksQueued.Add(header.Height, new Block(0) { Header = header });
+            headersHeldExpected.Add(header);
+          }
+
           RemoveForksDeep(forks, headersForks, height, headersExpected, headersHeldExpected);
           headersExpected.RemoveWhere(h => h.Height < height && IsDescendantOf(headerRootNew, h));
-          headersHeldExpected.RemoveWhere(h => h == headerRoot || headersMain.Contains(h));
+          headersHeldExpected.RemoveWhere(h => h == headerRoot || headersMain.Contains(h) && (h.Height <= countBlocksMain || h.Height <= height));
           headersHeldExpected.Add(headerRootNew);
 
           chainRoot.ReRoot(headerRootNew);
@@ -165,12 +171,14 @@ internal partial class Testbench
         Header placeholderTipMain = CreatePlaceholder(SHA256.HashData([10]), headersMain[^1].Hash, headersParent[0]);
         Header placeholderTipFork = CreatePlaceholder(SHA256.HashData([11]), headersFork[^1].Hash, headersParent[1]);
         Header placeholderKnown = CreatePlaceholder(headersMain[1].Hash, headersMain[1].HashPrevious, headersParent[2]);
+        Header placeholderKnownAgain = CreatePlaceholder(headersMain[1].Hash, headersMain[1].HashPrevious, headersParent[6]);
         Header placeholderConflicting = CreatePlaceholder(headersMain[2].Hash, SHA256.HashData([12]), headersParent[3]);
         Header placeholderRootFork = CreatePlaceholder(SHA256.HashData([13]), headersMain[2].Hash, headersParent[5]);
 
         chainRoot.InsertHeaderPlaceholder(placeholderTipMain, 0);
         chainRoot.InsertHeaderPlaceholder(placeholderTipFork, 0);
         chainRoot.InsertHeaderPlaceholder(placeholderKnown, 0);
+        chainRoot.InsertHeaderPlaceholder(placeholderKnownAgain, 0);
         chainRoot.InsertHeaderPlaceholder(placeholderConflicting, 0);
         chainRoot.InsertHeaderPlaceholder(placeholderRootFork, 0);
 
@@ -185,6 +193,7 @@ internal partial class Testbench
         if (!IsPlaceholderFound("new placeholder at the tip of the main chain", chainRoot, headersParent[0], placeholderTipMain, ref message)
           || !IsPlaceholderFound("new placeholder at the tip of a fork", chainRoot, headersParent[1], placeholderTipFork, ref message)
           || !IsPlaceholderFound("placeholder of a known header", chainRoot, headersParent[2], headersMain[1], ref message)
+          || !IsPlaceholderFound("second placeholder of a header already anchored", chainRoot, headersParent[6], null, ref message)
           || !IsPlaceholderFound("placeholder of a known hash with other HashPrevious", chainRoot, headersParent[3], null, ref message)
           || !IsPlaceholderFound("parent header without placeholder", chainRoot, headersParent[4], null, ref message)
           || !IsPlaceholderFound("new placeholder as root of a fork", chainRoot, headersParent[5], placeholderRootFork, ref message))
@@ -529,7 +538,42 @@ internal partial class Testbench
           headersExpected.RemoveWhere(h => IsDescendantOf(h, headerCut));
           headersHeldExpected.RemoveWhere(h => IsDescendantOf(h, headerCut));
 
+          Header headerTipBlockchainExpected = chainRoot.HeaderTipBlockchain.Height >= headerCut.Height
+            ? headerCut.HeaderPrevious
+            : chainRoot.HeaderTipBlockchain;
+
+          List<Chain> chainsForkAtTip = [];
+          chainRoot.FindInTree<Chain>(c =>
+          {
+            if (c.ChainTrunk == chainRoot && c.HeaderRoot.HeaderPrevious == headerCut.HeaderPrevious)
+              chainsForkAtTip.Add(c);
+
+            return null;
+          });
+
+          int heightHeldMax = chainsForkAtTip.Count == 0 ? 0 : chainsForkAtTip.Max(c => c.HeaderTipBlockchain?.Height ?? headerCut.HeaderPrevious.Height);
+          HashSet<Header> headersTipMergeable = [.. chainsForkAtTip
+            .Where(c => (c.HeaderTipBlockchain?.Height ?? headerCut.HeaderPrevious.Height) == heightHeldMax)
+            .Select(c => c.HeaderTip)];
+
           chainRoot.CutOff(headerCut);
+
+          if (chainRoot.HeaderTipBlockchain != headerTipBlockchainExpected)
+          {
+            error = $"after CutOff at height {headerCut.Height} the main chain holds blocks up to height {chainRoot.HeaderTipBlockchain.Height}, expected {headerTipBlockchainExpected.Height}, before its queued blocks are inserted.";
+            return false;
+          }
+
+          bool isMergeCorrect = chainsForkAtTip.Count == 0
+            ? chainRoot.HeaderTip == headerCut.HeaderPrevious
+            : headersTipMergeable.Contains(chainRoot.HeaderTip);
+
+          if (!isMergeCorrect)
+          {
+            error = $"after CutOff at height {headerCut.Height} the main chain ends at height {chainRoot.HeaderTip.Height}, expected the tip of a fork holding the most blocks among the forks at the new tip.";
+            return false;
+          }
+
           InsertBlocksQueued(chainRoot);
 
           if (!IsTreeConsistent(chainRoot, headerRoot, headersExpected, headersHeldExpected, out error))

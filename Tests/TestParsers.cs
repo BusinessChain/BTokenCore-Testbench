@@ -144,7 +144,7 @@ internal partial class Testbench
 
     bool Test_AnchorsWinner(Wallet wallet, ref string message)
     {
-      Console.WriteLine("  5. Draw anchor winners of two IDTokens, ignoring an anchor with other LockTime.");
+      Console.WriteLine("  5. Draw anchor winners of two IDTokens at two block hashes, ignoring anchors with LockTime before and after the eligible one.");
 
       byte[] iDTokenSecond = [0x05, 0x06, 0x07, 0x08];
 
@@ -157,7 +157,9 @@ internal partial class Testbench
         CreateTXOutputTokenAnchor(iDTokenSecond, 4),
         CreateTXOutputTokenAnchor(iDTokenSecond, 5)];
 
-      TXOutputTokenAnchor anchorLockTimeOther = CreateTXOutputTokenAnchor(ID_TOKEN, 6);
+      TXOutputTokenAnchor[] anchorsIneligible = [
+        CreateTXOutputTokenAnchor(ID_TOKEN, 6),
+        CreateTXOutputTokenAnchor(ID_TOKEN, 7)];
 
       BlockchainBToken.TXBToken tXCoinbase = CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic);
       tXCoinbase.SerializeUnsigned();
@@ -167,30 +169,55 @@ internal partial class Testbench
         CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic, anchorsFirst[0], anchorsSecond[0]),
         CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic, anchorsFirst[1], anchorsSecond[1]),
         CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic, anchorsFirst[2]),
-        CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic, anchorLockTimeOther)];
+        CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic, anchorsIneligible[0]),
+        CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic, anchorsIneligible[1])];
 
-      tXs[^1].LockTime = 737856;
+      tXs[^2].LockTime = 737856;
+      tXs[^1].LockTime = 737858;
 
       foreach (BlockchainBToken.TXBToken tX in tXs.Skip(1))
         tX.Serialize(wallet);
 
       Block block = CreateBlock(tXs);
 
-      while (anchorsFirst.Any(a => string.CompareOrdinal(
-        ComputeScoreAnchor(block.Header.Hash, a),
-        ComputeScoreAnchor(block.Header.Hash, anchorLockTimeOther)) < 0))
+      string nameParser = "Anchor winners drawn by ParserBToken";
+      TXOutputTokenAnchor anchorWinnerFirstPrevious = null;
+
+      for (int round = 0; round < 2; round++)
       {
-        block.Header.Nonce += 1;
-        block.Header.ComputeHash();
+        do
+        {
+          block.Header.Nonce += 1;
+          block.Header.ComputeHash();
+        }
+        while (!IsDrawDiscriminating(block.Header.Hash, anchorsFirst, anchorsSecond, anchorsIneligible)
+          || GetAnchorScoreLowest(block.Header.Hash, anchorsFirst) == anchorWinnerFirstPrevious);
+
+        Block blockParsed = ParseBlockSerialized(block);
+
+        if (!IsFieldEqual(nameParser, "AnchorsWinner.Count", 2, blockParsed.Header.AnchorsWinner.Count, ref message)
+          || !IsAnchorWinnerLowestScore(nameParser, blockParsed.Header, anchorsFirst, ref message)
+          || !IsAnchorWinnerLowestScore(nameParser, blockParsed.Header, anchorsSecond, ref message))
+          return false;
+
+        anchorWinnerFirstPrevious = GetAnchorScoreLowest(block.Header.Hash, anchorsFirst);
       }
 
-      Block blockParsed = ParseBlockSerialized(block);
+      return true;
+    }
 
-      string nameParser = "Anchor winners drawn by ParserBToken";
+    static bool IsDrawDiscriminating(byte[] hashBlock, TXOutputTokenAnchor[] anchorsFirst, TXOutputTokenAnchor[] anchorsSecond, TXOutputTokenAnchor[] anchorsIneligible)
+    {
+      TXOutputTokenAnchor anchorLowestFirst = GetAnchorScoreLowest(hashBlock, anchorsFirst);
 
-      return IsFieldEqual(nameParser, "AnchorsWinner.Count", 2, blockParsed.Header.AnchorsWinner.Count, ref message)
-        && IsAnchorWinnerLowestScore(nameParser, blockParsed.Header, anchorsFirst, ref message)
-        && IsAnchorWinnerLowestScore(nameParser, blockParsed.Header, anchorsSecond, ref message);
+      return anchorLowestFirst != anchorsFirst[0]
+        && GetAnchorScoreLowest(hashBlock, anchorsSecond) != anchorsSecond[0]
+        && anchorsIneligible.All(a => string.CompareOrdinal(ComputeScoreAnchor(hashBlock, a), ComputeScoreAnchor(hashBlock, anchorLowestFirst)) < 0);
+    }
+
+    static TXOutputTokenAnchor GetAnchorScoreLowest(byte[] hashBlock, TXOutputTokenAnchor[] anchors)
+    {
+      return anchors.MinBy(a => ComputeScoreAnchor(hashBlock, a), StringComparer.Ordinal);
     }
 
     static string ComputeScoreAnchor(byte[] hashBlock, TXOutputTokenAnchor tXOutputTokenAnchor)
@@ -201,7 +228,7 @@ internal partial class Testbench
 
     static bool IsAnchorWinnerLowestScore(string nameParser, Header headerParsed, TXOutputTokenAnchor[] anchorsEligible, ref string message)
     {
-      TXOutputTokenAnchor anchorExpected = anchorsEligible.MinBy(a => ComputeScoreAnchor(headerParsed.Hash, a), StringComparer.Ordinal);
+      TXOutputTokenAnchor anchorExpected = GetAnchorScoreLowest(headerParsed.Hash, anchorsEligible);
 
       string iDToken = anchorExpected.IDToken.ToHexString();
 
