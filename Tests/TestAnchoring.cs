@@ -24,7 +24,8 @@ internal partial class Testbench
         && BlockchainAnchoring.TestParentRollback(Testbench.Wallet, ref message)
         && BlockchainAnchoring.TestRestartAnchored(Testbench.Wallet, ref message)
         && BlockchainAnchoring.TestRestartUnanchored(Testbench.Wallet, ref message)
-        && BlockchainAnchoring.TestWindowResync(Testbench.Wallet, ref message);
+        && BlockchainAnchoring.TestWindowResync(Testbench.Wallet, ref message)
+        && BlockchainAnchoring.TestRestartResync(Testbench.Wallet, ref message);
     }
 
     class BlockchainParentFake : BlockchainBitcoin
@@ -296,17 +297,9 @@ internal partial class Testbench
         blockchain.MineAnchors(blocksMain);
         blockchain.DeliverBlocks(blocksMain);
 
-        if (!blockchain.IsSynchronized(ledger, "Window resync, main chain anchored and delivered", HEIGHT_TIP, ref message))
+        if (!blockchain.IsSynchronized(ledger, "Window resync, main chain anchored and delivered", HEIGHT_TIP, ref message)
+          || !TryForkLedger(ledger, wallet, HEIGHT_FORK, HEIGHT_RESYNC + 1, out List<Block> blocksFork, ref message))
           return false;
-
-        while (ledger.GetHeightTip() > HEIGHT_FORK)
-          if (!ledger.TryRollBack("Window resync, fork below the tip", out _, ref message))
-            return false;
-
-        if (!TryInsertCoinbasesUpTo(ledger, wallet, CreateIDAccount(1002, 3), HEIGHT_RESYNC + 1, ref message))
-          return false;
-
-        List<Block> blocksFork = ledger.GetBlocksInserted().Where(b => b.Header.Height > HEIGHT_FORK).ToList();
 
         blockchain.MineAnchors(blocksFork.Where(b => b.Header.Height < HEIGHT_RESYNC).ToList());
 
@@ -331,6 +324,59 @@ internal partial class Testbench
         blockchain.DeliverBlocks(blocksFork);
 
         return blockchain.IsWithoutAccounts("Window resync, fork blocks delivered after the resync", HEIGHT_RESYNC + 1, ref message);
+      }
+
+      internal static bool TestRestartResync(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  8. Restart Resync: Resync at restart when RollBackUnanchored drops below the window.");
+
+        const int HEIGHT_FORK = 3;
+        const int HEIGHT_TIP = 6;
+        const int HEIGHT_TIP_FORK = HEIGHT_TIP + COUNT_MAX_BLOCKS_STORED;
+
+        if (!TryCreateLedger(wallet, out Ledger ledger, ref message))
+          return false;
+
+        List<Block> blocksMain = ledger.GetBlocksInserted();
+        BlockchainAnchoring blockchain = StartNode();
+
+        blockchain.MineAnchors(blocksMain);
+        blockchain.DeliverBlocks(blocksMain);
+
+        if (!blockchain.IsSynchronized(ledger, "Restart resync, main chain anchored and delivered", HEIGHT_TIP, ref message)
+          || !TryForkLedger(ledger, wallet, HEIGHT_FORK, HEIGHT_TIP_FORK, out List<Block> blocksFork, ref message))
+          return false;
+
+        BlockchainAnchoring blockchainAnchoringFork = StartNode();
+        blockchainAnchoringFork.MineAnchors([.. blocksMain.Where(b => b.Header.Height <= HEIGHT_FORK), .. blocksFork]);
+
+        BlockchainAnchoring blockchainRestarted = StartNode(blockchain.LiteDatabase, blockchainAnchoringFork.ParentFake.Restart());
+
+        string nameCase = "Restart resync, restart on a parent chain anchoring a fork below the tip";
+
+        if (!blockchainRestarted.IsWithoutAccounts(nameCase, HEIGHT_TIP_FORK - COUNT_MAX_BLOCKS_STORED, ref message)
+          || !blockchainRestarted.IsBlockStoredOldestAt(nameCase, HEIGHT_TIP_FORK - COUNT_MAX_BLOCKS_STORED, ref message))
+          return false;
+
+        blockchainRestarted.DeliverBlocks(blocksFork);
+
+        return blockchainRestarted.IsWithoutAccounts("Restart resync, fork blocks delivered after the resync", HEIGHT_TIP_FORK, ref message);
+      }
+
+      static bool TryForkLedger(Ledger ledger, Wallet wallet, int heightFork, int heightTip, out List<Block> blocksFork, ref string message)
+      {
+        blocksFork = null;
+
+        while (ledger.GetHeightTip() > heightFork)
+          if (!ledger.TryRollBack($"Ledger rolled back to the fork at height {heightFork}", out _, ref message))
+            return false;
+
+        if (!TryInsertCoinbasesUpTo(ledger, wallet, CreateIDAccount(1002, 3), heightTip, ref message))
+          return false;
+
+        blocksFork = ledger.GetBlocksInserted().Where(b => b.Header.Height > heightFork).ToList();
+
+        return true;
       }
 
       bool IsBlockStoredOldestAt(string nameCase, int heightExpected, ref string message)
