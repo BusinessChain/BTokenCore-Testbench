@@ -430,7 +430,35 @@ internal partial class Testbench
         return TryCreateServer(wallet, out Ledger ledger, out BlockchainSynchronizing server, ref message)
           && TestSegmentDownload(ledger, server, ref message)
           && TestFaultySegment(ledger, server, ref message)
-          && TestFaultyCarriedBlock(wallet, ledger, server, ref message);
+          && TestFaultyCarriedBlock(wallet, ledger, server, ref message)
+          && TestInstallConfirmation(ledger, server, ref message);
+      }
+
+      static bool TestInstallConfirmation(Ledger ledger, BlockchainSynchronizing server, ref string message)
+      {
+        Console.WriteLine("  15. Install Confirmation: Mark own TX confirmed by a block carried in installation.");
+
+        const int HEIGHT_CONFIRMED = 2000;
+
+        List<Block> blocksLedger = ledger.GetBlocksInserted();
+        TXBToken tXSpend = (TXBToken)blocksLedger.Single(b => b.Header.Height == HEIGHT_CONFIRMED).TXs[1];
+
+        BlockchainSynchronizing blockchain = StartNode(CreateLiteDatabase(), int.MaxValue);
+        blockchain.InsertBlocks(blocksLedger.Where(b => b.Header.Height < HEIGHT_CONFIRMED).ToList());
+
+        if (!IsAccepted($"Own TX lifecycle, spend submitted at height {HEIGHT_CONFIRMED - 1}", () => blockchain.SubmitTX(tXSpend.TXRaw), ref message))
+          return false;
+
+        blockchain.Synchronizer.Drop();
+        blockchain.InsertBlocks(blocksLedger.Where(b => b.Header.Height >= HEIGHT_CONFIRMED).ToList());
+
+        if (!blockchain.IsWithoutAccounts("Own TX lifecycle, confirming block inserted without accounts", HEIGHT_TIP_WINDOW, ref message))
+          return false;
+
+        blockchain.DownloadSegments(GetSegmentServed(ledger, server));
+
+        return blockchain.IsSynchronized(ledger, "Own TX lifecycle, installation carrying the confirming block", HEIGHT_TIP_WINDOW, ref message)
+          && blockchain.IsTXOwnedAtHeight("installation carrying the confirming block", tXSpend.Hash, HEIGHT_CONFIRMED, ref message);
       }
 
       // Counter-tested 2026-11-13 17:16
