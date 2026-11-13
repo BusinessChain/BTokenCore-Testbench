@@ -313,6 +313,7 @@ internal partial class Testbench
 
         HashSet<Header> headersExpected = [headerRoot, .. headersMain];
         HashSet<Header> headersHeldExpected = [.. headersExpected];
+        HashSet<Header> headersAwaitedExpected = [];
 
         Header[] headersTipBranch = [chainRoot.HeaderTip, headersMain[0]];
 
@@ -343,11 +344,28 @@ internal partial class Testbench
           for (Header header = headersNew[^1]; header.Height > heightTipBlockchainWeak; header = header.HeaderPrevious)
             if (header.Height <= heightTipBlockchainExpected)
             {
-              chainWeak.BlocksQueued.Add(header.Height, new Block(0) { Header = header });
+              Chain chainReceiving = chainWeak;
+
+              if (headersAwaitedExpected.Remove(header))
+              {
+                chainReceiving = chainRoot.FindInTree(c => c.HeadersAwaitingBlock.Remove(header.Hash, out _) ? c : null);
+
+                if (chainReceiving == null)
+                {
+                  message = $"Alternating switches, round {round}: no chain awaits the withheld block at height {header.Height}.";
+                  return false;
+                }
+              }
+
+              chainReceiving.BlocksQueued.Add(header.Height, new Block(0) { Header = header });
+              chainReceiving.AdvanceTipBlockchain();
               headersHeldExpected.Add(header);
             }
 
           chainWeak.AdvanceTipBlockchain();
+
+          chainWeak.HeadersAwaitingBlock.Add(headersNew[^1].Hash, (headersNew[^1], DateTime.UtcNow));
+          headersAwaitedExpected.Add(headersNew[^1]);
 
           Header headerTipBlockchainExpected = headersNew[^1].HeaderPrevious;
 
@@ -363,7 +381,7 @@ internal partial class Testbench
             return false;
           }
 
-          if (!IsTreeConsistent(chainRoot, headerRoot, headersExpected, headersHeldExpected, out string error))
+          if (!IsTreeConsistent(chainRoot, headerRoot, headersExpected, headersHeldExpected, out string error, headersAwaitedExpected))
           {
             message = $"Alternating switches, round {round}: {error}";
             return false;
@@ -564,7 +582,7 @@ internal partial class Testbench
         return header == headerAncestor;
       }
 
-      static bool IsTreeConsistent(Chain chainRoot, Header headerRoot, HashSet<Header> headersExpected, HashSet<Header> headersHeldExpected, out string error)
+      static bool IsTreeConsistent(Chain chainRoot, Header headerRoot, HashSet<Header> headersExpected, HashSet<Header> headersHeldExpected, out string error, HashSet<Header> headersAwaitedExpected = null)
       {
         List<Chain> chains = [];
         chainRoot.FindInTree<Chain>(c =>
@@ -601,6 +619,7 @@ internal partial class Testbench
 
         HashSet<Header> headersFound = [];
         HashSet<Header> headersHeldFound = [];
+        HashSet<Header> headersAwaitedFound = [];
 
         foreach (Chain chain in chains)
         {
@@ -632,6 +651,17 @@ internal partial class Testbench
             }
 
             headersHeldFound.Add(blockQueued.Value.Header);
+          }
+
+          foreach (KeyValuePair<byte[], (Header header, DateTime timeRequestLast)> headerAwaited in chain.HeadersAwaitingBlock)
+          {
+            if (!headerAwaited.Key.IsAllBytesEqual(headerAwaited.Value.header.Hash) || !headersChain.Contains(headerAwaited.Value.header))
+            {
+              error = $"{DescribeChain(chain)} awaits the block of the header at height {headerAwaited.Value.header.Height} of another chain.";
+              return false;
+            }
+
+            headersAwaitedFound.Add(headerAwaited.Value.header);
           }
 
           if (chain == chainRoot)
@@ -667,6 +697,12 @@ internal partial class Testbench
         if (!headersHeldFound.SetEquals(headersHeldExpected))
         {
           error = $"the header tree holds {headersHeldFound.Count} blocks, expected {headersHeldExpected.Count}.";
+          return false;
+        }
+
+        if (!headersAwaitedFound.SetEquals(headersAwaitedExpected ?? []))
+        {
+          error = $"the header tree awaits {headersAwaitedFound.Count} blocks, expected {headersAwaitedExpected?.Count ?? 0}.";
           return false;
         }
 
