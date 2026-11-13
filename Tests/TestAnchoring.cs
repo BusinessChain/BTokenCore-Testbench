@@ -286,7 +286,18 @@ internal partial class Testbench
         string nameCaseReanchored = "Restart unanchored, rolled-back blocks anchored again after the restart";
 
         if (!blockchainRestarted.IsSynchronized(ledger, nameCaseReanchored, 6, ref message)
-          || !blockchainRestarted.IsRequestingNoBlock(nameCaseReanchored, ref message)
+          || !blockchainRestarted.IsRequestingNoBlock(nameCaseReanchored, ref message))
+          return false;
+
+        BlockchainAnchoring blockchainGenesis = StartNode();
+
+        blockchainGenesis.MineAnchors(blocksLedger);
+        blockchainGenesis.DeliverBlocks(blocksLedger);
+        blockchainGenesis.ParentFake.DeleteBlocksStored(0, 2);
+
+        BlockchainAnchoring blockchainGenesisRestarted = StartNode(blockchainGenesis.LiteDatabase, blockchainGenesis.ParentFake.Restart());
+
+        if (!blockchainGenesisRestarted.IsSynchronized(ledger, "Restart unanchored, restart under the genesis root after the Bitcoin blocks up to height 2 were lost", 6, ref message)
           || !TryInsertCoinbasesUpTo(ledger, wallet, CreateIDAccount(1000, 1), HEIGHT_TIP_REROOTED, ref message))
           return false;
 
