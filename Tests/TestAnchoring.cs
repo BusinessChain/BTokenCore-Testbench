@@ -22,7 +22,8 @@ internal partial class Testbench
         && BlockchainAnchoring.TestAwaitingAnchor(Testbench.Wallet, ref message)
         && BlockchainAnchoring.TestAnchorExpiry(Testbench.Wallet, ref message)
         && BlockchainAnchoring.TestParentRollback(Testbench.Wallet, ref message)
-        && BlockchainAnchoring.TestRestartAnchored(Testbench.Wallet, ref message);
+        && BlockchainAnchoring.TestRestartAnchored(Testbench.Wallet, ref message)
+        && BlockchainAnchoring.TestRestartUnanchored(Testbench.Wallet, ref message);
     }
 
     class BlockchainBitcoinTestbench : BlockchainBitcoin
@@ -70,6 +71,11 @@ internal partial class Testbench
       internal BlockchainBitcoinTestbench Restart()
       {
         return new BlockchainBitcoinTestbench(LiteDatabase);
+      }
+
+      internal void DeleteBlocksStoredAbove(int height)
+      {
+        BlocksStored.DeleteMany(Query.GT(NAME_FIELD_ID, height));
       }
 
       internal void RollBackTo(int height)
@@ -250,6 +256,34 @@ internal partial class Testbench
 
         return blockchainRestarted.IsSynchronized(ledger, nameCase, 6, ref message)
           && blockchainRestarted.IsRequestingNoBlock(nameCase, ref message);
+      }
+
+      internal static bool TestRestartUnanchored(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  6. Restart Unanchored: Roll back blocks whose Bitcoin block was lost, re-anchor later.");
+
+        if (!TryCreateLedger(wallet, out Ledger ledger, ref message))
+          return false;
+
+        List<Block> blocksLedger = ledger.GetBlocksInserted();
+        BlockchainAnchoring blockchain = StartNode();
+
+        blockchain.MineAnchors(blocksLedger);
+        blockchain.DeliverBlocks(blocksLedger);
+
+        blockchain.BlockchainParentBitcoin.DeleteBlocksStoredAbove(blockchain.BlockchainParentBitcoin.GetHeight() - 3);
+
+        BlockchainAnchoring blockchainRestarted = StartNode(blockchain.LiteDatabase, blockchain.BlockchainParentBitcoin.Restart());
+
+        if (!blockchainRestarted.IsSynchronized(ledger, "Restart unanchored, restart after the three latest Bitcoin blocks were lost", 3, ref message))
+          return false;
+
+        blockchainRestarted.MineAnchors(blocksLedger.Where(b => b.Header.Height > 3).ToList());
+
+        string nameCaseReanchored = "Restart unanchored, rolled-back blocks anchored again after the restart";
+
+        return blockchainRestarted.IsSynchronized(ledger, nameCaseReanchored, 6, ref message)
+          && blockchainRestarted.IsRequestingNoBlock(nameCaseReanchored, ref message);
       }
 
       bool IsRequestingNoBlock(string nameCase, ref string message)
