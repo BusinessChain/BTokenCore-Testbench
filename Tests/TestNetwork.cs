@@ -1,7 +1,9 @@
 ﻿using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Net;
+using System.Net.Sockets;
 using System.Security.Cryptography;
+using System.Text;
 
 using BTokenCore;
 
@@ -40,6 +42,8 @@ internal partial class Testbench
     const string IP_READER = "10.0.0.9";
     const string IP_PEER_OTHER = "10.0.0.3";
     const string COMMAND_FEEFILTER = "feefilter";
+    const string COMMAND_FRAMING = "framing";
+    static readonly byte[] MAGIC_BYTES = [0xB7, 0xD0, 0xC3, 0xE5];
     const int SECONDS_TIMEOUT_PEER_LISTED = 10;
     const int SECONDS_TIMEOUT_REQUEST = 10;
     const int LENGTH_TIME_ADDRESS = 4;
@@ -81,7 +85,72 @@ internal partial class Testbench
         && TestTXNotFound(Testbench.Wallet, ref message)
         && TestFeeFilter(Testbench.Wallet, ref message)
         && TestTXThrottle(Testbench.Wallet, ref message)
-        && TestOwnTX(Testbench.Wallet, ref message);
+        && TestOwnTX(Testbench.Wallet, ref message)
+        && TestFramingSend(ref message);
+    }
+
+    static bool TestFramingSend(ref string message)
+    {
+      Console.WriteLine("  29. Framing Send: Frame magic, padded command, length, checksum and payload.");
+
+      const int LENGTH_DATA_PAYLOAD = 6;
+
+      using ConnectionLoopback connection = new();
+
+      byte[] payload = [.. Enumerable.Range(1, 10).Select(i => (byte)i)];
+
+      connection.Socket.SendMessage(COMMAND_FRAMING, LENGTH_DATA_PAYLOAD, payload).GetAwaiter().GetResult();
+
+      byte[] messageExpected = BuildMessage(MAGIC_BYTES, COMMAND_FRAMING, LENGTH_DATA_PAYLOAD, payload[..LENGTH_DATA_PAYLOAD]);
+      byte[] messageSent = new byte[messageExpected.Length];
+
+      connection.StreamRaw.ReadExactly(messageSent);
+
+      if (messageSent.IsAllBytesEqual(messageExpected))
+        return true;
+
+      message = $"Framing send: SocketTCP sends {messageSent.ToHexString()}, expected {messageExpected.ToHexString()}.";
+      return false;
+    }
+
+    static byte[] BuildMessage(byte[] magicBytes, string command, int lengthDeclared, byte[] payload)
+    {
+      return [
+        .. magicBytes,
+        .. Encoding.ASCII.GetBytes(command.PadRight(SocketTCP.SIZE_COMMAND, '\0')),
+        .. BitConverter.GetBytes(lengthDeclared),
+        .. Crypto.ComputeHash256(payload)[..SocketTCP.SIZE_CHECKSUM],
+        .. payload];
+    }
+
+    class ConnectionLoopback : IDisposable
+    {
+      const int MILLISECONDS_TIMEOUT_READ = 5000;
+
+      TcpListener Listener = new(IPAddress.Loopback, 0);
+      internal TcpClient ClientRaw = new();
+      internal NetworkStream StreamRaw;
+      internal SocketTCP Socket;
+
+
+      internal ConnectionLoopback()
+      {
+        Listener.Start();
+        ClientRaw.Connect(IPAddress.Loopback, ((IPEndPoint)Listener.LocalEndpoint).Port);
+
+        Socket = new SocketTCP(Listener.AcceptTcpClient());
+        Socket.Start(MAGIC_BYTES).GetAwaiter().GetResult();
+
+        StreamRaw = ClientRaw.GetStream();
+        StreamRaw.ReadTimeout = MILLISECONDS_TIMEOUT_READ;
+      }
+
+      public void Dispose()
+      {
+        Socket.Dispose();
+        ClientRaw.Dispose();
+        Listener.Stop();
+      }
     }
 
     static bool TestTXTimeout(Wallet wallet, ref string message)
