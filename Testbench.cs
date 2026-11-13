@@ -17,6 +17,7 @@ internal partial class Testbench
     Tests = new()
     {
       new TestParsers(this),
+      new TestBlockchainBitcoin(this),
       new TestConsensusRules(this),
       new TestTXPool(this),
       new TestAccountSynchronizer(this),
