@@ -38,6 +38,8 @@ internal partial class Testbench
     const int OFFSET_IP_ADDRESS = 12;
     const string IP_PEER = "10.0.0.2";
     const string IP_READER = "10.0.0.9";
+    const string IP_PEER_OTHER = "10.0.0.3";
+    const string COMMAND_FEEFILTER = "feefilter";
     const int SECONDS_TIMEOUT_PEER_LISTED = 10;
     const int SECONDS_TIMEOUT_REQUEST = 10;
     const int LENGTH_TIME_ADDRESS = 4;
@@ -76,7 +78,8 @@ internal partial class Testbench
         && TestTXRequest(Testbench.Wallet, ref message)
         && TestTXRelay(Testbench.Wallet, ref message)
         && TestTXTimeout(Testbench.Wallet, ref message)
-        && TestTXNotFound(Testbench.Wallet, ref message);
+        && TestTXNotFound(Testbench.Wallet, ref message)
+        && TestFeeFilter(Testbench.Wallet, ref message);
     }
 
     static bool TestTXTimeout(Wallet wallet, ref string message)
@@ -159,7 +162,6 @@ internal partial class Testbench
       Console.WriteLine("  23. TX Relay: Relay a received TX to the other peers and serve it.");
 
       const string NAME_CASE = "TX relay";
-      const string IP_PEER_OTHER = "10.0.0.3";
       const int SECONDS_HOLD = 3;
 
       if (!BlockchainNetwork.TryCreateBlocks(wallet, [t => { }], out List<Block> blocks, out List<BlockchainBToken.TXBToken> spends, ref message))
@@ -167,18 +169,11 @@ internal partial class Testbench
 
       BlockchainBToken.TXBToken spend = spends[0];
 
-      NetworkTestbench network = StartNodeWithInboundPeer(out SocketFake socketPeer, out CommunicationFake communication, b => b.AnchorAndDeliver(blocks));
-      SocketFake socketOther = null;
+      NetworkTestbench network = StartNodeWithTwoPeers(blocks, out SocketFake socketPeer, out SocketFake socketOther);
 
       try
       {
-        if (!TryHandshakeInbound(NAME_CASE, socketPeer, ref message))
-          return false;
-
-        socketOther = communication.ConnectInbound(IP_PEER_OTHER);
-
-        if (!TryHandshakeInbound(NAME_CASE, socketOther, ref message)
-          || !IsPeerListed(NAME_CASE, network, IP_PEER_OTHER, ref message)
+        if (!TryHandshakeTwoPeers(NAME_CASE, network, socketPeer, socketOther, ref message)
           || !IsOnlyTXRequested(NAME_CASE, socketPeer, [spend.Hash], spend.Hash, ref message))
           return false;
 
@@ -212,8 +207,67 @@ internal partial class Testbench
       finally
       {
         socketPeer.Dispose();
-        socketOther?.Dispose();
+        socketOther.Dispose();
       }
+    }
+
+    static bool TestFeeFilter(Wallet wallet, ref string message)
+    {
+      Console.WriteLine("  26. Fee Filter: Announce no TX below the peer's fee filter.");
+
+      const string NAME_CASE = "Fee filter";
+      const double FEE_FILTER = 100;
+
+      if (!BlockchainNetwork.TryCreateBlocks(wallet, [t => t.Fee = 100_000, t => t.Nonce += 1], out List<Block> blocks, out List<BlockchainBToken.TXBToken> spends, ref message))
+        return false;
+
+      NetworkTestbench network = StartNodeWithTwoPeers(blocks, out SocketFake socketPeer, out SocketFake socketOther);
+
+      try
+      {
+        if (!TryHandshakeTwoPeers(NAME_CASE, network, socketPeer, socketOther, ref message))
+          return false;
+
+        byte[] payloadFeeFilter = BitConverter.GetBytes(FEE_FILTER);
+        socketOther.SendMessage(COMMAND_FEEFILTER, payloadFeeFilter.Length, payloadFeeFilter).Wait();
+
+        if (!TrySynchronize(NAME_CASE, socketOther, ref message))
+          return false;
+
+        foreach (BlockchainBToken.TXBToken spend in spends)
+          socketPeer.SendMessage(COMMAND_TX, spend.TXRaw.Length, spend.TXRaw).Wait();
+
+        if (!TryReceiveInventories(NAME_CASE, socketOther, COMMAND_INV, MSG_TX, out List<byte[]> hashes, ref message))
+          return false;
+
+        if (hashes.Count == 1 && hashes[0].IsAllBytesEqual(spends[0].Hash))
+          return true;
+
+        message = $"{NAME_CASE}: the node announces the TXs {string.Join(", ", hashes.Select(h => h.ToHexString()))}, " +
+          $"expected only {spends[0].Hash.ToHexString()} above the fee filter.";
+        return false;
+      }
+      finally
+      {
+        socketPeer.Dispose();
+        socketOther.Dispose();
+      }
+    }
+
+    static NetworkTestbench StartNodeWithTwoPeers(List<Block> blocks, out SocketFake socketPeer, out SocketFake socketOther)
+    {
+      NetworkTestbench network = StartNodeWithInboundPeer(out socketPeer, out CommunicationFake communication, b => b.AnchorAndDeliver(blocks));
+      socketOther = communication.ConnectInbound(IP_PEER_OTHER);
+
+      return network;
+    }
+
+    static bool TryHandshakeTwoPeers(string nameCase, NetworkTestbench network, SocketFake socketPeer, SocketFake socketOther, ref string message)
+    {
+      return TryHandshakeInbound(nameCase, socketPeer, ref message)
+        && TryHandshakeInbound(nameCase, socketOther, ref message)
+        && IsPeerListed(nameCase, network, IP_PEER, ref message)
+        && IsPeerListed(nameCase, network, IP_PEER_OTHER, ref message);
     }
 
     static bool IsTXAnnounced(string nameCase, SocketFake socketPeer, byte[] hash, ref string message, int secondsTimeout = SECONDS_TIMEOUT_REQUEST)
@@ -964,7 +1018,6 @@ internal partial class Testbench
       Console.WriteLine("  17. Block Announcement: Announce the newest inserted block to every peer.");
 
       const string NAME_CASE = "Block announcement";
-      const string IP_PEER_OTHER = "10.0.0.3";
 
       if (!BlockchainNetwork.TryCreateBlocks(wallet, [], out List<Block> blocks, out _, ref message))
         return false;
