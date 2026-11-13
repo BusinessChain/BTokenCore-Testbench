@@ -71,19 +71,24 @@ internal partial class Testbench
         return IPRemote;
       }
 
-      internal bool TryReceive(string nameCase, string command, ref string message)
+      internal bool TryReceive(string nameCase, string command, out byte[] payload, ref string message)
       {
         using CancellationTokenSource cancellation = new(TimeSpan.FromSeconds(SECONDS_TIMEOUT_RECEIVE));
 
         try
         {
-          while (MessagesReceived.Reader.ReadAsync(cancellation.Token).AsTask().GetAwaiter().GetResult().command != command)
-          { }
+          (string command, byte[] payload) messageReceived;
 
+          do
+            messageReceived = MessagesReceived.Reader.ReadAsync(cancellation.Token).AsTask().GetAwaiter().GetResult();
+          while (messageReceived.command != command);
+
+          payload = messageReceived.payload;
           return true;
         }
         catch (Exception exception) when (exception is OperationCanceledException or ChannelClosedException)
         {
+          payload = null;
           message = $"{nameCase}: the node sent no {command} message within {SECONDS_TIMEOUT_RECEIVE} seconds.";
           return false;
         }
@@ -99,6 +104,16 @@ internal partial class Testbench
       internal SocketFake QueueOutbound()
       {
         SocketsOutbound.Enqueue(SocketFake.CreatePair(out SocketFake socketPeer));
+
+        return socketPeer;
+      }
+
+      internal SocketFake ConnectInbound(string iPPeer)
+      {
+        SocketFake socketNode = SocketFake.CreatePair(out SocketFake socketPeer);
+        socketNode.IPRemote = iPPeer;
+
+        SocketsInbound.Writer.TryWrite(socketNode);
 
         return socketPeer;
       }
