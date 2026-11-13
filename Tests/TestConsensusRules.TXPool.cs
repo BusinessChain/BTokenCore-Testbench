@@ -10,6 +10,7 @@ internal partial class Testbench
     {
       const int COUNT_TXS_MAX_ACCOUNT = 25;
       const long COUNT_BYTES_MAX_POOL = 100 * SIZE_BLOCK_MAX;
+      const long BALANCE_WALLET = 1_000_000_000;
 
       internal static bool TestSpendAdmission(Wallet wallet, ref string message)
       {
@@ -86,6 +87,85 @@ internal partial class Testbench
           return false;
 
         return IsAdmitted("spend creating two accounts in a full segment the next sweep empties", ledger.CreateTXPool(COUNT_BYTES_MAX_POOL), ledger.CreateTXSpend(wallet, iDCreatedOverLimit, VALUE_SPEND, t => t.TXOutputs.Add(new TXOutputP2PKH(VALUE_SPEND, iDCreatedAfterSweep))), true, ref message);
+      }
+
+      internal static bool TestBundleRanking(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  24. Bundle Ranking: Merge bundles, rank by fee per byte, select by size.");
+
+        Ledger ledger = new(heightRoot: 0);
+
+        Wallet walletB = CreateWallet();
+        Wallet walletC = CreateWallet();
+        byte[] iDMiner = CreateIDAccount(1000, 1);
+        byte[] iDReceiver = CreateIDAccount(1001, 2);
+
+        TXBToken tXCoinbaseWallets = ledger.CreateCoinbase(wallet, wallet.Hash160PKeyPublic, 0,
+          new TXOutputP2PKH(BALANCE_WALLET, walletB.Hash160PKeyPublic),
+          new TXOutputP2PKH(BALANCE_WALLET, walletC.Hash160PKeyPublic));
+
+        if (!ledger.TryInsertBlock("coinbase creating three wallet accounts", [tXCoinbaseWallets], isValidExpected: true, null, ref message))
+          return false;
+
+        TXBToken tXA1 = CreateTXSpendFee(ledger, wallet, iDReceiver, 0, 1000);
+        TXBToken tXA2 = CreateTXSpendFee(ledger, wallet, iDReceiver, 1, 31000);
+        TXBToken tXB1 = CreateTXSpendFee(ledger, walletB, iDReceiver, 0, 8000);
+        TXBToken tXB2 = CreateTXSpendFee(ledger, walletB, iDReceiver, 1, 0);
+        TXBToken tXC1 = CreateTXSpendFee(ledger, walletC, iDReceiver, 0, 12000);
+        TXBToken tXC2 = CreateTXSpendFee(ledger, walletC, iDReceiver, 1, 4000);
+        TXBToken tXC3 = CreateTXSpendFee(ledger, walletC, iDReceiver, 2, 0);
+
+        PoolTXBToken pool = ledger.CreateTXPool(COUNT_BYTES_MAX_POOL);
+
+        foreach (TXBToken tX in new List<TXBToken> { tXA1, tXB1, tXC1, tXA2, tXC2, tXB2, tXC3 })
+          if (!IsAdmitted($"spend with Nonce {tX.Nonce} and Fee {tX.Fee} for ranking", pool, tX, true, ref message))
+            return false;
+
+        int countBytesSelected = tXA1.TXRaw.Length + tXA2.TXRaw.Length + tXC1.TXRaw.Length + tXB1.TXRaw.Length - 1;
+
+        return AreTXsRankedCorrect("GetTXsRanked of merged and separate bundles", pool.GetTXsRanked(), [tXA1, tXA2, tXC1, tXB1, tXC2, tXB2, tXC3], ref message)
+          && AreTXsRankedCorrect("GetTXs stopping at the first TX over the byte limit", pool.GetTXs(countBytesSelected).Cast<TXBToken>(), [tXA1, tXA2, tXC1], ref message)
+          && ledger.TryInsertBlockFromPool("block of all ranked TXs", pool, wallet, iDMiner, 7, ref message);
+      }
+
+      static Wallet CreateWallet()
+      {
+        string pathWallet = Path.GetTempFileName();
+
+        try
+        {
+          File.WriteAllText(pathWallet, Crypto.GenerateKeyPrivate());
+
+          return new Wallet(pathWallet);
+        }
+        finally
+        {
+          File.Delete(pathWallet);
+        }
+      }
+
+      static TXBToken CreateTXSpendFee(Ledger ledger, Wallet wallet, byte[] iDReceiver, int offsetNonce, long fee)
+      {
+        return ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t =>
+        {
+          t.Nonce += offsetNonce;
+          t.Fee = fee;
+        });
+      }
+
+      static bool AreTXsRankedCorrect(string nameCase, IEnumerable<TXBToken> tXs, List<TXBToken> tXsExpected, ref string message)
+      {
+        List<TXBToken> tXsRanked = tXs.ToList();
+
+        for (int i = 0; i < Math.Max(tXsRanked.Count, tXsExpected.Count); i++)
+          if (i >= tXsRanked.Count || i >= tXsExpected.Count || !tXsRanked[i].Hash.IsAllBytesEqual(tXsExpected[i].Hash))
+          {
+            message = $"TX pool, {nameCase}: position {i} holds {(i < tXsRanked.Count ? tXsRanked[i].Hash.ToHexString() : "no TX")}, " +
+              $"expected {(i < tXsExpected.Count ? tXsExpected[i].Hash.ToHexString() : "no TX")}.";
+            return false;
+          }
+
+        return true;
       }
 
       static bool IsAdmittedBeforeSweep(Wallet wallet, byte[] iDMiner, byte[] iDReceiver, int heightRoot, long balanceWallet, bool isAdmittedExpected, ref string message)
