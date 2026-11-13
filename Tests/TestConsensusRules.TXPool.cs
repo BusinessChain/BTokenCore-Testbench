@@ -56,6 +56,37 @@ internal partial class Testbench
           && IsAdmittedBeforeSweep(wallet, iDMiner, iDReceiver, heightRootSweep, RENT_SWEEP + 1, true, ref message);
       }
 
+      internal static bool TestCreationAdmission(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  23. Creation Admission: Count pending account creations against CountAccountsMax and sweeps.");
+
+        Ledger ledger = new(heightRoot: 0);
+
+        int indexSegmentCreation = GetIndexSegment(wallet.Hash160PKeyPublic) == 4 ? 5 : 4;
+        byte[] iDMiner = CreateIDAccount(1000, 1);
+        byte[] iDExisting = CreateIDAccount(indexSegmentCreation, 1);
+        byte[] iDCreatedPending = CreateIDAccount(indexSegmentCreation, 200);
+        byte[] iDCreatedOverLimit = CreateIDAccount(indexSegmentCreation, 201);
+        byte[] iDCreatedAfterSweep = CreateIDAccount(indexSegmentCreation, 202);
+
+        if (!ledger.TryInsertBlock("coinbase creating the wallet account", [ledger.CreateCoinbase(wallet, wallet.Hash160PKeyPublic, 0)], isValidExpected: true, null, ref message)
+          || !ledger.TryInsertBlock("coinbase creating 99 accounts in one segment", [CreateCoinbaseAccounts(ledger, wallet, indexSegmentCreation, 99)], isValidExpected: true, null, ref message))
+          return false;
+
+        PoolTXBToken pool = ledger.CreateTXPool();
+
+        if (!IsAdmitted("spend creating two accounts in a segment with room for one", pool, ledger.CreateTXSpend(wallet, iDCreatedPending, VALUE_SPEND, t => t.TXOutputs.Add(new TXOutputP2PKH(VALUE_SPEND, iDCreatedOverLimit))), false, ref message)
+          || !IsAdmitted("spend creating one account in a segment with room for one", pool, ledger.CreateTXSpend(wallet, iDCreatedPending, VALUE_SPEND, t => { }), true, ref message)
+          || !IsAdmitted("spend creating a second account beside a pending creation", pool, ledger.CreateTXSpend(wallet, iDCreatedOverLimit, VALUE_SPEND, t => t.Nonce += 1), false, ref message)
+          || !IsAdmitted("spend to the account of a pending creation", pool, ledger.CreateTXSpend(wallet, iDCreatedPending, VALUE_SPEND, t => t.Nonce += 1), true, ref message)
+          || !IsAdmitted("spend to an existing account in the full segment", pool, ledger.CreateTXSpend(wallet, iDExisting, VALUE_SPEND, t => t.Nonce += 2), true, ref message)
+          || !ledger.TryInsertBlockFromPool("block of the pooled spends creating one account", pool, wallet, iDMiner, 3, ref message)
+          || !TryInsertCoinbasesUpTo(ledger, wallet, iDMiner, indexSegmentCreation - 1, ref message))
+          return false;
+
+        return IsAdmitted("spend creating two accounts in a full segment the next sweep empties", ledger.CreateTXPool(), ledger.CreateTXSpend(wallet, iDCreatedOverLimit, VALUE_SPEND, t => t.TXOutputs.Add(new TXOutputP2PKH(VALUE_SPEND, iDCreatedAfterSweep))), true, ref message);
+      }
+
       static bool IsAdmittedBeforeSweep(Wallet wallet, byte[] iDMiner, byte[] iDReceiver, int heightRoot, long balanceWallet, bool isAdmittedExpected, ref string message)
       {
         Ledger ledger = new(heightRoot);
