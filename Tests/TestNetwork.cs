@@ -45,7 +45,8 @@ internal partial class Testbench
         && TestOutboundFailure(ref message)
         && TestInboundDuplicate(ref message)
         && TestInboundEviction(ref message)
-        && TestAddressPort(ref message);
+        && TestAddressPort(ref message)
+        && TestAddressDOS(ref message);
     }
 
     static bool TestHandshakeOutbound(ref string message)
@@ -339,6 +340,59 @@ internal partial class Testbench
       finally
       {
         socketSeed.Dispose();
+      }
+    }
+
+    static bool TestAddressDOS(ref string message)
+    {
+      Console.WriteLine("  10. Address DOS: Ignore addr messages beyond the address DOSMonitor.");
+
+      const string NAME_CASE = "Address DOS";
+      const string IP_ACCEPTED = "10.0.4.1";
+      const string IP_BEYOND_LIMIT = "10.0.4.2";
+      const string IP_UNASKED_1 = "10.0.4.3";
+      const string IP_UNASKED_2 = "10.0.4.4";
+      const int COUNT_ADDRESSES_MAX = 1000;
+      const int PORT_OTHER = 1234;
+
+      NetworkTestbench network = StartNodeWithSeedPeer(1, out CommunicationFake communication, out SocketFake socketSeed);
+      SocketFake socketPeer = null;
+      int port = network.ConfigurationNetwork.Port;
+
+      try
+      {
+        if (!TryHandshakeOutbound(NAME_CASE, socketSeed, ref message))
+          return false;
+
+        SendAddr(socketSeed, [
+          (IP_ACCEPTED, port),
+          .. Enumerable.Range(0, COUNT_ADDRESSES_MAX - 1).Select(i => ($"10.1.{i / 256}.{i % 256}", PORT_OTHER))]);
+
+        SendAddr(socketSeed, [(IP_BEYOND_LIMIT, port)]);
+
+        socketPeer = communication.ConnectInbound(IP_PEER);
+
+        if (!TryHandshakeInbound(NAME_CASE, socketPeer, ref message))
+          return false;
+
+        SendAddr(socketPeer, [(IP_UNASKED_1, port), (IP_UNASKED_2, port)]);
+
+        if (!TrySynchronize(NAME_CASE, socketSeed, ref message)
+          || !TrySynchronize(NAME_CASE, socketPeer, ref message)
+          || !TryReadAddressList(NAME_CASE, communication, out List<string> iPs, ref message))
+          return false;
+
+        if (iPs.Contains(IP_ACCEPTED) && !iPs.Intersect([IP_BEYOND_LIMIT, IP_UNASKED_1, IP_UNASKED_2]).Any())
+          return true;
+
+        message = $"{NAME_CASE}: the address list {string.Join(", ", iPs)} should contain {IP_ACCEPTED} " +
+          $"but none of {IP_BEYOND_LIMIT}, {IP_UNASKED_1} and {IP_UNASKED_2}.";
+        return false;
+      }
+      finally
+      {
+        socketSeed.Dispose();
+        socketPeer?.Dispose();
       }
     }
 
