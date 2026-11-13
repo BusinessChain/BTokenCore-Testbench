@@ -9,17 +9,38 @@ internal partial class Testbench
 {
   List<Test_Testbench> Tests;
 
+  internal Wallet Wallet;
+
 
   internal Testbench()
   {
     Tests = new()
     {
       new TestParsers(this),
+      new TestConsensusRules(this),
       new TestForkChoice(this)
     };
   }
 
   internal void Start()
+  {
+    string pathWallet = Path.GetTempFileName();
+
+    try
+    {
+      File.WriteAllText(pathWallet, Crypto.GenerateKeyPrivate());
+
+      Wallet = new(pathWallet);
+
+      RunTests();
+    }
+    finally
+    {
+      File.Delete(pathWallet);
+    }
+  }
+
+  void RunTests()
   {
     bool resultIsSuccess = false;
     string message = "";

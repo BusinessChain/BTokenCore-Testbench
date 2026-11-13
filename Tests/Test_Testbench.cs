@@ -47,6 +47,45 @@ internal partial class Testbench
       return tX;
     }
 
+    protected static Block CreateBlock(List<BlockchainBToken.TXBToken> tXs)
+    {
+      Block block = new(HeaderBToken.COUNT_HEADER_BYTES + 1 + tXs.Sum(t => t.TXRaw.Length));
+      block.TXs.AddRange(tXs);
+
+      HeaderBToken header = CreateHeaderBToken(block.ComputeMerkleRoot());
+      header.Height = 737858;
+
+      block.Header = header;
+
+      return block;
+    }
+
+    protected static Block ParseBlockSerialized(Block block)
+    {
+      block.Serialize();
+
+      return ParseBlockBuffer(
+        block.Buffer[..block.LengthDataPayload],
+        new HeaderBToken
+        {
+          Hash = block.Header.Hash,
+          HashPrevious = block.Header.HashPrevious,
+          Height = block.Header.Height
+        });
+    }
+
+    protected static Block ParseBlockBuffer(byte[] buffer, HeaderBToken headerExpected)
+    {
+      Block blockParsed = new(buffer)
+      {
+        Header = headerExpected
+      };
+
+      new ParserBToken().ParseBlock(blockParsed, verifySignatures: true);
+
+      return blockParsed;
+    }
+
     protected static bool IsFieldEqual(string nameParser, string nameField, byte[] expected, byte[] parsed, ref string message)
     {
       if (expected.AsSpan().SequenceEqual(parsed))

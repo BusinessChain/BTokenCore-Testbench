@@ -22,24 +22,13 @@ internal partial class Testbench
     {
       message = "";
 
-      string pathWallet = Path.GetTempFileName();
+      Wallet wallet = Testbench.Wallet;
 
-      try
-      {
-        File.WriteAllText(pathWallet, Crypto.GenerateKeyPrivate());
-
-        Wallet wallet = new(pathWallet);
-
-        return Test_HeaderBToken(ref message)
-          && Test_HeaderBitcoin(ref message)
-          && Test_TXBToken(wallet, ref message)
-          && Test_Block(wallet, ref message)
-          && Test_AnchorsWinner(wallet, ref message);
-      }
-      finally
-      {
-        File.Delete(pathWallet);
-      }
+      return Test_HeaderBToken(ref message)
+        && Test_HeaderBitcoin(ref message)
+        && Test_TXBToken(wallet, ref message)
+        && Test_Block(wallet, ref message)
+        && Test_AnchorsWinner(wallet, ref message);
     }
 
     const int COUNT_BYTES_LEADING = 7;
@@ -220,38 +209,6 @@ internal partial class Testbench
       tXOutputTokenAnchor.Serialize();
 
       return tXOutputTokenAnchor;
-    }
-
-    static Block CreateBlock(List<BlockchainBToken.TXBToken> tXs)
-    {
-      Block block = new(HeaderBToken.COUNT_HEADER_BYTES + 1 + tXs.Sum(t => t.TXRaw.Length));
-      block.TXs.AddRange(tXs);
-
-      HeaderBToken header = CreateHeaderBToken(block.ComputeMerkleRoot());
-      header.Height = 737858;
-
-      block.Header = header;
-
-      return block;
-    }
-
-    static Block ParseBlockSerialized(Block block)
-    {
-      block.Serialize();
-
-      Block blockParsed = new(block.Buffer[..block.LengthDataPayload])
-      {
-        Header = new HeaderBToken
-        {
-          Hash = block.Header.Hash,
-          HashPrevious = block.Header.HashPrevious,
-          Height = block.Header.Height
-        }
-      };
-
-      new ParserBToken().ParseBlock(blockParsed, verifySignatures: true);
-
-      return blockParsed;
     }
 
     static string ComputeScoreAnchor(byte[] hashBlock, TXOutputTokenAnchor tXOutputTokenAnchor)
