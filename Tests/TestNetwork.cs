@@ -86,7 +86,51 @@ internal partial class Testbench
         && TestFeeFilter(Testbench.Wallet, ref message)
         && TestTXThrottle(Testbench.Wallet, ref message)
         && TestOwnTX(Testbench.Wallet, ref message)
-        && TestFramingSend(ref message);
+        && TestFramingSend(ref message)
+        && TestSplitReads(ref message);
+    }
+
+    static bool TestSplitReads(ref string message)
+    {
+      Console.WriteLine("  30. Split Reads: Reassemble a message written one byte at a time.");
+
+      const string NAME_CASE = "Split reads";
+      const int MILLISECONDS_PAUSE = 1;
+      const int SECONDS_TIMEOUT_RECEIVE = 10;
+
+      using ConnectionLoopback connection = new();
+      connection.ClientRaw.NoDelay = true;
+
+      byte[] payload = [.. Enumerable.Range(1, 10).Select(i => (byte)i)];
+      byte[] buffer = new byte[2 * payload.Length];
+
+      Task<(string command, int lengthDataPayload)> receive = Task.Run(async () =>
+      {
+        string command = await connection.Socket.ReceiveCommandMessageNext();
+        return (command, await connection.Socket.ReceivePayloadNext(buffer));
+      });
+
+      foreach (byte b in BuildMessage(MAGIC_BYTES, COMMAND_FRAMING, payload.Length, payload))
+      {
+        connection.StreamRaw.WriteByte(b);
+        connection.StreamRaw.Flush();
+        Thread.Sleep(MILLISECONDS_PAUSE);
+      }
+
+      if (!receive.Wait(TimeSpan.FromSeconds(SECONDS_TIMEOUT_RECEIVE)))
+      {
+        message = $"{NAME_CASE}: SocketTCP received no message within {SECONDS_TIMEOUT_RECEIVE} seconds.";
+        return false;
+      }
+
+      (string commandReceived, int lengthReceived) = receive.Result;
+
+      if (commandReceived == COMMAND_FRAMING && buffer[..lengthReceived].IsAllBytesEqual(payload))
+        return true;
+
+      message = $"{NAME_CASE}: SocketTCP receives command {commandReceived} with payload {buffer[..lengthReceived].ToHexString()}, " +
+        $"expected {COMMAND_FRAMING} with {payload.ToHexString()}.";
+      return false;
     }
 
     static bool TestFramingSend(ref string message)
