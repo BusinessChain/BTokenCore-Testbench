@@ -130,6 +130,14 @@ internal partial class Testbench
         return socketPeer;
       }
 
+      internal void LinkOutbound(CommunicationFake communicationInbound, string iPOutbound)
+      {
+        SocketsOutbound.Enqueue(SocketFake.CreatePair(out SocketFake socketInbound));
+        socketInbound.IPRemote = iPOutbound;
+
+        communicationInbound.SocketsInbound.Writer.TryWrite(socketInbound);
+      }
+
       public void StartListenerCommunicationInbound(int port)
       { }
 

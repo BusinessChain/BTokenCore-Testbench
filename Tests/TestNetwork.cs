@@ -97,7 +97,33 @@ internal partial class Testbench
         && TestGetheadersLocator(ref message)
         && TestLocatorLimit(ref message)
         && TestHeadersInsertion(ref message)
-        && TestReturnIdle(ref message);
+        && TestReturnIdle(ref message)
+        && TestEndToEnd(blocksWindow, ref message);
+    }
+
+    static bool TestEndToEnd(List<Block> blocksWindow, ref string message)
+    {
+      Console.WriteLine("  38. End To End: A fresh node syncs blocks and segments from a peer.");
+
+      const string NAME_CASE = "End to end";
+      const string IP_FRESH = "10.0.6.1";
+      const int SECONDS_TIMEOUT_SYNC = 300;
+
+      CommunicationFake communicationServing = new();
+      CommunicationFake communicationFresh = new();
+      communicationFresh.LinkOutbound(communicationServing, IP_FRESH);
+
+      BlockchainNetwork.StartNode(communicationServing, prepare: b => b.AnchorAndDeliver(blocksWindow));
+      NetworkTestbench networkFresh = BlockchainNetwork.StartNode(
+        communicationFresh,
+        prepareParent: p =>
+        {
+          p.MineAnchors(blocksWindow);
+          p.MineBlock([]);
+        });
+
+      return IsAtHeight(NAME_CASE, networkFresh, blocksWindow[^1].Header.Height, ref message, SECONDS_TIMEOUT_SYNC)
+        && ((BlockchainNetwork)networkFresh.Blockchain).IsAccountsSynchronized(NAME_CASE, SECONDS_TIMEOUT_SYNC, ref message);
     }
 
     static bool TestReturnIdle(ref string message)
@@ -1640,11 +1666,11 @@ internal partial class Testbench
       socketPeer.SendMessage(COMMAND_HEADERS, payload.Length, payload).Wait();
     }
 
-    static bool IsAtHeight(string nameCase, NetworkTestbench network, int height, ref string message)
+    static bool IsAtHeight(string nameCase, NetworkTestbench network, int height, ref string message, int secondsTimeout = SECONDS_TIMEOUT_REQUEST)
     {
       if (SpinWait.SpinUntil(
         () => network.Blockchain.RunLocked(network.Blockchain.GetHeight).Result == height,
-        TimeSpan.FromSeconds(SECONDS_TIMEOUT_REQUEST)))
+        TimeSpan.FromSeconds(secondsTimeout)))
         return true;
 
       message = $"{nameCase}: the node does not reach height {height}.";
@@ -1863,12 +1889,16 @@ internal partial class Testbench
         CommunicationFake communication,
         int countMaxOutbound = 1,
         int countMaxInbound = 32,
-        Action<BlockchainNetwork> prepare = null)
+        Action<BlockchainNetwork> prepare = null,
+        Action<BlockchainParentFake> prepareParent = null)
       {
         CreateWalletFile(BlockchainBitcoin.NAME_TOKEN);
         CreateWalletFile(NAME_TOKEN);
 
-        BlockchainNetwork blockchain = new(CreateLiteDatabase(), new BlockchainParentFake(CreateLiteDatabase()));
+        BlockchainParentFake blockchainParent = new(CreateLiteDatabase());
+        prepareParent?.Invoke(blockchainParent);
+
+        BlockchainNetwork blockchain = new(CreateLiteDatabase(), blockchainParent.Restart());
         blockchain.Load();
         prepare?.Invoke(blockchain);
 
@@ -1878,6 +1908,23 @@ internal partial class Testbench
         network.Start();
 
         return network;
+      }
+
+      internal bool IsAccountsSynchronized(string nameCase, int secondsTimeout, ref string message)
+      {
+        if (!SpinWait.SpinUntil(() => RunLocked(Synchronizer.IsAccountsAtTip).Result, TimeSpan.FromSeconds(secondsTimeout)))
+        {
+          message = $"{nameCase}: the accounts do not reach the tip within {secondsTimeout} seconds.";
+          return false;
+        }
+
+        string messageSegments = "";
+
+        if (RunLocked(() => AreSegmentsMatchingHashAccounts(nameCase, ref messageSegments)).Result)
+          return true;
+
+        message = messageSegments;
+        return false;
       }
 
       internal static SocketFake StartNodeBitcoin(int countBlocks, out List<Header> headers)

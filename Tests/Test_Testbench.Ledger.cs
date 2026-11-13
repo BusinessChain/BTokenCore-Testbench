@@ -146,7 +146,13 @@ internal partial class Testbench
           return false;
         }
 
-        for (Header header = ChainRoot.HeaderTipBlockchain; header.Height > 0 && header.Height >= heightExpected - BITCOIN_REORG_MARGIN; header = header.HeaderPrevious)
+        return AreSegmentsMatchingHashAccounts(nameCase, ref message)
+          && ledger.AreAccountsEqualAtHeight(nameCase, Accounts, heightExpected, ChainRoot.HeaderTipBlockchain.Hash, ref message);
+      }
+
+      protected bool AreSegmentsMatchingHashAccounts(string nameCase, ref string message)
+      {
+        for (Header header = ChainRoot.HeaderTipBlockchain; header.Height > 0 && header.Height >= GetHeight() - BITCOIN_REORG_MARGIN; header = header.HeaderPrevious)
         {
           byte[] segment = GetSegmentSweptByBlock(header.Hash);
 
@@ -158,7 +164,7 @@ internal partial class Testbench
           }
         }
 
-        return ledger.AreAccountsEqualAtHeight(nameCase, Accounts, heightExpected, ChainRoot.HeaderTipBlockchain.Hash, ref message);
+        return true;
       }
 
       protected class Ledger
