@@ -32,7 +32,8 @@ internal partial class Testbench
         && BlockchainMining.TestLateBehind(Testbench.Wallet, ref message)
         && BlockchainMining.TestLateRun(Testbench.Wallet, ref message)
         && BlockchainMining.TestTimerTick(Testbench.Wallet, ref message)
-        && BlockchainMining.TestBlankWindow(Testbench.Wallet, ref message);
+        && BlockchainMining.TestBlankWindow(Testbench.Wallet, ref message)
+        && BlockchainMining.TestOwnMiss(Testbench.Wallet, ref message);
     }
 
     class BlockchainMining : BlockchainTestbench
@@ -571,16 +572,49 @@ internal partial class Testbench
             return false;
           }
 
-          string nameCaseReplaced = $"{NAME_CASE}, replacement after the blank window";
-          long feeReplacement = Math.Max(FEE_ANCHOR, tXMissed.Fee + LENGTH_ANCHOR);
-
-          return blockchain.TryAwaitAnchor(nameCaseReplaced, out BlockchainBitcoin.TXBitcoin tXReplacement, ref message)
-            && blockchain.IsPassedLocked((ref string m) => blockchain.IsAnchorSpending(nameCaseReplaced, tXReplacement, blockchain.TXFunding.Hash, 0, feeReplacement, ref m), ref message);
+          return blockchain.IsMissedReplaced($"{NAME_CASE}, replacement after the blank window", tXMissed, SECONDS_TIMEOUT_TIMER, ref message);
         }
         finally
         {
           blockchain.RunLocked(blockchain.StopMining).Wait();
         }
+      }
+
+      internal static bool TestOwnMiss(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  16. Own Miss: Replace an own missed anchor at once.");
+
+        const string NAME_CASE = "Own miss";
+        const int SECONDS_REPLACEMENT_AT_ONCE = 1;
+
+        if (!TryStartNode(wallet, NAME_CASE, VALUE_FUNDING, out BlockchainMining blockchain, out _, ref message))
+          return false;
+
+        blockchain.RunLocked(() => blockchain.StartMining(1, FEE_ANCHOR)).Wait();
+
+        try
+        {
+          BlockchainBitcoin.TXBitcoin tXMissed = null;
+
+          if (!blockchain.IsPassedLocked((ref string m) => blockchain.TryMineAnchor(NAME_CASE, blockchain.MinerBlockchain.MineBlock, out tXMissed, ref m), ref message))
+            return false;
+
+          blockchain.RunLocked(() => blockchain.ParentFake.MineBlock([])).Wait();
+
+          return blockchain.IsMissedReplaced($"{NAME_CASE}, replacement after a Bitcoin block without anchor winner", tXMissed, SECONDS_REPLACEMENT_AT_ONCE, ref message);
+        }
+        finally
+        {
+          blockchain.RunLocked(blockchain.StopMining).Wait();
+        }
+      }
+
+      bool IsMissedReplaced(string nameCase, BlockchainBitcoin.TXBitcoin tXMissed, int secondsTimeout, ref string message)
+      {
+        long feeReplacement = Math.Max(FEE_ANCHOR, tXMissed.Fee + LENGTH_ANCHOR);
+
+        return TryAwaitAnchor(nameCase, out BlockchainBitcoin.TXBitcoin tXReplacement, ref message, secondsTimeout)
+          && IsPassedLocked((ref string m) => IsAnchorSpending(nameCase, tXReplacement, TXFunding.Hash, 0, feeReplacement, ref m), ref message);
       }
 
       delegate bool Check(ref string message);
