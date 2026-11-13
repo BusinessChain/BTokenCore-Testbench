@@ -16,7 +16,8 @@ internal partial class Testbench
     {
       message = "";
 
-      return BlockchainMining.TestMineCoinbase(Testbench.Wallet, ref message);
+      return BlockchainMining.TestMineCoinbase(Testbench.Wallet, ref message)
+        && BlockchainMining.TestMinePoolTXs(Testbench.Wallet, ref message);
     }
 
     class BlockchainMining : BlockchainTestbench
@@ -35,23 +36,61 @@ internal partial class Testbench
       {
         Console.WriteLine("  1. Mine Coinbase: Insert a coinbase-only mined block after its anchor.");
 
-        if (!TryCreateLedger(wallet, out Ledger ledger, ref message))
+        const string NAME_CASE = "Mine coinbase";
+
+        if (!TryStartNode(wallet, NAME_CASE, out BlockchainMining blockchain, out Ledger ledger, ref message))
           return false;
 
-        BlockchainMining blockchain = StartNode(ledger);
+        long valueExpected = GetBlockReward(ledger.GetHeightTip() + 1) + ledger.GetRentNext();
 
-        if (!blockchain.IsSynchronized(ledger, "Mine coinbase, Ledger blocks anchored and delivered", ledger.GetHeightTip(), ref message))
+        return blockchain.TryMineBlock(NAME_CASE, out Block block, ref message)
+          && blockchain.IsBlockMinedCorrect(NAME_CASE, block, [], valueExpected, ref message);
+      }
+
+      internal static bool TestMinePoolTXs(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  2. Mine PoolTXs: Include ranked pool TXs, pay their fees, empty the pool.");
+
+        const string NAME_CASE = "Mine pool TXs";
+        const int COUNT_TXS = 3;
+
+        if (!TryStartNode(wallet, NAME_CASE, out BlockchainMining blockchain, out Ledger ledger, ref message))
           return false;
 
-        int height = ledger.GetHeightTip() + 1;
-        long valueExpected = GetBlockReward(height) + ledger.GetRentNext();
+        byte[] iDReceiver = CreateIDAccount(1001, 2);
+        List<TXBToken> tXs = [];
 
-        if (!blockchain.TryMineBlock("Mine coinbase", out Block block, ref message))
-          return false;
-
-        if (block.TXs.Count != 1)
+        for (int i = 0; i < COUNT_TXS; i++)
         {
-          message = $"Mine coinbase: the mined block holds {block.TXs.Count} TXs, expected only the coinbase.";
+          int offsetNonce = i;
+          TXBToken tX = ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => { t.Nonce += offsetNonce; t.Fee = FEE * (offsetNonce + 1); });
+
+          if (!IsAccepted($"{NAME_CASE}, spend {i} added to the pool", () => blockchain.AddTX(tX), ref message))
+            return false;
+
+          tXs.Add(tX);
+        }
+
+        List<TXBToken> tXsRanked = blockchain.GetTXsRanked(tXs.Select(t => t.Hash).ToHashSet(new EqualityComparerByteArray()));
+        long valueExpected = GetBlockReward(ledger.GetHeightTip() + 1) + ledger.GetRentNext() + tXs.Sum(t => t.Fee);
+
+        if (!blockchain.TryMineBlock(NAME_CASE, out Block block, ref message)
+          || !blockchain.IsBlockMinedCorrect(NAME_CASE, block, tXsRanked, valueExpected, ref message))
+          return false;
+
+        if (blockchain.GetHashesTXNotInPool(tXs.Select(t => t.Hash).ToList()).Count == COUNT_TXS)
+          return true;
+
+        message = $"{NAME_CASE}: the pool still holds mined TXs after the block's insertion.";
+        return false;
+      }
+
+      bool IsBlockMinedCorrect(string nameCase, Block block, List<TXBToken> tXsExpected, long valueCoinbaseExpected, ref string message)
+      {
+        if (block.TXs.Count != tXsExpected.Count + 1
+          || !block.TXs.Skip(1).Select(t => t.Hash).SequenceEqual(tXsExpected.Select(t => t.Hash), new EqualityComparerByteArray()))
+        {
+          message = $"{nameCase}: the mined block holds {block.TXs.Count - 1} TXs after the coinbase, expected the {tXsExpected.Count} pool TXs in rank order.";
           return false;
         }
 
@@ -59,19 +98,19 @@ internal partial class Testbench
 
         if (tXCoinbase.TXOutputs.Count != 1 || tXCoinbase.TXOutputs[0] is not TXOutputP2PKH outputCoinbase)
         {
-          message = $"Mine coinbase: the coinbase holds {tXCoinbase.TXOutputs.Count} outputs, expected one TXOutputP2PKH.";
+          message = $"{nameCase}: the coinbase holds {tXCoinbase.TXOutputs.Count} outputs, expected one TXOutputP2PKH.";
           return false;
         }
 
-        if (outputCoinbase.Value != valueExpected)
+        if (outputCoinbase.Value != valueCoinbaseExpected)
         {
-          message = $"Mine coinbase: the coinbase pays {outputCoinbase.Value}, expected block reward plus rent {valueExpected}.";
+          message = $"{nameCase}: the coinbase pays {outputCoinbase.Value}, expected block reward plus rent plus fees {valueCoinbaseExpected}.";
           return false;
         }
 
-        if (!outputCoinbase.IDAccount.IsAllBytesEqual(blockchain.Wallet.Hash160PKeyPublic))
+        if (!outputCoinbase.IDAccount.IsAllBytesEqual(Wallet.Hash160PKeyPublic))
         {
-          message = $"Mine coinbase: the coinbase pays to {outputCoinbase.IDAccount.ToHexString()}, expected the receiving key {blockchain.Wallet.Hash160PKeyPublic.ToHexString()}.";
+          message = $"{nameCase}: the coinbase pays to {outputCoinbase.IDAccount.ToHexString()}, expected the receiving key {Wallet.Hash160PKeyPublic.ToHexString()}.";
           return false;
         }
 
@@ -117,12 +156,17 @@ internal partial class Testbench
         return true;
       }
 
-      static BlockchainMining StartNode(Ledger ledger)
+      static bool TryStartNode(Wallet wallet, string nameCase, out BlockchainMining blockchain, out Ledger ledger, ref string message)
       {
+        blockchain = null;
+
+        if (!TryCreateLedger(wallet, out ledger, ref message))
+          return false;
+
         CreateWalletFile(BlockchainBitcoin.NAME_TOKEN);
         CreateWalletFile(NAME_TOKEN);
 
-        BlockchainMining blockchain = new(CreateLiteDatabase(), new BlockchainParentFake(CreateLiteDatabase()));
+        blockchain = new(CreateLiteDatabase(), new BlockchainParentFake(CreateLiteDatabase()));
         blockchain.Load();
 
         List<Block> blocksLedger = ledger.GetBlocksInserted();
@@ -130,7 +174,7 @@ internal partial class Testbench
         blockchain.ParentFake.MineAnchors(blocksLedger);
         blockchain.DeliverBlocks(blocksLedger);
 
-        return blockchain;
+        return blockchain.IsSynchronized(ledger, $"{nameCase}, Ledger blocks anchored and delivered", ledger.GetHeightTip(), ref message);
       }
     }
   }
