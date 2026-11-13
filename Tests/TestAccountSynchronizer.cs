@@ -52,14 +52,14 @@ internal partial class Testbench
 
         BlockchainSynchronizing blockchain = StartNode(CreateLiteDatabase(), int.MaxValue);
 
-        if (!blockchain.IsSynchronized(ledger, "fresh start before any block", 0, ref message))
+        if (!blockchain.IsSynchronized(ledger, "Account synchronizer,fresh start before any block", 0, ref message))
           return false;
 
         foreach (Block blockLedger in ledger.GetBlocksInserted())
         {
           blockchain.InsertBlocks([blockLedger]);
 
-          if (!blockchain.IsSynchronized(ledger, $"fresh start after the block at height {blockLedger.Header.Height}", blockLedger.Header.Height, ref message))
+          if (!blockchain.IsSynchronized(ledger, $"Account synchronizer,fresh start after the block at height {blockLedger.Header.Height}", blockLedger.Header.Height, ref message))
             return false;
         }
 
@@ -78,7 +78,7 @@ internal partial class Testbench
         blockchain.InsertBlocks(ledger.GetBlocksInserted());
         blockchain.RollBackTo(3);
 
-        if (!blockchain.IsSynchronized(ledger, "rollback to height 3", 3, ref message))
+        if (!blockchain.IsSynchronized(ledger, "Account synchronizer,rollback to height 3", 3, ref message))
           return false;
 
         while (ledger.GetHeightTip() > 3)
@@ -94,7 +94,7 @@ internal partial class Testbench
 
         blockchain.InsertBlocks(ledger.GetBlocksInserted().Where(b => b.Header.Height > 3).ToList());
 
-        return blockchain.IsSynchronized(ledger, "replacing fork inserted after the rollback to height 3", 6, ref message);
+        return blockchain.IsSynchronized(ledger, "Account synchronizer,replacing fork inserted after the rollback to height 3", 6, ref message);
       }
 
       // Counter-tested 2026-11-13 17:16
@@ -110,12 +110,12 @@ internal partial class Testbench
 
         BlockchainSynchronizing blockchainRestarted = StartNode(blockchain.LiteDatabase, 3);
 
-        if (!blockchainRestarted.IsSynchronized(ledger, "restart with blocks anchored up to height 3", 3, ref message))
+        if (!blockchainRestarted.IsSynchronized(ledger, "Account synchronizer,restart with blocks anchored up to height 3", 3, ref message))
           return false;
 
         blockchainRestarted.InsertBlocks(ledger.GetBlocksInserted().Where(b => b.Header.Height > 3).ToList());
 
-        return blockchainRestarted.IsSynchronized(ledger, "blocks above height 3 inserted again after the restart", 6, ref message);
+        return blockchainRestarted.IsSynchronized(ledger, "Account synchronizer,blocks above height 3 inserted again after the restart", 6, ref message);
       }
 
       // Counter-tested 2026-11-13 17:16
@@ -132,13 +132,13 @@ internal partial class Testbench
 
         BlockchainSynchronizing blockchainRestarted = StartNode(blockchain.LiteDatabase, int.MaxValue);
 
-        if (!blockchainRestarted.IsSynchronized(ledger, "restart after the account database was dropped", 6, ref message))
+        if (!blockchainRestarted.IsSynchronized(ledger, "Account synchronizer,restart after the account database was dropped", 6, ref message))
           return false;
 
         blockchainRestarted.BlocksStored.Delete(6);
 
         return StartNode(blockchainRestarted.LiteDatabase, int.MaxValue)
-          .IsSynchronized(ledger, "restart without the stored block the accounts applied last", 5, ref message);
+          .IsSynchronized(ledger, "Account synchronizer,restart without the stored block the accounts applied last", 5, ref message);
       }
 
       // Counter-tested 2026-11-13 17:16
@@ -162,12 +162,12 @@ internal partial class Testbench
 
         BlockchainSynchronizing blockchainRestarted = StartNode(blockchain.LiteDatabase, int.MaxValue);
 
-        if (!blockchainRestarted.IsSynchronized(ledger, $"replay from the root rejecting the block at height {HEIGHT_FORGED}", HEIGHT_FORGED - 1, ref message))
+        if (!blockchainRestarted.IsSynchronized(ledger, $"Account synchronizer,replay from the root rejecting the block at height {HEIGHT_FORGED}", HEIGHT_FORGED - 1, ref message))
           return false;
 
         blockchainRestarted.InsertBlocks(blocksLedger.Where(b => b.Header.Height >= HEIGHT_FORGED).ToList());
 
-        return blockchainRestarted.IsSynchronized(ledger, "Ledger blocks inserted after the rejected block", 6, ref message);
+        return blockchainRestarted.IsSynchronized(ledger, "Account synchronizer,Ledger blocks inserted after the rejected block", 6, ref message);
       }
 
       // Counter-tested 2026-11-13 17:16
@@ -187,7 +187,7 @@ internal partial class Testbench
 
         BlockchainSynchronizing blockchainRestarted = StartNode(blockchain.LiteDatabase, int.MaxValue);
 
-        if (!blockchainRestarted.IsSynchronized(ledger, "restart after the TX submitted without accounts", 6, ref message)
+        if (!blockchainRestarted.IsSynchronized(ledger, "Account synchronizer,restart after the TX submitted without accounts", 6, ref message)
           || !blockchainRestarted.IsInPool("restart after the TX submitted without accounts", tXSpend.Hash, false, ref message)
           || !IsAccepted("Account synchronizer, TX submitted with accounts at the tip", () => blockchainRestarted.SubmitTX(tXSpend.TXRaw), ref message)
           || !blockchainRestarted.IsInPool("TX submitted with accounts at the tip", tXSpend.Hash, true, ref message))
@@ -200,7 +200,7 @@ internal partial class Testbench
 
         BlockchainSynchronizing blockchainReloaded = StartNode(blockchainRestarted.LiteDatabase, int.MaxValue);
 
-        return blockchainReloaded.IsSynchronized(ledger, "restart after the account database was dropped", 6, ref message)
+        return blockchainReloaded.IsSynchronized(ledger, "Account synchronizer,restart after the account database was dropped", 6, ref message)
           && blockchainReloaded.IsInPool("owned TX reloaded after the replay", tXSpend.Hash, true, ref message);
       }
 
@@ -219,7 +219,7 @@ internal partial class Testbench
         blockchain.InsertBlocks(blocksLedger);
         blockchain.RollBackTo(1);
 
-        if (!blockchain.IsSynchronized(ledger, "rollback to height 1 with accounts at the tip", 1, ref message)
+        if (!blockchain.IsSynchronized(ledger, "Account synchronizer,rollback to height 1 with accounts at the tip", 1, ref message)
           || !blockchain.IsInPool("rollback to height 1 with accounts at the tip", hashSpend, true, ref message))
           return false;
 
@@ -235,7 +235,7 @@ internal partial class Testbench
 
         BlockchainSynchronizing blockchainRestarted = StartNode(blockchainReplaying.LiteDatabase, 1);
 
-        return blockchainRestarted.IsSynchronized(ledger, "restart rolling back unanchored blocks while the replay is pending", 1, ref message)
+        return blockchainRestarted.IsSynchronized(ledger, "Account synchronizer,restart rolling back unanchored blocks while the replay is pending", 1, ref message)
           && blockchainRestarted.IsInPool("restart rolling back unanchored blocks while the replay is pending", hashSpend, false, ref message);
       }
 
@@ -267,7 +267,7 @@ internal partial class Testbench
 
         blockchain.DownloadSegments(getSegmentServed);
 
-        if (!blockchain.IsSynchronized(ledger, "segments downloaded and installed", HEIGHT_TIP_WINDOW, ref message))
+        if (!blockchain.IsSynchronized(ledger, "Account synchronizer,segments downloaded and installed", HEIGHT_TIP_WINDOW, ref message))
           return false;
 
         blockchain.RollBackTo(HEIGHT_INSTALLED - 1);
@@ -278,7 +278,7 @@ internal partial class Testbench
         blockchain.InsertBlocks(ledger.GetBlocksInserted().Where(b => b.Header.Height >= HEIGHT_INSTALLED).ToList());
         blockchain.DownloadSegments(getSegmentServed);
 
-        return blockchain.IsSynchronized(ledger, "segments downloaded again after the rollback below the installed height", HEIGHT_TIP_WINDOW, ref message);
+        return blockchain.IsSynchronized(ledger, "Account synchronizer,segments downloaded again after the rollback below the installed height", HEIGHT_TIP_WINDOW, ref message);
       }
 
       // Counter-tested 2026-11-13 17:16
@@ -303,7 +303,7 @@ internal partial class Testbench
         blockchain.InsertBlocks(blocksLedger.Where(b => b.Header.Height >= HEIGHT_FORGED).ToList());
         blockchain.DownloadSegments(getSegmentServed);
 
-        return blockchain.IsSynchronized(ledger, "segments downloaded after the block with the invalid segment was replaced", HEIGHT_TIP_WINDOW, ref message);
+        return blockchain.IsSynchronized(ledger, "Account synchronizer,segments downloaded after the block with the invalid segment was replaced", HEIGHT_TIP_WINDOW, ref message);
       }
 
       // Counter-tested 2026-11-13 17:16
@@ -328,7 +328,7 @@ internal partial class Testbench
         blockchain.InsertBlocks(blocksLedger.Where(b => b.Header.Height >= HEIGHT_FORGED).ToList());
         blockchain.DownloadSegments(getSegmentServed);
 
-        return blockchain.IsSynchronized(ledger, "segments downloaded after the failing carried block was replaced", HEIGHT_TIP_WINDOW, ref message);
+        return blockchain.IsSynchronized(ledger, "Account synchronizer,segments downloaded after the failing carried block was replaced", HEIGHT_TIP_WINDOW, ref message);
       }
 
       static List<Block> ForgeBlocks(List<Block> blocksLedger, int heightForged, Action<List<TXBToken>, HeaderBToken> alter)
@@ -384,7 +384,7 @@ internal partial class Testbench
         server = StartNode(CreateLiteDatabase(), int.MaxValue);
         server.InsertBlocks(ledger.GetBlocksInserted());
 
-        return server.IsSynchronized(ledger, "serving node", HEIGHT_TIP_WINDOW, ref message);
+        return server.IsSynchronized(ledger, "Account synchronizer,serving node", HEIGHT_TIP_WINDOW, ref message);
       }
 
       static Func<Header, byte[]> GetSegmentServed(Ledger ledger, BlockchainSynchronizing server)
@@ -414,18 +414,6 @@ internal partial class Testbench
         }
       }
 
-      static bool TryCreateLedger(Wallet wallet, out Ledger ledger, ref string message)
-      {
-        ledger = new(heightRoot: 0);
-
-        byte[] iDMiner = CreateIDAccount(1000, 1);
-        byte[] iDReceiver = CreateIDAccount(1001, 2);
-
-        return ledger.TryInsertBlock("coinbase creating the wallet account", [ledger.CreateCoinbase(wallet, wallet.Hash160PKeyPublic, 0)], isValidExpected: true, null, ref message)
-          && ledger.TryInsertBlock("spend from the wallet account", [ledger.CreateCoinbase(wallet, iDMiner, FEE), ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => { })], isValidExpected: true, null, ref message)
-          && TryInsertCoinbasesUpTo(ledger, wallet, iDMiner, 6, ref message);
-      }
-
       void RollBackTo(int height)
       {
         Header headerCutOff = ChainRoot.HeaderTipBlockchain.GetHeaderAncestor(height + 1);
@@ -447,27 +435,6 @@ internal partial class Testbench
         blockchain.Load();
 
         return blockchain;
-      }
-
-      static void CreateWalletFile(string nameToken)
-      {
-        string pathWallet = $"Wallet{nameToken}/wallet";
-
-        if (File.Exists(pathWallet))
-          return;
-
-        Directory.CreateDirectory($"Wallet{nameToken}");
-        File.WriteAllText(pathWallet, Crypto.GenerateKeyPrivate());
-      }
-
-      static LiteDatabase CreateLiteDatabase()
-      {
-        return new LiteDatabase(new MemoryStream(), new BsonMapper { IncludeFields = true, IncludeNonPublic = true });
-      }
-
-      protected override Header CreateHeaderRoot()
-      {
-        return new HeaderBToken { Hash = new byte[32], Height = 0 };
       }
 
       protected override void ParseBlockStored(Block block)
@@ -500,7 +467,7 @@ internal partial class Testbench
 
       bool IsWithoutAccounts(string nameCase, int heightExpected, ref string message)
       {
-        if (!IsAtHeight(nameCase, heightExpected, ref message))
+        if (!IsAtHeight($"Account synchronizer, {nameCase}", heightExpected, ref message))
           return false;
 
         if (!Synchronizer.IsAccountsAtTip())
@@ -519,40 +486,6 @@ internal partial class Testbench
         return false;
       }
 
-      bool IsAtHeight(string nameCase, int heightExpected, ref string message)
-      {
-        if (GetHeight() == heightExpected)
-          return true;
-
-        message = $"Account synchronizer, {nameCase}: the tip is at height {GetHeight()}, expected {heightExpected}.";
-        return false;
-      }
-
-      bool IsSynchronized(Ledger ledger, string nameCase, int heightExpected, ref string message)
-      {
-        if (!IsAtHeight(nameCase, heightExpected, ref message))
-          return false;
-
-        if (!Synchronizer.IsAccountsAtTip())
-        {
-          message = $"Account synchronizer, {nameCase}: the accounts are not at the tip.";
-          return false;
-        }
-
-        for (Header header = ChainRoot.HeaderTipBlockchain; header.Height > 0 && header.Height >= heightExpected - BITCOIN_REORG_MARGIN; header = header.HeaderPrevious)
-        {
-          byte[] segment = GetSegmentSweptByBlock(header.Hash);
-
-          if (segment == null || !SHA256.HashData(segment).IsAllBytesEqual(((HeaderBToken)header).HashAccounts))
-          {
-            message = $"Account synchronizer, {nameCase}: segment {header.Height % COUNT_SEGMENTS} served for height {header.Height} " +
-              $"{(segment == null ? "is missing" : "doesn't match HashAccounts of its block")}.";
-            return false;
-          }
-        }
-
-        return ledger.AreAccountsEqualAtHeight($"Account synchronizer, {nameCase}", Accounts, heightExpected, ChainRoot.HeaderTipBlockchain.Hash, ref message);
-      }
     }
   }
 }

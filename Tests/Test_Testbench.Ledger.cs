@@ -75,6 +75,74 @@ internal partial class Testbench
         return countHalvings >= 64 ? 0 : BLOCK_REWARD_INITIAL >> countHalvings;
       }
 
+      protected override Header CreateHeaderRoot()
+      {
+        return new HeaderBToken { Hash = new byte[32], Height = 0 };
+      }
+
+      protected static void CreateWalletFile(string nameToken)
+      {
+        string pathWallet = $"Wallet{nameToken}/wallet";
+
+        if (File.Exists(pathWallet))
+          return;
+
+        Directory.CreateDirectory($"Wallet{nameToken}");
+        File.WriteAllText(pathWallet, Crypto.GenerateKeyPrivate());
+      }
+
+      protected static LiteDatabase CreateLiteDatabase()
+      {
+        return new LiteDatabase(new MemoryStream(), new BsonMapper { IncludeFields = true, IncludeNonPublic = true });
+      }
+
+      protected static bool TryCreateLedger(Wallet wallet, out Ledger ledger, ref string message)
+      {
+        ledger = new(heightRoot: 0);
+
+        byte[] iDMiner = CreateIDAccount(1000, 1);
+        byte[] iDReceiver = CreateIDAccount(1001, 2);
+
+        return ledger.TryInsertBlock("coinbase creating the wallet account", [ledger.CreateCoinbase(wallet, wallet.Hash160PKeyPublic, 0)], isValidExpected: true, null, ref message)
+          && ledger.TryInsertBlock("spend from the wallet account", [ledger.CreateCoinbase(wallet, iDMiner, FEE), ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => { })], isValidExpected: true, null, ref message)
+          && TryInsertCoinbasesUpTo(ledger, wallet, iDMiner, 6, ref message);
+      }
+
+      protected bool IsAtHeight(string nameCase, int heightExpected, ref string message)
+      {
+        if (GetHeight() == heightExpected)
+          return true;
+
+        message = $"{nameCase}: the tip is at height {GetHeight()}, expected {heightExpected}.";
+        return false;
+      }
+
+      protected bool IsSynchronized(Ledger ledger, string nameCase, int heightExpected, ref string message)
+      {
+        if (!IsAtHeight(nameCase, heightExpected, ref message))
+          return false;
+
+        if (!Synchronizer.IsAccountsAtTip())
+        {
+          message = $"{nameCase}: the accounts are not at the tip.";
+          return false;
+        }
+
+        for (Header header = ChainRoot.HeaderTipBlockchain; header.Height > 0 && header.Height >= heightExpected - BITCOIN_REORG_MARGIN; header = header.HeaderPrevious)
+        {
+          byte[] segment = GetSegmentSweptByBlock(header.Hash);
+
+          if (segment == null || !SHA256.HashData(segment).IsAllBytesEqual(((HeaderBToken)header).HashAccounts))
+          {
+            message = $"{nameCase}: segment {header.Height % COUNT_SEGMENTS} served for height {header.Height} " +
+              $"{(segment == null ? "is missing" : "doesn't match HashAccounts of its block")}.";
+            return false;
+          }
+        }
+
+        return ledger.AreAccountsEqualAtHeight(nameCase, Accounts, heightExpected, ChainRoot.HeaderTipBlockchain.Hash, ref message);
+      }
+
       protected class Ledger
       {
         LiteDatabase LiteDatabase = new(new MemoryStream(), new BsonMapper { IncludeFields = true, IncludeNonPublic = true });
