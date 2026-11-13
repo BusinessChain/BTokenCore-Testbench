@@ -224,32 +224,6 @@ internal partial class Testbench
         && anchorsIneligible.All(a => string.CompareOrdinal(ComputeScoreAnchor(hashBlock, a), ComputeScoreAnchor(hashBlock, anchorLowestFirst)) < 0);
     }
 
-    static TXOutputTokenAnchor GetAnchorScoreLowest(byte[] hashBlock, TXOutputTokenAnchor[] anchors)
-    {
-      return anchors.MinBy(a => ComputeScoreAnchor(hashBlock, a), StringComparer.Ordinal);
-    }
-
-    static string ComputeScoreAnchor(byte[] hashBlock, TXOutputTokenAnchor tXOutputTokenAnchor)
-    {
-      return Convert.ToHexString(SHA256.HashData(
-        [.. hashBlock, .. tXOutputTokenAnchor.HashBlockReferenced, .. tXOutputTokenAnchor.HashBlockPreviousReferenced]));
-    }
-
-    static bool IsAnchorWinnerLowestScore(string nameParser, Header headerParsed, TXOutputTokenAnchor[] anchorsEligible, ref string message)
-    {
-      TXOutputTokenAnchor anchorExpected = GetAnchorScoreLowest(headerParsed.Hash, anchorsEligible);
-
-      string iDToken = anchorExpected.IDToken.ToHexString();
-
-      if (!headerParsed.AnchorsWinner.TryGetValue(anchorExpected.IDToken, out TXOutputTokenAnchor anchorWinner))
-      {
-        message = $"{nameParser}: no anchor winner of IDToken {iDToken}.";
-        return false;
-      }
-
-      return IsFieldEqual(nameParser, $"HashBlockReferenced of anchor winner of IDToken {iDToken}", anchorExpected.HashBlockReferenced, anchorWinner.HashBlockReferenced, ref message);
-    }
-
     static bool IsTXBTokenParsedEqual(BlockchainBToken.TXBToken tX, byte[] buffer, int indexStart, bool isCoinbase, ref string message)
     {
       int index = indexStart;

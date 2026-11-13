@@ -1,4 +1,6 @@
-﻿using BTokenCore;
+﻿using System.Security.Cryptography;
+
+using BTokenCore;
 
 
 namespace BTokenCore_Testbench;
@@ -18,6 +20,7 @@ internal partial class Testbench
     const uint TIMESPAN_RETARGET_SECONDS = 14 * 24 * 60 * 60;
     const uint N_BITS_TARGET_QUADRUPLED = 0x17087BC0;
     const uint N_BITS_TARGET_QUARTERED = 0x170087BC;
+    const long VALUE_OUTPUT = 50000;
 
     internal TestBlockchainBitcoin(Testbench testbench)
       : base(testbench)
@@ -30,7 +33,8 @@ internal partial class Testbench
       return Test_ProofOfWork(ref message)
         && Test_TimestampPremature(ref message)
         && Test_MedianTimePast(ref message)
-        && Test_Retargeting(ref message);
+        && Test_Retargeting(ref message)
+        && Test_AnchorsBitcoin(ref message);
     }
 
     bool Test_ProofOfWork(ref string message)
@@ -51,8 +55,8 @@ internal partial class Testbench
 
       DateTimeOffset now = DateTimeOffset.UtcNow;
 
-      byte[] headerRawValid = MineHeader((uint)now.AddHours(1).ToUnixTimeSeconds());
-      byte[] headerRawPremature = MineHeader((uint)now.AddHours(3).ToUnixTimeSeconds());
+      byte[] headerRawValid = MineHeader((uint)now.AddHours(1).ToUnixTimeSeconds(), new byte[32], h => true).Serialize();
+      byte[] headerRawPremature = MineHeader((uint)now.AddHours(3).ToUnixTimeSeconds(), new byte[32], h => true).Serialize();
 
       return IsAccepted("Timestamp one hour ahead", () => ParseHeader(headerRawValid), ref message)
         && IsRejected("Timestamp premature", () => ParseHeader(headerRawPremature), ref message);
@@ -128,17 +132,87 @@ internal partial class Testbench
       return header;
     }
 
-    static byte[] MineHeader(uint unixTimeSeconds)
+    bool Test_AnchorsBitcoin(ref string message)
+    {
+      Console.WriteLine("  5. Bitcoin Anchors: Draw anchor winners from TXBitcoin outputs of a Bitcoin block.");
+
+      const int HEIGHT_BLOCK = 800000;
+      byte[] iDTokenSecond = [0x05, 0x06, 0x07, 0x08];
+
+      TXOutputTokenAnchor[] anchorsFirst = [
+        CreateTXOutputTokenAnchor(ID_TOKEN, 1),
+        CreateTXOutputTokenAnchor(ID_TOKEN, 2),
+        CreateTXOutputTokenAnchor(ID_TOKEN, 3)];
+
+      TXOutputTokenAnchor[] anchorsSecond = [
+        CreateTXOutputTokenAnchor(iDTokenSecond, 4),
+        CreateTXOutputTokenAnchor(iDTokenSecond, 5)];
+
+      TXOutputTokenAnchor anchorIneligible = CreateTXOutputTokenAnchor(ID_TOKEN, 6);
+
+      Block block = new(SIZE_BLOCK_MAX);
+      block.TXs.AddRange([
+        CreateTXBitcoin(0, CreateTXOutputP2PKH()),
+        CreateTXBitcoin(HEIGHT_BLOCK - 1, CreateTXOutputP2PKH(), anchorsFirst[0], anchorsSecond[0]),
+        CreateTXBitcoin(HEIGHT_BLOCK - 1, anchorsFirst[1], CreateTXOutputP2PKH()),
+        CreateTXBitcoin(HEIGHT_BLOCK - 1, anchorsFirst[2], anchorsSecond[1]),
+        CreateTXBitcoin(HEIGHT_BLOCK, anchorIneligible, CreateTXOutputP2PKH())]);
+
+      block.Header = MineHeader(
+        UNIX_TIME_SECONDS_ROOT,
+        block.ComputeMerkleRoot(),
+        h => string.CompareOrdinal(ComputeScoreAnchor(h, anchorIneligible), ComputeScoreAnchor(h, GetAnchorScoreLowest(h, anchorsFirst))) < 0);
+
+      block.Serialize();
+
+      Block blockParsed = new(block.Buffer[..block.LengthDataPayload])
+      {
+        Header = new HeaderBitcoin(block.Header.Hash, 0, block.Header.HashPrevious, null, 0, 0, 0) { Height = HEIGHT_BLOCK }
+      };
+
+      new ParserBitcoin().ParseBlock(blockParsed, verifySignatures: false);
+
+      string nameParser = "Anchor winners drawn by ParserBitcoin";
+
+      return IsFieldEqual(nameParser, "AnchorsWinner.Count", 2, blockParsed.Header.AnchorsWinner.Count, ref message)
+        && IsAnchorWinnerLowestScore(nameParser, blockParsed.Header, anchorsFirst, ref message)
+        && IsAnchorWinnerLowestScore(nameParser, blockParsed.Header, anchorsSecond, ref message);
+    }
+
+    TXOutputP2PKH CreateTXOutputP2PKH()
+    {
+      return new TXOutputP2PKH(VALUE_OUTPUT, Testbench.Wallet.Hash160PKeyPublic);
+    }
+
+    BlockchainBitcoin.TXBitcoin CreateTXBitcoin(int lockTime, params TXOutput[] tXOutputs)
+    {
+      BlockchainBitcoin.TXBitcoin tX = new() { LockTime = lockTime };
+
+      tX.Inputs.Add(new BlockchainBitcoin.TXInputBitcoin
+      {
+        TXIDOutput = RandomNumberGenerator.GetBytes(32),
+        IndexOutput = 0
+      });
+
+      tX.TXOutputs.AddRange(tXOutputs);
+      tX.Serialize(Testbench.Wallet);
+
+      return tX;
+    }
+
+    static HeaderBitcoin MineHeader(uint unixTimeSeconds, byte[] merkleRoot, Func<byte[], bool> isHashWanted)
     {
       HeaderBitcoin header = CreateHeader(new byte[32], unixTimeSeconds, N_BITS_EASY);
+      header.MerkleRoot = merkleRoot;
 
-      while (header.Hash[^1] >= BYTE_HASH_MOST_SIGNIFICANT_BELOW_TARGET_EASY)
+      do
       {
         header.Nonce += 1;
         header.ComputeHash();
       }
+      while (header.Hash[^1] >= BYTE_HASH_MOST_SIGNIFICANT_BELOW_TARGET_EASY || !isHashWanted(header.Hash));
 
-      return header.Serialize();
+      return header;
     }
 
     static void ParseHeader(byte[] headerRaw)

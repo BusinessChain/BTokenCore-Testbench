@@ -87,6 +87,32 @@ internal partial class Testbench
       return tXOutputTokenAnchor;
     }
 
+    protected static TXOutputTokenAnchor GetAnchorScoreLowest(byte[] hashBlock, TXOutputTokenAnchor[] anchors)
+    {
+      return anchors.MinBy(a => ComputeScoreAnchor(hashBlock, a), StringComparer.Ordinal);
+    }
+
+    protected static string ComputeScoreAnchor(byte[] hashBlock, TXOutputTokenAnchor tXOutputTokenAnchor)
+    {
+      return Convert.ToHexString(SHA256.HashData(
+        [.. hashBlock, .. tXOutputTokenAnchor.HashBlockReferenced, .. tXOutputTokenAnchor.HashBlockPreviousReferenced]));
+    }
+
+    protected static bool IsAnchorWinnerLowestScore(string nameParser, Header headerParsed, TXOutputTokenAnchor[] anchorsEligible, ref string message)
+    {
+      TXOutputTokenAnchor anchorExpected = GetAnchorScoreLowest(headerParsed.Hash, anchorsEligible);
+
+      string iDToken = anchorExpected.IDToken.ToHexString();
+
+      if (!headerParsed.AnchorsWinner.TryGetValue(anchorExpected.IDToken, out TXOutputTokenAnchor anchorWinner))
+      {
+        message = $"{nameParser}: no anchor winner of IDToken {iDToken}.";
+        return false;
+      }
+
+      return IsFieldEqual(nameParser, $"HashBlockReferenced of anchor winner of IDToken {iDToken}", anchorExpected.HashBlockReferenced, anchorWinner.HashBlockReferenced, ref message);
+    }
+
     protected static Block CreateBlock(List<BlockchainBToken.TXBToken> tXs)
     {
       Block block = new(HeaderBToken.COUNT_HEADER_BYTES + 1 + tXs.Sum(t => t.TXRaw.Length));
