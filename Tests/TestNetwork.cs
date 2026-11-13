@@ -57,7 +57,8 @@ internal partial class Testbench
         && TestBlockRefusal(Testbench.Wallet, ref message)
         && TestUnrequestedBlock(ref message)
         && TestRequestTimeout(Testbench.Wallet, ref message)
-        && TestBlockServing(Testbench.Wallet, ref message);
+        && TestBlockServing(Testbench.Wallet, ref message)
+        && TestServingDOS(Testbench.Wallet, ref message);
     }
 
     static bool TestHandshakeOutbound(ref string message)
@@ -588,6 +589,45 @@ internal partial class Testbench
 
         message = $"{NAME_CASE}: the notfound answer carries hash {payload[^hashUnknown.Length..].ToHexString()}, expected {hashUnknown.ToHexString()}.";
         return false;
+      }
+      finally
+      {
+        socketPeer.Dispose();
+      }
+    }
+
+    static bool TestServingDOS(Wallet wallet, ref string message)
+    {
+      Console.WriteLine("  16. Serving DOS: Disconnect a peer that re-requests an old block too often.");
+
+      const string NAME_CASE = "Serving DOS";
+      const int MAX_LEVEL_DOS_GETDATA = 5;
+
+      if (!BlockchainNetwork.TryCreateBlocks(wallet, out List<Block> blocks, ref message))
+        return false;
+
+      byte[] hashOld = blocks[0].Header.Hash;
+
+      CommunicationFake communication = new();
+      BlockchainNetwork.StartNode(communication, prepare: b => b.AnchorAndDeliver(blocks));
+      SocketFake socketPeer = communication.ConnectInbound(IP_PEER);
+
+      try
+      {
+        if (!TryHandshakeInbound(NAME_CASE, socketPeer, ref message))
+          return false;
+
+        foreach (Block block in blocks)
+          if (!TryReceiveBlockServed($"{NAME_CASE}, chain served forward", socketPeer, block.Header.Hash, ref message))
+            return false;
+
+        for (int i = 0; i < MAX_LEVEL_DOS_GETDATA; i++)
+          if (!TryReceiveBlockServed($"{NAME_CASE}, old block requested again", socketPeer, hashOld, ref message))
+            return false;
+
+        SendInventoryBlock(socketPeer, COMMAND_GETDATA, hashOld);
+
+        return socketPeer.IsDisconnected(NAME_CASE, ref message);
       }
       finally
       {
