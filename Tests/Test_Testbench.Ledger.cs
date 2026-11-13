@@ -30,6 +30,12 @@ internal partial class Testbench
         : base(nameToken, liteDatabase, "BTK", blockchainParent, new SemaphoreSlim(1))
       { }
 
+      protected void DeliverBlocks(List<Block> blocksLedger)
+      {
+        while (FetchHeaderBlockMissingNext(h => true) is Header header)
+          ReceiveBlock(blocksLedger.Single(b => b.Header.Hash.IsAllBytesEqual(header.Hash)));
+      }
+
       protected static bool TryInsertCoinbasesUpTo(Ledger ledger, Wallet wallet, byte[] iDMiner, int height, ref string message)
       {
         while (ledger.GetHeightTip() < height)

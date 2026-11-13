@@ -20,7 +20,8 @@ internal partial class Testbench
       new TestConsensusRules(this),
       new TestTXPool(this),
       new TestAccountSynchronizer(this),
-      new TestAnchoring(this)
+      new TestAnchoring(this),
+      new TestMiner(this)
     };
   }
 
