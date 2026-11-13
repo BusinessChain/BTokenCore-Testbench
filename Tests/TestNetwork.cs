@@ -29,6 +29,7 @@ internal partial class Testbench
     const Network.Inventory.InventoryType MSG_BLOCK = Network.Inventory.InventoryType.MSG_BLOCK;
     const Network.Inventory.InventoryType MSG_SEGMENT_SWEEP = Network.Inventory.InventoryType.MSG_SEGMENT_SWEEP;
     const string COMMAND_SEGMENT = "segment";
+    const int HEIGHT_TIP_WINDOW = 2060;
     const uint PROTOCOL_VERSION = 1;
     const int LENGTH_ADDRESS = 30;
     const int OFFSET_IP_ADDRESS = 12;
@@ -65,7 +66,9 @@ internal partial class Testbench
         && TestServingDOS(Testbench.Wallet, ref message)
         && TestBlockAnnouncement(Testbench.Wallet, ref message)
         && TestSegmentServing(Testbench.Wallet, ref message)
-        && TestUnrequestedSegment(ref message);
+        && TestUnrequestedSegment(ref message)
+        && BlockchainNetwork.TryCreateBlocks(Testbench.Wallet, out List<Block> blocksWindow, ref message, HEIGHT_TIP_WINDOW)
+        && TestSegmentRequest(blocksWindow, ref message);
     }
 
     static bool TestHandshakeOutbound(ref string message)
@@ -517,6 +520,45 @@ internal partial class Testbench
       Console.WriteLine("  19. Unrequested Segment: Disconnect a peer that sends a segment unasked.");
 
       return IsDisconnectedOnUnasked("Unrequested segment", COMMAND_SEGMENT, ref message);
+    }
+
+    static bool TestSegmentRequest(List<Block> blocksWindow, ref string message)
+    {
+      Console.WriteLine("  20. Segment Request: Request segments without accounts, accept a matching one.");
+
+      const string NAME_CASE = "Segment request";
+      const int COUNT_SEGMENTS_RECORDED = 2;
+
+      List<(byte[] hash, byte[] segment)> segments = null;
+
+      StartNodeWithInboundPeer(out SocketFake socketPeer, out _, b => segments = b.AnchorAndDeliverWithoutAccounts(blocksWindow, COUNT_SEGMENTS_RECORDED));
+
+      try
+      {
+        if (!TryHandshakeInbound(NAME_CASE, socketPeer, ref message)
+          || !IsSegmentRequested(NAME_CASE, socketPeer, segments[0].hash, ref message))
+          return false;
+
+        socketPeer.SendMessage(COMMAND_SEGMENT, segments[0].segment.Length, segments[0].segment).Wait();
+
+        return IsSegmentRequested(NAME_CASE, socketPeer, segments[1].hash, ref message);
+      }
+      finally
+      {
+        socketPeer.Dispose();
+      }
+    }
+
+    static bool IsSegmentRequested(string nameCase, SocketFake socketPeer, byte[] hashExpected, ref string message)
+    {
+      if (!TryReceiveRequest(nameCase, socketPeer, MSG_SEGMENT_SWEEP, out byte[] hash, ref message))
+        return false;
+
+      if (hash.IsAllBytesEqual(hashExpected))
+        return true;
+
+      message = $"{nameCase}: the node requests the segment of block {hash.ToHexString()}, expected {hashExpected.ToHexString()}.";
+      return false;
     }
 
     static bool IsDisconnectedOnUnasked(string nameCase, string command, ref string message)
@@ -984,11 +1026,12 @@ internal partial class Testbench
         ParentFake = blockchainParent;
       }
 
-      internal static bool TryCreateBlocks(Wallet wallet, out List<Block> blocks, ref string message)
+      internal static bool TryCreateBlocks(Wallet wallet, out List<Block> blocks, ref string message, int heightTip = 0)
       {
         blocks = null;
 
-        if (!TryCreateLedger(wallet, out Ledger ledger, ref message))
+        if (!TryCreateLedger(wallet, out Ledger ledger, ref message)
+          || !TryInsertCoinbasesUpTo(ledger, wallet, CreateIDAccount(1000, 1), heightTip, ref message))
           return false;
 
         blocks = ledger.GetBlocksInserted();
@@ -999,6 +1042,23 @@ internal partial class Testbench
       {
         ParentFake.MineAnchors(blocks);
         DeliverBlocks(blocks);
+      }
+
+      internal List<(byte[] hash, byte[] segment)> AnchorAndDeliverWithoutAccounts(List<Block> blocks, int countSegmentsRecorded)
+      {
+        AnchorAndDeliver(blocks);
+
+        List<(byte[] hash, byte[] segment)> segments = [];
+
+        for (
+          Header header = ChainRoot.HeaderTipBlockchain.GetHeaderAncestor(GetHeight() - BITCOIN_REORG_MARGIN);
+          segments.Count < countSegmentsRecorded;
+          header = header.HeaderPrevious)
+          segments.Add((header.Hash, GetSegmentSweptByBlock(header.Hash)));
+
+        Synchronizer.Drop();
+
+        return segments;
       }
 
       internal static NetworkTestbench StartNode(
