@@ -22,6 +22,7 @@ internal partial class Testbench
     const string COMMAND_GETDATA = "getdata";
     const string COMMAND_BLOCK = "block";
     const string COMMAND_HEADERS = "headers";
+    const string COMMAND_NOTFOUND = "notfound";
     const int LENGTH_INVENTORY_TYPE = 4;
     const int LENGTH_INVENTORY = 36;
     const uint PROTOCOL_VERSION = 1;
@@ -52,7 +53,8 @@ internal partial class Testbench
         && TestInboundEviction(ref message)
         && TestAddressPort(ref message)
         && TestAddressDOS(ref message)
-        && TestBlockDownload(Testbench.Wallet, ref message);
+        && TestBlockDownload(Testbench.Wallet, ref message)
+        && TestBlockRefusal(Testbench.Wallet, ref message);
     }
 
     static bool TestHandshakeOutbound(ref string message)
@@ -443,6 +445,66 @@ internal partial class Testbench
       }
     }
 
+    static bool TestBlockRefusal(Wallet wallet, ref string message)
+    {
+      Console.WriteLine("  12. Block Refusal: Retry a refused block only after the refusal delay.");
+
+      const string NAME_CASE = "Block refusal";
+      const int SECONDS_DELAY_REFUSED = 10;
+      const int SECONDS_TIMEOUT_RETRY = 20;
+
+      if (!BlockchainNetwork.TryCreateBlocks(wallet, out List<Block> blocks, ref message))
+        return false;
+
+      Block blockRefused = blocks[0];
+
+      CommunicationFake communication = new();
+      NetworkTestbench network = BlockchainNetwork.StartNode(communication, prepare: b => b.ParentFake.MineAnchors(blocks));
+      SocketFake socketPeer = communication.ConnectInbound(IP_PEER);
+
+      try
+      {
+        if (!TryHandshakeInbound(NAME_CASE, socketPeer, ref message)
+          || !TryReceiveRequestBlock(NAME_CASE, socketPeer, out byte[] hash, ref message))
+          return false;
+
+        if (!hash.IsAllBytesEqual(blockRefused.Header.Hash))
+        {
+          message = $"{NAME_CASE}: the node first requests block {hash.ToHexString()}, expected the block at height {blockRefused.Header.Height}.";
+          return false;
+        }
+
+        SendInventoryBlock(socketPeer, COMMAND_NOTFOUND, hash);
+        Stopwatch stopwatch = Stopwatch.StartNew();
+
+        if (!TryServeBlocksRequested(NAME_CASE, socketPeer, blocks.Skip(1).Take(blocks.Count - 2).ToList(), ref message)
+          || !TryReceiveRequestBlock(NAME_CASE, socketPeer, out hash, ref message, SECONDS_TIMEOUT_RETRY))
+          return false;
+
+        if (!hash.IsAllBytesEqual(blockRefused.Header.Hash) || stopwatch.Elapsed < TimeSpan.FromSeconds(SECONDS_DELAY_REFUSED - 1))
+        {
+          message = $"{NAME_CASE}: after {stopwatch.Elapsed.TotalSeconds:F0} seconds the node requests block {hash.ToHexString()}, " +
+            $"expected the refused block after {SECONDS_DELAY_REFUSED} seconds.";
+          return false;
+        }
+
+        SendBlock(socketPeer, blockRefused);
+
+        return IsAtHeight(NAME_CASE, network, blocks[^2].Header.Height, ref message);
+      }
+      finally
+      {
+        socketPeer.Dispose();
+      }
+    }
+
+    static void SendInventoryBlock(SocketFake socketPeer, string command, byte[] hash)
+    {
+      byte[] payload = [.. VarInt.GetBytes(1), .. BitConverter.GetBytes((uint)Network.Inventory.InventoryType.MSG_BLOCK), .. hash];
+
+      socketPeer.SendMessage(command, payload.Length, payload).Wait();
+    }
+
     static bool TryServeBlocksRequested(string nameCase, SocketFake socketPeer, List<Block> blocksServed, ref string message)
     {
       for (int i = 0; i < blocksServed.Count; i++)
@@ -458,10 +520,15 @@ internal partial class Testbench
           return false;
         }
 
-        socketPeer.SendMessage(COMMAND_BLOCK, block.LengthDataPayload, block.Buffer).Wait();
+        SendBlock(socketPeer, block);
       }
 
       return true;
+    }
+
+    static void SendBlock(SocketFake socketPeer, Block block)
+    {
+      socketPeer.SendMessage(COMMAND_BLOCK, block.LengthDataPayload, block.Buffer).Wait();
     }
 
     static bool TryReceiveRequestBlock(string nameCase, SocketFake socketPeer, out byte[] hash, ref string message, int secondsTimeout = SECONDS_TIMEOUT_REQUEST)
