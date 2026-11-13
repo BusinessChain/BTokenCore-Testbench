@@ -28,7 +28,8 @@ internal partial class Testbench
         && BlockchainSynchronizing.TestRollbackGating(Testbench.Wallet, ref message)
         && BlockchainSynchronizing.TestConfirmReopen(Testbench.Wallet, ref message)
         && BlockchainSynchronizing.TestPruneConfirmed(Testbench.Wallet, ref message)
-        && BlockchainSynchronizing.TestRestartReload(Testbench.Wallet, ref message);
+        && BlockchainSynchronizing.TestRestartReload(Testbench.Wallet, ref message)
+        && BlockchainSynchronizing.TestReplayConfirmation(Testbench.Wallet, ref message);
     }
 
     class BlockchainSynchronizing : BlockchainTestbench
@@ -365,6 +366,34 @@ internal partial class Testbench
 
         return blockchainRestartedAgain.IsSynchronized(ledger, "Own TX lifecycle, restart with the confirmed spend", 2, ref message)
           && blockchainRestartedAgain.IsTXOwnedAtHeight("restart with the confirmed spend", tXSpend.Hash, 2, ref message);
+      }
+
+      internal static bool TestReplayConfirmation(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  14. Replay Confirmation: Mark own TX confirmed by a block replayed after restart.");
+
+        if (!TryCreateLedger(wallet, out Ledger ledger, ref message))
+          return false;
+
+        List<Block> blocksLedger = ledger.GetBlocksInserted();
+        TXBToken tXSpend = (TXBToken)blocksLedger.Single(b => b.Header.Height == 2).TXs[1];
+
+        BlockchainSynchronizing blockchain = StartNode(CreateLiteDatabase(), int.MaxValue);
+        blockchain.InsertBlocks(blocksLedger.Where(b => b.Header.Height == 1).ToList());
+
+        if (!IsAccepted("Own TX lifecycle, spend submitted at height 1", () => blockchain.SubmitTX(tXSpend.TXRaw), ref message))
+          return false;
+
+        blockchain.Synchronizer.Drop();
+        blockchain.InsertBlocks(blocksLedger.Where(b => b.Header.Height > 1).ToList());
+
+        if (!blockchain.IsWithoutAccounts("Own TX lifecycle, confirming block inserted without accounts", 6, ref message))
+          return false;
+
+        BlockchainSynchronizing blockchainRestarted = StartNode(blockchain.LiteDatabase, int.MaxValue);
+
+        return blockchainRestarted.IsSynchronized(ledger, "Own TX lifecycle, replay of the confirming block after the restart", 6, ref message)
+          && blockchainRestarted.IsTXOwnedAtHeight("replay of the confirming block after the restart", tXSpend.Hash, 2, ref message);
       }
 
       bool IsTXOwnedAtHeight(string nameCase, byte[] hashTX, int? heightConfirmedExpected, ref string message)
