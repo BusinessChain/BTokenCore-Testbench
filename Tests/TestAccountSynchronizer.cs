@@ -30,7 +30,8 @@ internal partial class Testbench
         && BlockchainSynchronizing.TestPruneConfirmed(Testbench.Wallet, ref message)
         && BlockchainSynchronizing.TestRestartReload(Testbench.Wallet, ref message)
         && BlockchainSynchronizing.TestReplayConfirmation(Testbench.Wallet, ref message)
-        && BlockchainSynchronizing.TestRejectionReopen(Testbench.Wallet, ref message);
+        && BlockchainSynchronizing.TestRejectionReopen(Testbench.Wallet, ref message)
+        && BlockchainSynchronizing.TestConflictReopen(Testbench.Wallet, ref message);
     }
 
     class BlockchainSynchronizing : BlockchainTestbench
@@ -435,7 +436,45 @@ internal partial class Testbench
           && blockchainRestarted.IsTXOwnedAtHeight("Ledger blocks inserted after the rejected block", tXSpend.Hash, HEIGHT_FORGED, ref message);
       }
 
-      bool IsTXOwnedAtHeight(string nameCase, byte[] hashTX, int? heightConfirmedExpected, ref string message)
+      internal static bool TestConflictReopen(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  17. Conflict Reopen: Conflicting TX confirms own TX, rollback reopens it outside pool.");
+
+        if (!TryCreateLedger(wallet, out Ledger ledger, ref message))
+          return false;
+
+        List<Block> blocksLedger = ledger.GetBlocksInserted();
+        TXBToken tXSpend = (TXBToken)blocksLedger.Single(b => b.Header.Height == 2).TXs[1];
+
+        BlockchainSynchronizing blockchain = StartNode(CreateLiteDatabase(), int.MaxValue);
+        blockchain.InsertBlocks(blocksLedger.Where(b => b.Header.Height == 1).ToList());
+
+        if (!IsAccepted("Own TX lifecycle, spend submitted at height 1", () => blockchain.SubmitTX(tXSpend.TXRaw), ref message))
+          return false;
+
+        while (ledger.GetHeightTip() > 1)
+          if (!ledger.TryRollBack("own TX lifecycle", out _, ref message))
+            return false;
+
+        TXBToken tXConflicting = ledger.CreateTXSpend(wallet, CreateIDAccount(1002, 3), VALUE_SPEND, t => { });
+
+        if (!ledger.TryInsertBlock("conflicting spend", [ledger.CreateCoinbase(wallet, CreateIDAccount(1000, 1), FEE), tXConflicting], isValidExpected: true, null, ref message))
+          return false;
+
+        blockchain.InsertBlocks(ledger.GetBlocksInserted().Where(b => b.Header.Height == 2).ToList());
+
+        if (!blockchain.IsSynchronized(ledger, "Own TX lifecycle, block with the conflicting spend at height 2", 2, ref message)
+          || !blockchain.IsTXOwnedAtHeight("block with the conflicting spend at height 2", tXSpend.Hash, 2, ref message))
+          return false;
+
+        blockchain.RollBackTo(1);
+
+        return blockchain.IsSynchronized(ledger, "Own TX lifecycle, rollback of the conflicting spend", 1, ref message)
+          && blockchain.IsTXOwnedAtHeight("rollback of the conflicting spend", tXSpend.Hash, 0, ref message, isInPoolExpected: false)
+          && blockchain.IsInPool("rollback of the conflicting spend", tXConflicting.Hash, true, ref message);
+      }
+
+      bool IsTXOwnedAtHeight(string nameCase, byte[] hashTX, int? heightConfirmedExpected, ref string message, bool? isInPoolExpected = null)
       {
         string nameCaseFull = $"Own TX lifecycle, {nameCase}";
         int? heightConfirmed = TXsOwnedStored.FindById(hashTX)?[NAME_FIELD_HEIGHT_CONFIRMED].AsInt32;
@@ -461,7 +500,7 @@ internal partial class Testbench
           return false;
         }
 
-        return IsInPool(nameCase, hashTX, isOpenExpected, ref message);
+        return IsInPool(nameCase, hashTX, isInPoolExpected ?? isOpenExpected, ref message);
       }
 
       internal static bool TestSegmentInstallation(Wallet wallet, ref string message)
