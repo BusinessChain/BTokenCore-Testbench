@@ -105,7 +105,39 @@ internal partial class Testbench
         && TestAnnounceReopened(Testbench.Wallet, ref message)
         && TestPongAnswered(ref message)
         && TestPongMissing(ref message)
-        && TestHeadersTimeout(ref message);
+        && TestHeadersTimeout(ref message)
+        && TestHeadersRenewal(ref message);
+    }
+
+    static bool TestHeadersRenewal(ref string message)
+    {
+      Console.WriteLine("  45. Headers Renewal: Renew the getheaders timeout after answered headers.");
+
+      const string NAME_CASE = "Headers renewal";
+      const int SECONDS_MARGIN = 10;
+      const int SECONDS_HOLD = 3;
+
+      bool isSent = TrySendHeadersOnTip(NAME_CASE, Network.TIMEOUT_REQUEST_SECONDS - SECONDS_MARGIN, out SocketFake socketSeed, out _, out NetworkBitcoinTestbench network, ref message);
+
+      try
+      {
+        if (!isSent)
+          return false;
+
+        network.AgeRequestHeaders(2 * SECONDS_MARGIN);
+
+        string messageHold = "";
+
+        if (!socketSeed.IsDisconnected(NAME_CASE, ref messageHold, SECONDS_HOLD))
+          return true;
+
+        message = $"{NAME_CASE}: the node dropped the seed although its headers answer renewed the getheaders timeout.";
+        return false;
+      }
+      finally
+      {
+        socketSeed.Dispose();
+      }
     }
 
     static bool TestHeadersTimeout(ref string message)
@@ -429,7 +461,7 @@ internal partial class Testbench
 
       const string NAME_CASE = "Return idle";
 
-      bool isSent = TrySendHeadersOnTip(NAME_CASE, out SocketFake socketSeed, out List<Header> headersNew, ref message);
+      bool isSent = TrySendHeadersOnTip(NAME_CASE, 0, out SocketFake socketSeed, out List<Header> headersNew, out _, ref message);
 
       try
       {
@@ -457,22 +489,24 @@ internal partial class Testbench
     {
       Console.WriteLine("  36. Headers Insertion: Insert received headers, request the next from the new tip.");
 
-      bool isInserted = TrySendHeadersOnTip("Headers insertion", out SocketFake socketSeed, out _, ref message);
+      bool isInserted = TrySendHeadersOnTip("Headers insertion", 0, out SocketFake socketSeed, out _, out _, ref message);
       socketSeed.Dispose();
 
       return isInserted;
     }
 
-    static bool TrySendHeadersOnTip(string nameCase, out SocketFake socketSeed, out List<Header> headersNew, ref string message)
+    static bool TrySendHeadersOnTip(string nameCase, int secondsAgedBeforeHeaders, out SocketFake socketSeed, out List<Header> headersNew, out NetworkBitcoinTestbench network, ref string message)
     {
       const int COUNT_BLOCKS = 10;
       const int COUNT_HEADERS_NEW = 3;
 
-      socketSeed = BlockchainNetwork.StartNodeBitcoin(COUNT_BLOCKS, out List<Header> headers, out _);
+      socketSeed = BlockchainNetwork.StartNodeBitcoin(COUNT_BLOCKS, out List<Header> headers, out network);
       headersNew = [];
 
       if (!TryHandshakeBitcoin(nameCase, socketSeed, out _, ref message))
         return false;
+
+      network.AgeRequestHeaders(secondsAgedBeforeHeaders);
 
       for (Header headerPrevious = headers[^1]; headersNew.Count < COUNT_HEADERS_NEW; headerPrevious = headersNew[^1])
       {
