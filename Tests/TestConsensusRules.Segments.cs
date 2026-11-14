@@ -19,7 +19,7 @@ internal partial class Testbench
 
         Ledger ledger = new(heightRoot: 0);
 
-        int indexSegmentAccounts = GetIndexSegment(wallet.Hash160PKeyPublic) == 3 ? 4 : 3;
+        int indexSegmentAccounts = GetIndexSegment(wallet.Hash160KeyPublicReceiving) == 3 ? 4 : 3;
         byte[] iDMiner = CreateIDAccount(1001, 1);
         byte[] iDReceiver = CreateIDAccount(1002, 2);
         byte[] iDTouchedTwice = CreateIDAccount(indexSegmentAccounts, 3);
@@ -27,7 +27,7 @@ internal partial class Testbench
         byte[] iDUntouched = CreateIDAccount(indexSegmentAccounts, 5);
         byte[] iDCreatedLater = CreateIDAccount(indexSegmentAccounts, 6);
 
-        TXBToken tXCoinbaseAccounts = ledger.CreateCoinbase(wallet, wallet.Hash160PKeyPublic, 0,
+        TXBToken tXCoinbaseAccounts = ledger.CreateCoinbase(wallet, wallet.Hash160KeyPublicReceiving, 0,
           new TXOutputP2PKH(100, iDTouchedTwice),
           new TXOutputP2PKH(50, iDSweptAndRecreated),
           new TXOutputP2PKH(1000, iDUntouched));
@@ -40,7 +40,7 @@ internal partial class Testbench
           || !TryInsertCoinbasesUpTo(ledger, wallet, iDMiner, indexSegmentAccounts + COUNT_SEGMENTS - 1, ref message)
           || !ledger.TryInsertBlock("second sweep recreating a swept account", [ledger.CreateCoinbase(wallet, iDMiner, 0, new TXOutputP2PKH(30, iDSweptAndRecreated))], isValidExpected: true, null, ref message)
           || !TryInsertCoinbasesUpTo(ledger, wallet, iDMiner, COUNT_MAX_BLOCKS_STORED, ref message)
-          || !ledger.TryInsertBlock("spend of the whole Balance", [ledger.CreateCoinbase(wallet, iDMiner, FEE), ledger.CreateTXSpend(wallet, iDReceiver, ledger.GetBalanceNext(wallet.Hash160PKeyPublic) - FEE, t => { })], isValidExpected: true, null, ref message))
+          || !ledger.TryInsertBlock("spend of the whole Balance", [ledger.CreateCoinbase(wallet, iDMiner, FEE), ledger.CreateTXSpend(wallet, iDReceiver, ledger.GetBalanceNext(wallet.Hash160KeyPublicReceiving) - FEE, t => { })], isValidExpected: true, null, ref message))
           return false;
 
         return ledger.AreSegmentsServedCorrect("served segments", heightFirst: 1, ref message)
@@ -155,7 +155,7 @@ internal partial class Testbench
         byte[] iDInSegmentLast = CreateIDAccount(COUNT_SEGMENTS - 1, 8);
         Wallet walletSpendingAfterInstallation = CreateWallet();
 
-        if (!ledgerServing.TryInsertBlock("coinbase creating the wallet accounts and four accounts", [ledgerServing.CreateCoinbase(wallet, wallet.Hash160PKeyPublic, 0, new TXOutputP2PKH(100, iDPaidAroundSnapshot), new TXOutputP2PKH(100, iDPaidBeforeSnapshot), new TXOutputP2PKH(100, iDInSegmentFirst), new TXOutputP2PKH(100, iDInSegmentLast), new TXOutputP2PKH(VALUE_FUNDING, walletSpendingAfterInstallation.Hash160PKeyPublic))], isValidExpected: true, null, ref message)
+        if (!ledgerServing.TryInsertBlock("coinbase creating the wallet accounts and four accounts", [ledgerServing.CreateCoinbase(wallet, wallet.Hash160KeyPublicReceiving, 0, new TXOutputP2PKH(100, iDPaidAroundSnapshot), new TXOutputP2PKH(100, iDPaidBeforeSnapshot), new TXOutputP2PKH(100, iDInSegmentFirst), new TXOutputP2PKH(100, iDInSegmentLast), new TXOutputP2PKH(VALUE_FUNDING, walletSpendingAfterInstallation.Hash160KeyPublicReceiving))], isValidExpected: true, null, ref message)
           || !ledgerServing.TryInsertBlock("spend from the wallet account", [ledgerServing.CreateCoinbase(wallet, iDMiner, FEE), ledgerServing.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => { })], isValidExpected: true, null, ref message)
           || !TryInsertCoinbasesUpTo(ledgerServing, wallet, iDMiner, HEIGHT_SWEEP_OLDEST, ref message)
           || !ledgerServing.TryInsertBlock("output in the oldest carried block to the segment of the oldest sweep", [ledgerServing.CreateCoinbase(wallet, iDMiner, 0, new TXOutputP2PKH(40, iDPaidByCarriedBlockOldest))], isValidExpected: true, null, ref message)
@@ -164,7 +164,7 @@ internal partial class Testbench
           || !TryInsertCoinbasesUpTo(ledgerServing, wallet, iDMiner, 1499, ref message)
           || !ledgerServing.TryInsertBlock("output after and spend before the snapshots of their segments", [ledgerServing.CreateCoinbase(wallet, iDMiner, FEE, new TXOutputP2PKH(20, iDPaidAroundSnapshot)), ledgerServing.CreateTXSpend(wallet, iDPaidBeforeSnapshot, VALUE_SPEND, t => { })], isValidExpected: true, null, ref message)
           || !TryInsertCoinbasesUpTo(ledgerServing, wallet, iDMiner, 2051, ref message)
-          || !ledgerServing.TryInsertBlock("account created after its snapshot and spend of the whole Balance", [ledgerServing.CreateCoinbase(wallet, iDMiner, FEE, new TXOutputP2PKH(30, iDCreatedAfterSnapshot)), ledgerServing.CreateTXSpend(wallet, iDReceiver, ledgerServing.GetBalanceNext(wallet.Hash160PKeyPublic) - FEE, t => { })], isValidExpected: true, null, ref message)
+          || !ledgerServing.TryInsertBlock("account created after its snapshot and spend of the whole Balance", [ledgerServing.CreateCoinbase(wallet, iDMiner, FEE, new TXOutputP2PKH(30, iDCreatedAfterSnapshot)), ledgerServing.CreateTXSpend(wallet, iDReceiver, ledgerServing.GetBalanceNext(wallet.Hash160KeyPublicReceiving) - FEE, t => { })], isValidExpected: true, null, ref message)
           || !TryInsertCoinbasesUpTo(ledgerServing, wallet, iDMiner, HEIGHT_INSTALLED + 2, ref message)
           || !ledgerServing.TryInsertBlock("spend after the installation to the segment swept first after it", [ledgerServing.CreateCoinbase(wallet, iDMiner, FEE), ledgerServing.CreateTXSpend(walletSpendingAfterInstallation, iDPaidByCarriedBlockOldest, VALUE_SPEND, t => { })], isValidExpected: true, null, ref message)
           || !TryInsertCoinbasesUpTo(ledgerServing, wallet, iDMiner, HEIGHT_INSTALLED + BITCOIN_REORG_MARGIN, ref message))

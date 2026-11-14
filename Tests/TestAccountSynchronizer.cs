@@ -264,7 +264,7 @@ internal partial class Testbench
         Wallet walletForeign = CreateWallet();
         Wallet walletOwn = CreateWallet();
 
-        if (!ledger.TryInsertBlock("spend with the next Nonce beside a coinbase creating an own account", [ledger.CreateCoinbase(wallet, iDMiner, FEE, new TXOutputP2PKH(VALUE_FUNDING, walletOwn.Hash160PKeyPublic)), tXSpendNext], isValidExpected: true, null, ref message))
+        if (!ledger.TryInsertBlock("spend with the next Nonce beside a coinbase creating an own account", [ledger.CreateCoinbase(wallet, iDMiner, FEE, new TXOutputP2PKH(VALUE_FUNDING, walletOwn.Hash160KeyPublicReceiving)), tXSpendNext], isValidExpected: true, null, ref message))
           return false;
 
         List<Block> blocksLedger = ledger.GetBlocksInserted();
@@ -309,7 +309,7 @@ internal partial class Testbench
           if (!ledger.TryRollBack("own TX lifecycle", out _, ref message))
             return false;
 
-        TXBToken tXCoinbaseFork = ledger.CreateCoinbase(wallet, iDMiner, 0, new TXOutputP2PKH(VALUE_FUNDING, walletForeign.Hash160PKeyPublic), new TXOutputP2PKH(VALUE_FUNDING, walletOwn.Hash160PKeyPublic));
+        TXBToken tXCoinbaseFork = ledger.CreateCoinbase(wallet, iDMiner, 0, new TXOutputP2PKH(VALUE_FUNDING, walletForeign.Hash160KeyPublicReceiving), new TXOutputP2PKH(VALUE_FUNDING, walletOwn.Hash160KeyPublicReceiving));
         tXCoinbaseFork.HeightAccountCreated = tXSpend.HeightAccountCreated;
         tXCoinbaseFork.Nonce = tXSpend.Nonce;
         tXCoinbaseFork.SerializeUnsigned();
@@ -778,7 +778,7 @@ internal partial class Testbench
         byte[] iDMiner = CreateIDAccount(1000, 1);
         byte[] iDReceiver = CreateIDAccount(1001, 2);
 
-        if (!ledger.TryInsertBlock("coinbase creating the wallet account", [ledger.CreateCoinbase(wallet, wallet.Hash160PKeyPublic, 0)], isValidExpected: true, null, ref message))
+        if (!ledger.TryInsertBlock("coinbase creating the wallet account", [ledger.CreateCoinbase(wallet, wallet.Hash160KeyPublicReceiving, 0)], isValidExpected: true, null, ref message))
           return false;
 
         foreach (int heightSpend in new[] { 100, 1000, 2000, 2052 })

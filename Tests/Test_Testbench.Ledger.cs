@@ -140,7 +140,7 @@ internal partial class Testbench
         byte[] iDMiner = CreateIDAccount(1000, 1);
         byte[] iDReceiver = CreateIDAccount(1001, 2);
 
-        return ledger.TryInsertBlock("coinbase creating the wallet account", [ledger.CreateCoinbase(wallet, wallet.Hash160PKeyPublic, 0)], isValidExpected: true, null, ref message)
+        return ledger.TryInsertBlock("coinbase creating the wallet account", [ledger.CreateCoinbase(wallet, wallet.Hash160KeyPublicReceiving, 0)], isValidExpected: true, null, ref message)
           && ledger.TryInsertBlock("spend from the wallet account", [ledger.CreateCoinbase(wallet, iDMiner, FEE), ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => { })], isValidExpected: true, null, ref message)
           && TryInsertCoinbasesUpTo(ledger, wallet, iDMiner, 6, ref message);
       }
@@ -281,7 +281,7 @@ internal partial class Testbench
 
         internal TXBToken CreateCoinbase(Wallet wallet, byte[] iDMiner, long fees, params TXOutputP2PKH[] tXOutputsAdded)
         {
-          TXBToken tX = CreateTXBToken(wallet.KeyPublic, iDMiner);
+          TXBToken tX = CreateTXBToken(wallet.KeyPublicReceiving, iDMiner);
           tX.TXOutputs[0] = new TXOutputP2PKH(GetBlockReward(HeightTip + 1) + fees + GetRentNext() - tXOutputsAdded.Sum(o => o.Value), iDMiner);
           tX.TXOutputs.AddRange(tXOutputsAdded);
           tX.SerializeUnsigned();
@@ -291,9 +291,9 @@ internal partial class Testbench
 
         internal TXBToken CreateTXSpend(Wallet wallet, byte[] iDReceiving, long value, Action<TXBToken> alter)
         {
-          Account account = AccountsReference[wallet.Hash160PKeyPublic];
+          Account account = AccountsReference[wallet.Hash160KeyPublicReceiving];
 
-          TXBToken tX = CreateTXBToken(wallet.KeyPublic, iDReceiving);
+          TXBToken tX = CreateTXBToken(wallet.KeyPublicReceiving, iDReceiving);
           tX.HeightAccountCreated = account.HeightAccountCreated;
           tX.Nonce = account.Nonce;
           tX.Fee = FEE;

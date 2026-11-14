@@ -56,7 +56,7 @@ internal partial class Testbench
           IndexOutput = 0
         });
 
-        tXFunding.TXOutputs.Add(new TXOutputP2PKH(value, Wallet.Hash160PKeyPublic));
+        tXFunding.TXOutputs.Add(new TXOutputP2PKH(value, Wallet.Hash160KeyPublicReceiving));
         tXFunding.Serialize(Wallet);
 
         MineBlock([tXFunding]);

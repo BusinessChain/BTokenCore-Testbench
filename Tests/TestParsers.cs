@@ -104,10 +104,10 @@ internal partial class Testbench
 
       TXOutputTokenAnchor tXOutputTokenAnchor = CreateTXOutputTokenAnchor(ID_TOKEN, 0);
 
-      BlockchainBToken.TXBToken tX = CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic, tXOutputTokenAnchor);
+      BlockchainBToken.TXBToken tX = CreateTXBToken(wallet.KeyPublicReceiving, wallet.Hash160KeyPublicReceiving, tXOutputTokenAnchor);
       tX.Serialize(wallet);
 
-      BlockchainBToken.TXBToken tXCoinbase = CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic, tXOutputTokenAnchor);
+      BlockchainBToken.TXBToken tXCoinbase = CreateTXBToken(wallet.KeyPublicReceiving, wallet.Hash160KeyPublicReceiving, tXOutputTokenAnchor);
       tXCoinbase.SerializeUnsigned();
 
       return IsTXBTokenParsedEqual(tX, tX.TXRaw, 0, isCoinbase: false, ref message)
@@ -121,12 +121,12 @@ internal partial class Testbench
     {
       Console.WriteLine("  4. Block Round-Trip: Serialize and parse BToken block with anchor winner.");
 
-      BlockchainBToken.TXBToken tXCoinbase = CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic);
+      BlockchainBToken.TXBToken tXCoinbase = CreateTXBToken(wallet.KeyPublicReceiving, wallet.Hash160KeyPublicReceiving);
       tXCoinbase.SerializeUnsigned();
 
       TXOutputTokenAnchor tXOutputTokenAnchor = CreateTXOutputTokenAnchor(ID_TOKEN, 0);
 
-      BlockchainBToken.TXBToken tX = CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic, tXOutputTokenAnchor);
+      BlockchainBToken.TXBToken tX = CreateTXBToken(wallet.KeyPublicReceiving, wallet.Hash160KeyPublicReceiving, tXOutputTokenAnchor);
       tX.Serialize(wallet);
 
       Block block = CreateBlock([tXCoinbase, tX]);
@@ -166,16 +166,16 @@ internal partial class Testbench
         CreateTXOutputTokenAnchor(ID_TOKEN, 6),
         CreateTXOutputTokenAnchor(ID_TOKEN, 7)];
 
-      BlockchainBToken.TXBToken tXCoinbase = CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic);
+      BlockchainBToken.TXBToken tXCoinbase = CreateTXBToken(wallet.KeyPublicReceiving, wallet.Hash160KeyPublicReceiving);
       tXCoinbase.SerializeUnsigned();
 
       List<BlockchainBToken.TXBToken> tXs = [
         tXCoinbase,
-        CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic, anchorsFirst[0], anchorsSecond[0]),
-        CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic, anchorsFirst[1], anchorsSecond[1]),
-        CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic, anchorsFirst[2]),
-        CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic, anchorsIneligible[0]),
-        CreateTXBToken(wallet.KeyPublic, wallet.Hash160PKeyPublic, anchorsIneligible[1])];
+        CreateTXBToken(wallet.KeyPublicReceiving, wallet.Hash160KeyPublicReceiving, anchorsFirst[0], anchorsSecond[0]),
+        CreateTXBToken(wallet.KeyPublicReceiving, wallet.Hash160KeyPublicReceiving, anchorsFirst[1], anchorsSecond[1]),
+        CreateTXBToken(wallet.KeyPublicReceiving, wallet.Hash160KeyPublicReceiving, anchorsFirst[2]),
+        CreateTXBToken(wallet.KeyPublicReceiving, wallet.Hash160KeyPublicReceiving, anchorsIneligible[0]),
+        CreateTXBToken(wallet.KeyPublicReceiving, wallet.Hash160KeyPublicReceiving, anchorsIneligible[1])];
 
       tXs[^2].LockTime = 737856;
       tXs[^1].LockTime = 737858;

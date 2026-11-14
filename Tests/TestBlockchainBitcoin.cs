@@ -309,7 +309,7 @@ internal partial class Testbench
 
     TXOutputP2PKH CreateTXOutputP2PKH()
     {
-      return new TXOutputP2PKH(VALUE_OUTPUT, Testbench.Wallet.Hash160PKeyPublic);
+      return new TXOutputP2PKH(VALUE_OUTPUT, Testbench.Wallet.Hash160KeyPublicReceiving);
     }
 
     BlockchainBitcoin.TXBitcoin CreateTXBitcoin(int lockTime, params TXOutput[] tXOutputs)
@@ -336,7 +336,7 @@ internal partial class Testbench
       CreateWalletFile(BlockchainBitcoin.NAME_TOKEN);
       BlockchainBitcoinEasy blockchain = new();
 
-      BlockchainBitcoin.TXBitcoin tXPayingWallet = CreateTXBitcoin(0, new TXOutputP2PKH(VALUE_OUTPUT_WALLET, blockchain.Wallet.Hash160PKeyPublic));
+      BlockchainBitcoin.TXBitcoin tXPayingWallet = CreateTXBitcoin(0, new TXOutputP2PKH(VALUE_OUTPUT_WALLET, blockchain.Wallet.Hash160KeyPublicReceiving));
 
       Block blockFirst = CreateBlockBitcoin(CreateHeaderRootEasy().Hash, 1, CreateTXBitcoin(0, CreateTXOutputP2PKH()));
       Block blockPaying = CreateBlockBitcoin(blockFirst.Header.Hash, 2, CreateTXBitcoin(0, CreateTXOutputP2PKH()), tXPayingWallet);

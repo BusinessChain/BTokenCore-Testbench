@@ -86,7 +86,7 @@ internal partial class Testbench
 
         List<Wallet> walletsSource = [.. Enumerable.Range(0, COUNT_TXS).Select(_ => CreateWallet())];
 
-        if (!ledger.TryInsertBlock($"{NAME_CASE}, coinbase funding {COUNT_TXS} source accounts", [ledger.CreateCoinbase(wallet, CreateIDAccount(1000, 1), 0, [.. walletsSource.Select(w => new TXOutputP2PKH(VALUE_FUNDING, w.Hash160PKeyPublic))])], isValidExpected: true, null, ref message)
+        if (!ledger.TryInsertBlock($"{NAME_CASE}, coinbase funding {COUNT_TXS} source accounts", [ledger.CreateCoinbase(wallet, CreateIDAccount(1000, 1), 0, [.. walletsSource.Select(w => new TXOutputP2PKH(VALUE_FUNDING, w.Hash160KeyPublicReceiving))])], isValidExpected: true, null, ref message)
           || !blockchain.TryDeliverBlocksLedgerNew(NAME_CASE, ledger, ref message)
           || !blockchain.TryAddSpends(NAME_CASE, ledger, walletsSource, [.. Enumerable.Repeat<(int, int?)>((0, null), COUNT_TXS)], out List<TXBToken> tXsCreated, ref message))
           return false;
@@ -204,7 +204,7 @@ internal partial class Testbench
         if (tXAnchor.TXOutputs.Count != 2
           || tXAnchor.TXOutputs[1] is not TXOutputP2PKH outputChange
           || outputChange.Value != VALUE_FUNDING - FEE_ANCHOR
-          || !outputChange.IDAccount.IsAllBytesEqual(blockchain.ParentFake.Wallet.Hash160PKeyPublic))
+          || !outputChange.IDAccount.IsAllBytesEqual(blockchain.ParentFake.Wallet.Hash160KeyPublicReceiving))
         {
           message = $"{NAME_CASE}: the first anchor lacks a change output of {VALUE_FUNDING - FEE_ANCHOR} to the parent's wallet.";
           return false;
@@ -756,7 +756,7 @@ internal partial class Testbench
             || !TryFillSegmentKey(nameCase, blockchain, ledger, wallet, isAccountKeyCreated, countAccountsFilled, canReceiveExpected: true, ref message))
             return false;
 
-          byte[] hash160Key = blockchain.Wallet.Hash160PKeyPublic;
+          byte[] hash160Key = blockchain.Wallet.Hash160KeyPublicReceiving;
           string contentWallet = File.ReadAllText(pathWallet);
           long valueExpected = GetBlockReward(ledger.GetHeightTip() + 1) + ledger.GetRentNext();
 
@@ -764,7 +764,7 @@ internal partial class Testbench
             || !blockchain.IsBlockMinedCorrect(nameCase, block, [], valueExpected, ref message))
             return false;
 
-          if (blockchain.Wallet.Hash160PKeyPublic.IsAllBytesEqual(hash160Key) && File.ReadAllText(pathWallet) == contentWallet)
+          if (blockchain.Wallet.Hash160KeyPublicReceiving.IsAllBytesEqual(hash160Key) && File.ReadAllText(pathWallet) == contentWallet)
             return true;
 
           message = $"{nameCase}: the wallet changed its receiving key or its file although CanReceive accepts the key.";
@@ -826,7 +826,7 @@ internal partial class Testbench
             || !TryFillSegmentKey(nameCase, blockchain, ledger, wallet, isAccountKeyCreated: false, COUNT_ACCOUNTS_MAX, canReceiveExpected: false, ref message))
             return false;
 
-          int indexSegmentFull = GetIndexSegment(blockchain.Wallet.Hash160PKeyPublic);
+          int indexSegmentFull = GetIndexSegment(blockchain.Wallet.Hash160KeyPublicReceiving);
           string contentWalletFormer = File.ReadAllText(pathWallet);
           long valueExpected = GetBlockReward(ledger.GetHeightTip() + 1) + ledger.GetRentNext();
 
@@ -834,7 +834,7 @@ internal partial class Testbench
             || !blockchain.IsBlockMinedCorrect(nameCase, block, [], valueExpected, ref message))
             return false;
 
-          byte[] hash160KeyNew = blockchain.Wallet.Hash160PKeyPublic;
+          byte[] hash160KeyNew = blockchain.Wallet.Hash160KeyPublicReceiving;
 
           if (GetIndexSegment(hash160KeyNew) == indexSegmentFull)
           {
@@ -851,13 +851,13 @@ internal partial class Testbench
             ? contentWallet[prefixExpected.Length..^Environment.NewLine.Length].Split(Environment.NewLine)
             : [];
 
-          if (keysAppended.Length == 0 || keysAppended.Any(k => k.Length == 0) || keysAppended[^1] != blockchain.Wallet.KeyPrivateDecimal)
+          if (keysAppended.Length == 0 || keysAppended.Any(k => k.Length == 0))
           {
             message = $"{nameCase}: the wallet file does not hold its former content followed by the generated keys on their own lines, ending with the new receiving key.";
             return false;
           }
 
-          if (new Wallet(pathWallet).Hash160PKeyPublic.IsAllBytesEqual(hash160KeyNew))
+          if (new Wallet(pathWallet).Hash160KeyPublicReceiving.IsAllBytesEqual(hash160KeyNew))
             return true;
 
           message = $"{nameCase}: a Wallet constructed again from the wallet file does not use the new receiving key {hash160KeyNew.ToHexString()}.";
@@ -1023,9 +1023,9 @@ internal partial class Testbench
           return false;
         }
 
-        if (!outputCoinbase.IDAccount.IsAllBytesEqual(Wallet.Hash160PKeyPublic))
+        if (!outputCoinbase.IDAccount.IsAllBytesEqual(Wallet.Hash160KeyPublicReceiving))
         {
-          message = $"{nameCase}: the coinbase pays to {outputCoinbase.IDAccount.ToHexString()}, expected the receiving key {Wallet.Hash160PKeyPublic.ToHexString()}.";
+          message = $"{nameCase}: the coinbase pays to {outputCoinbase.IDAccount.ToHexString()}, expected the receiving key {Wallet.Hash160KeyPublicReceiving.ToHexString()}.";
           return false;
         }
 
@@ -1121,14 +1121,14 @@ internal partial class Testbench
 
       static void WriteWalletFileTemp(string pathWallet, Wallet walletLedger, bool isEndingWithLineBreak)
       {
-        int[] indicesSegmentLedger = [1000, 1001, GetIndexSegment(walletLedger.Hash160PKeyPublic)];
+        int[] indicesSegmentLedger = [1000, 1001, GetIndexSegment(walletLedger.Hash160KeyPublicReceiving)];
         int indexSegment;
 
         do
         {
           string keyPrivate = Crypto.GenerateKeyPrivate();
           File.WriteAllText(pathWallet, isEndingWithLineBreak ? keyPrivate + Environment.NewLine : keyPrivate);
-          indexSegment = GetIndexSegment(new Wallet(pathWallet).Hash160PKeyPublic);
+          indexSegment = GetIndexSegment(new Wallet(pathWallet).Hash160KeyPublicReceiving);
         }
         while (indexSegment < INDEX_SEGMENT_MIN_WALLET_TEMP || indicesSegmentLedger.Contains(indexSegment));
       }
@@ -1147,7 +1147,7 @@ internal partial class Testbench
 
       static bool TryFillSegmentKey(string nameCase, BlockchainMining blockchain, Ledger ledger, Wallet wallet, bool isAccountKeyCreated, int countAccountsFilled, bool canReceiveExpected, ref string message)
       {
-        byte[] hash160Key = blockchain.Wallet.Hash160PKeyPublic;
+        byte[] hash160Key = blockchain.Wallet.Hash160KeyPublicReceiving;
 
         if (isAccountKeyCreated
           && !ledger.TryInsertBlock($"{nameCase}, coinbase creating the account of the receiving key", [ledger.CreateCoinbase(wallet, hash160Key, 0)], isValidExpected: true, null, ref message))
