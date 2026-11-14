@@ -108,7 +108,8 @@ internal partial class Testbench
         && TestHeadersTimeout(ref message)
         && TestHeadersRenewal(ref message)
         && TestTXServingDOS(ref message)
-        && TestRequestThrottle(Testbench.Wallet, ref message);
+        && TestRequestThrottle(Testbench.Wallet, ref message)
+        && TestSegmentServingDOS(Testbench.Wallet, ref message);
     }
 
     static bool TestHeadersRenewal(ref string message)
@@ -1782,26 +1783,65 @@ internal partial class Testbench
 
       try
       {
-        if (!TryHandshakeInbound(NAME_CASE, socketPeer, ref message))
-          return false;
-
-        SendInventory(socketPeer, MSG_SEGMENT_SWEEP, COMMAND_GETDATA, header.Hash);
-
-        if (!socketPeer.TryReceive(NAME_CASE, COMMAND_SEGMENT, out byte[] segment, ref message))
-          return false;
-
-        if (!SHA256.HashData(segment).IsAllBytesEqual(header.HashAccounts))
-        {
-          message = $"{NAME_CASE}: the segment served for the block at height {header.Height} does not hash to its HashAccounts.";
-          return false;
-        }
-
-        return IsAnsweredNotFound(NAME_CASE, socketPeer, MSG_SEGMENT_SWEEP, ref message);
+        return TryHandshakeInbound(NAME_CASE, socketPeer, ref message)
+          && TryReceiveSegmentServed(NAME_CASE, socketPeer, header, ref message)
+          && IsAnsweredNotFound(NAME_CASE, socketPeer, MSG_SEGMENT_SWEEP, ref message);
       }
       finally
       {
         socketPeer.Dispose();
       }
+    }
+
+    static bool TestSegmentServingDOS(Wallet wallet, ref string message)
+    {
+      Console.WriteLine("  48. Segment Serving DOS: Disconnect a peer that re-requests a served segment too often.");
+
+      const string NAME_CASE = "Segment serving DOS";
+      const int MAX_LEVEL_DOS_GETDATA = 5;
+
+      if (!BlockchainNetwork.TryCreateBlocks(wallet, [], out List<Block> blocks, out _, ref message))
+        return false;
+
+      HeaderBToken headerOld = (HeaderBToken)blocks[0].Header;
+
+      StartNodeWithInboundPeer(out SocketFake socketPeer, out _, b => b.AnchorAndDeliver(blocks));
+
+      try
+      {
+        if (!TryHandshakeInbound(NAME_CASE, socketPeer, ref message))
+          return false;
+
+        foreach (Block block in blocks)
+          if (!TryReceiveSegmentServed($"{NAME_CASE}, segment of each block served once", socketPeer, (HeaderBToken)block.Header, ref message))
+            return false;
+
+        for (int i = 0; i < MAX_LEVEL_DOS_GETDATA; i++)
+          if (!TryReceiveSegmentServed($"{NAME_CASE}, old segment requested again", socketPeer, headerOld, ref message))
+            return false;
+
+        SendInventory(socketPeer, MSG_SEGMENT_SWEEP, COMMAND_GETDATA, headerOld.Hash);
+
+        return socketPeer.IsDisconnected(NAME_CASE, ref message);
+      }
+      finally
+      {
+        socketPeer.Dispose();
+      }
+    }
+
+    static bool TryReceiveSegmentServed(string nameCase, SocketFake socketPeer, HeaderBToken header, ref string message)
+    {
+      SendInventory(socketPeer, MSG_SEGMENT_SWEEP, COMMAND_GETDATA, header.Hash);
+
+      if (!socketPeer.TryReceive(nameCase, COMMAND_SEGMENT, out byte[] segment, ref message))
+        return false;
+
+      if (SHA256.HashData(segment).IsAllBytesEqual(header.HashAccounts))
+        return true;
+
+      message = $"{nameCase}: the segment served for the block at height {header.Height} does not hash to its HashAccounts.";
+      return false;
     }
 
     static bool IsAnsweredNotFound(string nameCase, SocketFake socketPeer, Network.Inventory.InventoryType type, ref string message)
