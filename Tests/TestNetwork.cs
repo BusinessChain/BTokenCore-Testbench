@@ -103,7 +103,46 @@ internal partial class Testbench
         && TestNetworkRecovery(Testbench.Wallet, ref message)
         && TestPoolConvergence(Testbench.Wallet, ref message)
         && TestAnnounceReopened(Testbench.Wallet, ref message)
-        && TestPongAnswered(ref message);
+        && TestPongAnswered(ref message)
+        && TestPongMissing(ref message);
+    }
+
+    static bool TestPongMissing(ref string message)
+    {
+      Console.WriteLine("  43. Pong Missing: Drop a peer owing the pong, ignore a wrong nonce.");
+
+      const string NAME_CASE = "Pong missing";
+      const int SECONDS_HOLD = 3;
+
+      if (!TryStartNodeWithPingReceived(NAME_CASE, out NetworkTestbench network, out SocketFake socketPeer, out byte[] nonce, ref message))
+        return false;
+
+      try
+      {
+        byte[] nonceWrong = nonce.Select(b => (byte)~b).ToArray();
+        socketPeer.SendMessage(COMMAND_PONG, LENGTH_NONCE_PING, nonceWrong).Wait();
+
+        if (!TrySynchronize(NAME_CASE, socketPeer, ref message))
+          return false;
+
+        network.AgePing(IP_PEER, NetworkTestbench.INTERVAL_PING_SECONDS);
+
+        string messageHold = "";
+
+        if (socketPeer.TryReceive(NAME_CASE, COMMAND_PING, out _, ref messageHold, SECONDS_HOLD))
+        {
+          message = $"{NAME_CASE}: the node pings again although the pong carried a wrong nonce.";
+          return false;
+        }
+
+        network.AgePing(IP_PEER, NetworkTestbench.TIMEOUT_PONG_SECONDS);
+
+        return socketPeer.IsDisconnected(NAME_CASE, ref message);
+      }
+      finally
+      {
+        socketPeer.Dispose();
+      }
     }
 
     static bool TestPongAnswered(ref string message)
