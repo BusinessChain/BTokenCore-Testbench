@@ -323,7 +323,7 @@ internal partial class Testbench
       });
 
       tX.TXOutputs.AddRange(tXOutputs);
-      tX.Serialize(Testbench.Wallet);
+      tX.Serialize(Testbench.Wallet, Testbench.Wallet.Hash160KeyPublicReceiving);
 
       return tX;
     }
