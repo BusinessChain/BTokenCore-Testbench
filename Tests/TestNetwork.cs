@@ -107,7 +107,8 @@ internal partial class Testbench
         && TestPongMissing(ref message)
         && TestHeadersTimeout(ref message)
         && TestHeadersRenewal(ref message)
-        && TestTXServingDOS(ref message);
+        && TestTXServingDOS(ref message)
+        && TestRequestThrottle(Testbench.Wallet, ref message);
     }
 
     static bool TestHeadersRenewal(ref string message)
@@ -1890,6 +1891,47 @@ internal partial class Testbench
             return false;
           }
         }
+      }
+      finally
+      {
+        socketPeer.Dispose();
+      }
+    }
+
+    static bool TestRequestThrottle(Wallet wallet, ref string message)
+    {
+      Console.WriteLine("  47. Request Throttle: Stop requesting blocks once notfound answers exhaust the budget.");
+
+      const string NAME_CASE = "Request throttle";
+      const int MAX_LEVEL_DOS_GETDATA = 5;
+      const int HEIGHT_TIP = 12;
+      const int SECONDS_HOLD = 3;
+
+      if (!BlockchainNetwork.TryCreateBlocks(wallet, [], out List<Block> blocks, out _, ref message, HEIGHT_TIP))
+        return false;
+
+      StartNodeWithInboundPeer(out SocketFake socketPeer, out _, b => b.ParentFake.MineAnchors(blocks));
+
+      try
+      {
+        if (!TryHandshakeInbound(NAME_CASE, socketPeer, ref message))
+          return false;
+
+        for (int i = 0; i < MAX_LEVEL_DOS_GETDATA; i++)
+        {
+          if (!TryReceiveRequest($"{NAME_CASE}, request {i} within the budget", socketPeer, MSG_BLOCK, out byte[] hash, ref message))
+            return false;
+
+          SendInventory(socketPeer, MSG_BLOCK, COMMAND_NOTFOUND, hash);
+        }
+
+        string messageHold = "";
+
+        if (!TryReceiveRequest(NAME_CASE, socketPeer, MSG_BLOCK, out byte[] hashBeyond, ref messageHold, SECONDS_HOLD))
+          return true;
+
+        message = $"{NAME_CASE}: the node requests block {hashBeyond.ToHexString()} after {MAX_LEVEL_DOS_GETDATA} notfound answers exhausted the budget.";
+        return false;
       }
       finally
       {
