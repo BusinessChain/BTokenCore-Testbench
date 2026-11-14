@@ -630,7 +630,7 @@ internal partial class Testbench
     {
       BlockchainBToken.TXBToken tX = CreateTXBToken(wallet.KeyPublicReceiving, wallet.Hash160KeyPublicReceiving);
       alter(tX);
-      tX.Serialize(wallet);
+      tX.Serialize(wallet, ID_TOKEN_BTOKEN);
 
       return tX.TXRaw;
     }
@@ -662,14 +662,14 @@ internal partial class Testbench
 
       BlockchainBToken.TXBToken tXDuplicatingCoinbase = CreateTXBToken(wallet.KeyPublicReceiving, wallet.Hash160KeyPublicReceiving);
       tXDuplicatingCoinbase.Nonce = 0;
-      tXDuplicatingCoinbase.Serialize(wallet);
+      tXDuplicatingCoinbase.Serialize(wallet, ID_TOKEN_BTOKEN);
 
       BlockchainBToken.TXBToken tX = CreateTXBToken(wallet.KeyPublicReceiving, wallet.Hash160KeyPublicReceiving);
-      tX.Serialize(wallet);
+      tX.Serialize(wallet, ID_TOKEN_BTOKEN);
 
       BlockchainBToken.TXBToken tXOther = CreateTXBToken(wallet.KeyPublicReceiving, wallet.Hash160KeyPublicReceiving);
       tXOther.Nonce += 1;
-      tXOther.Serialize(wallet);
+      tXOther.Serialize(wallet, ID_TOKEN_BTOKEN);
 
       Block block = CreateBlock([tXCoinbase, tX]);
       block.Serialize();

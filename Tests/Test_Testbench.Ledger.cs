@@ -31,7 +31,7 @@ internal partial class Testbench
       { }
 
       protected BlockchainTestbench(string nameToken, LiteDatabase liteDatabase, Blockchain blockchainParent)
-        : base(nameToken, liteDatabase, "BTK", blockchainParent, new SemaphoreSlim(1))
+        : base(nameToken, liteDatabase, NAME_ID_TOKEN_BTOKEN, blockchainParent, new SemaphoreSlim(1))
       {
         ParentFake = blockchainParent as BlockchainParentFake;
       }
@@ -300,7 +300,7 @@ internal partial class Testbench
           tX.TXOutputs[0] = new TXOutputP2PKH(value, iDReceiving);
 
           alter(tX);
-          tX.Serialize(wallet);
+          tX.Serialize(wallet, ID_TOKEN_BTOKEN);
 
           return tX;
         }

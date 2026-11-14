@@ -12,8 +12,6 @@ internal partial class Testbench
   {
     protected class BlockchainParentFake : BlockchainBitcoin
     {
-      static readonly byte[] ID_TOKEN_BTOKEN = [(byte)'B', (byte)'T', (byte)'K', 0];
-
       class ParserParentFake : ParserBitcoin
       {
         internal override Header ParseHeader(byte[] buffer, ref int index)

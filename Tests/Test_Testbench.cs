@@ -69,6 +69,9 @@ internal partial class Testbench
 
     protected static readonly byte[] ID_TOKEN = [0x01, 0x02, 0x03, 0x04];
 
+    protected const string NAME_ID_TOKEN_BTOKEN = "BTK";
+    protected static readonly byte[] ID_TOKEN_BTOKEN = new ParserBToken(NAME_ID_TOKEN_BTOKEN).IDToken;
+
     protected const string HEADER_BITCOIN_737857 =
       "0080d121824471242bb8751e2363732c0c6b91561eb81dbbd9300200000000000000000017478653c5ffd216f7c3dee1dc4bd790" +
       "b10dd2ffb2cbc30983dad4633004385a85458e62206a0917627da442";
@@ -147,7 +150,7 @@ internal partial class Testbench
         Header = headerExpected
       };
 
-      new ParserBToken().ParseBlock(blockParsed, verifySignatures: true);
+      new ParserBToken(NAME_ID_TOKEN_BTOKEN).ParseBlock(blockParsed, verifySignatures: true);
 
       return blockParsed;
     }
@@ -176,7 +179,7 @@ internal partial class Testbench
     protected static BlockchainBToken.TXBToken ParseTXRaw(byte[] tXRaw)
     {
       int index = 0;
-      return new BlockchainBToken.TXBToken(tXRaw, ref index, isCoinbase: false, verifySignatures: true);
+      return new BlockchainBToken.TXBToken(tXRaw, ref index, isCoinbase: false, verifySignatures: true, ID_TOKEN_BTOKEN);
     }
 
     protected static bool IsRejected(string nameRule, Action action, ref string message)

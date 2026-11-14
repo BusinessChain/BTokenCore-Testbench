@@ -105,7 +105,7 @@ internal partial class Testbench
       TXOutputTokenAnchor tXOutputTokenAnchor = CreateTXOutputTokenAnchor(ID_TOKEN, 0);
 
       BlockchainBToken.TXBToken tX = CreateTXBToken(wallet.KeyPublicReceiving, wallet.Hash160KeyPublicReceiving, tXOutputTokenAnchor);
-      tX.Serialize(wallet);
+      tX.Serialize(wallet, ID_TOKEN_BTOKEN);
 
       BlockchainBToken.TXBToken tXCoinbase = CreateTXBToken(wallet.KeyPublicReceiving, wallet.Hash160KeyPublicReceiving, tXOutputTokenAnchor);
       tXCoinbase.SerializeUnsigned();
@@ -127,7 +127,7 @@ internal partial class Testbench
       TXOutputTokenAnchor tXOutputTokenAnchor = CreateTXOutputTokenAnchor(ID_TOKEN, 0);
 
       BlockchainBToken.TXBToken tX = CreateTXBToken(wallet.KeyPublicReceiving, wallet.Hash160KeyPublicReceiving, tXOutputTokenAnchor);
-      tX.Serialize(wallet);
+      tX.Serialize(wallet, ID_TOKEN_BTOKEN);
 
       Block block = CreateBlock([tXCoinbase, tX]);
       Block blockParsed = ParseBlockSerialized(block);
@@ -181,7 +181,7 @@ internal partial class Testbench
       tXs[^1].LockTime = 737858;
 
       foreach (BlockchainBToken.TXBToken tX in tXs.Skip(1))
-        tX.Serialize(wallet);
+        tX.Serialize(wallet, ID_TOKEN_BTOKEN);
 
       Block block = CreateBlock(tXs);
 
@@ -228,7 +228,7 @@ internal partial class Testbench
     {
       int index = indexStart;
 
-      BlockchainBToken.TXBToken tXParsed = new(buffer, ref index, isCoinbase, verifySignatures: true);
+      BlockchainBToken.TXBToken tXParsed = new(buffer, ref index, isCoinbase, verifySignatures: true, ID_TOKEN_BTOKEN);
 
       string nameParser = $"{nameof(BlockchainBToken.TXBToken)} parsed from index {indexStart}";
 
