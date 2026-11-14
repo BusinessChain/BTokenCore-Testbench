@@ -106,7 +106,8 @@ internal partial class Testbench
         && TestPongAnswered(ref message)
         && TestPongMissing(ref message)
         && TestHeadersTimeout(ref message)
-        && TestHeadersRenewal(ref message);
+        && TestHeadersRenewal(ref message)
+        && TestTXServingDOS(ref message);
     }
 
     static bool TestHeadersRenewal(ref string message)
@@ -1850,6 +1851,45 @@ internal partial class Testbench
         SendInventory(socketPeer, MSG_BLOCK, COMMAND_GETDATA, hashOld);
 
         return socketPeer.IsDisconnected(NAME_CASE, ref message);
+      }
+      finally
+      {
+        socketPeer.Dispose();
+      }
+    }
+
+    static bool TestTXServingDOS(ref string message)
+    {
+      Console.WriteLine("  46. TX Serving DOS: Disconnect a peer requesting unknown TXs beyond the byte budget.");
+
+      const string NAME_CASE = "TX serving DOS";
+      const int MAX_LEVEL_DOS_TX = 2_000_000;
+      const int COUNT_INVENTORIES_PER_GETDATA = 1000;
+      const int COUNT_GETDATA_WITHIN_BUDGET = MAX_LEVEL_DOS_TX / (COUNT_INVENTORIES_PER_GETDATA * LENGTH_INVENTORY);
+
+      StartNodeWithInboundPeer(out SocketFake socketPeer, out _);
+
+      try
+      {
+        if (!TryHandshakeInbound(NAME_CASE, socketPeer, ref message))
+          return false;
+
+        for (int i = 0; ; i++)
+        {
+          SendInventory(socketPeer, MSG_TX, COMMAND_GETDATA, [.. Enumerable.Range(0, COUNT_INVENTORIES_PER_GETDATA).Select(_ => RandomNumberGenerator.GetBytes(Crypto.LENGTH_HASH256))]);
+
+          if (i == COUNT_GETDATA_WITHIN_BUDGET)
+            return socketPeer.IsDisconnected($"{NAME_CASE}, getdata {i} beyond the budget", ref message);
+
+          if (!TryReceiveInventories($"{NAME_CASE}, getdata {i} within the budget", socketPeer, COMMAND_NOTFOUND, MSG_TX, out List<byte[]> hashesNotFound, ref message))
+            return false;
+
+          if (hashesNotFound.Count != COUNT_INVENTORIES_PER_GETDATA)
+          {
+            message = $"{NAME_CASE}: the node answers getdata {i} with {hashesNotFound.Count} notfound inventories, expected {COUNT_INVENTORIES_PER_GETDATA}.";
+            return false;
+          }
+        }
       }
       finally
       {
