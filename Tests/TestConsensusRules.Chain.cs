@@ -25,7 +25,7 @@ internal partial class Testbench
       // Counter-tested 2026-11-14 03:01
       internal static bool TestForkPermutations(ref string message)
       {
-        bool isSkipped = true;
+        bool isSkipped = false;
 
         if (isSkipped)
         {

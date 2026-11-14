@@ -304,7 +304,7 @@ internal partial class Testbench
           ("anchor TX expiring with the next block", tXB1),
           ("spend following the expiring anchor TX", tXB2),
           ("spend later replaced by a conflicting spend", tXC1),
-          ("spend following the replaced spend", tXC2),
+          ("spend following the replaced spend, valid after the conflicting spend", tXC2),
           ("spend creating the last account of a segment", tXD1),
           ("spend of the whole Balance before a sweep", tXE1)
         })
@@ -314,8 +314,8 @@ internal partial class Testbench
         TXBToken tXCoinbaseCreating = ledger.CreateCoinbase(wallet, iDMiner, tXA1.Fee + tXC1Conflicting.Fee, new TXOutputP2PKH(1000, iDCreatedByBlock));
 
         return ledger.TryInsertBlock("block confirming a spend, replacing a spend and creating an account", [tXCoinbaseCreating, tXA1, tXC1Conflicting], isValidExpected: true, null, ref message)
-          && AreTXsRankedCorrect("pool after RemoveTXs", pool.GetTXsRanked(), [tXA2], ref message)
-          && ledger.TryInsertBlockFromPool("block of the TX left in the pool", pool, wallet, iDMiner, 1, ref message);
+          && AreTXsRankedCorrect("pool after RemoveTXs", pool.GetTXsRanked(), [.. new[] { tXA2, tXC2 }.OrderByDescending(t => t.GetFeePerByte())], ref message)
+          && ledger.TryInsertBlockFromPool("block of the TXs left in the pool", pool, wallet, iDMiner, 2, ref message);
       }
 
       // Counter-tested 2026-11-13 17:16
