@@ -102,7 +102,55 @@ internal partial class Testbench
         && TestEndToEnd(blocksWindow, spendsWindow[0], ref message)
         && TestNetworkRecovery(Testbench.Wallet, ref message)
         && TestPoolConvergence(Testbench.Wallet, ref message)
-        && TestAnnounceReopened(Testbench.Wallet, ref message);
+        && TestAnnounceReopened(Testbench.Wallet, ref message)
+        && TestPongAnswered(ref message);
+    }
+
+    static bool TestPongAnswered(ref string message)
+    {
+      Console.WriteLine("  42. Pong Answered: Ping again after a matching pong, keep the peer.");
+
+      const string NAME_CASE = "Pong answered";
+
+      if (!TryStartNodeWithPingReceived(NAME_CASE, out NetworkTestbench network, out SocketFake socketPeer, out byte[] nonce, ref message))
+        return false;
+
+      try
+      {
+        socketPeer.SendMessage(COMMAND_PONG, LENGTH_NONCE_PING, nonce).Wait();
+
+        if (!TrySynchronize(NAME_CASE, socketPeer, ref message))
+          return false;
+
+        network.AgePing(IP_PEER, NetworkTestbench.INTERVAL_PING_SECONDS);
+
+        if (!socketPeer.TryReceive(NAME_CASE, COMMAND_PING, out _, ref message))
+          return false;
+
+        if (network.IsPeerListed(IP_PEER))
+          return true;
+
+        message = $"{NAME_CASE}: the node dropped the peer {IP_PEER} that answered the ping.";
+        return false;
+      }
+      finally
+      {
+        socketPeer.Dispose();
+      }
+    }
+
+    static bool TryStartNodeWithPingReceived(string nameCase, out NetworkTestbench network, out SocketFake socketPeer, out byte[] nonce, ref string message)
+    {
+      nonce = null;
+      network = StartNodeWithInboundPeer(out socketPeer, out _);
+
+      if (TryHandshakeInbound(nameCase, socketPeer, ref message)
+        && IsPeerListed(nameCase, network, IP_PEER, ref message)
+        && socketPeer.TryReceive(nameCase, COMMAND_PING, out nonce, ref message))
+        return true;
+
+      socketPeer.Dispose();
+      return false;
     }
 
     static bool TestAnnounceReopened(Wallet wallet, ref string message)
@@ -2007,6 +2055,15 @@ internal partial class Testbench
       {
         lock (LOCK_Peers)
           ((BlockMessage)Peers.Single(p => p.GetIP() == iP).MessagesByCommand[BlockMessage.Command]).TimeRequest -= TimeSpan.FromSeconds(seconds);
+      }
+
+      internal const int INTERVAL_PING_SECONDS = PingMessage.INTERVAL_PING_SECONDS;
+      internal const int TIMEOUT_PONG_SECONDS = PingMessage.TIMEOUT_PONG_SECONDS;
+
+      internal void AgePing(string iP, int seconds)
+      {
+        lock (LOCK_Peers)
+          ((PingMessage)Peers.Single(p => p.GetIP() == iP).MessagesByCommand[PingMessage.Command]).TimePingSent -= TimeSpan.FromSeconds(seconds);
       }
 
       internal void FillThrottleTXAnnounced(string iP, int countBytesRoomLeft)
