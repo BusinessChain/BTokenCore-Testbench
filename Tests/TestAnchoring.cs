@@ -139,7 +139,7 @@ internal partial class Testbench
         return blockchain.IsSynchronized(ledger, $"{nameCaseDropped}, received after the request", 2, ref message);
       }
 
-      // Counter-tested 2026-11-13 19:05
+      // Counter-tested 2026-11-14 03:01
       internal static bool TestParentRollback(Wallet wallet, ref string message)
       {
         Console.WriteLine("  4. Parent Rollback: Roll back with Bitcoin, re-anchor rolled-back blocks from the store.");
@@ -174,7 +174,7 @@ internal partial class Testbench
           && blockchain.IsRequestingNoBlock(nameCaseReanchored, ref message);
       }
 
-      // Counter-tested 2026-11-13 19:39
+      // Counter-tested 2026-11-14 03:01
       internal static bool TestRestartAnchored(Wallet wallet, ref string message)
       {
         Console.WriteLine("  5. Restart Anchored: Re-anchor stored blocks through the reloaded Bitcoin chain.");
@@ -196,7 +196,7 @@ internal partial class Testbench
           && blockchainRestarted.IsRequestingNoBlock(nameCase, ref message);
       }
 
-      // Counter-tested 2026-11-13 19:42
+      // Counter-tested 2026-11-14 03:01
       internal static bool TestRestartUnanchored(Wallet wallet, ref string message)
       {
         Console.WriteLine("  6. Restart Unanchored: Roll back unanchored tip blocks, keep unanchored blocks below anchored.");
@@ -321,7 +321,7 @@ internal partial class Testbench
         return blockchain.IsWithoutAccounts("Window resync, fork blocks delivered after the resync", HEIGHT_RESYNC + 1, ref message);
       }
 
-      // Counter-tested 2026-11-13 19:39
+      // Counter-tested 2026-11-14 03:01
       internal static bool TestRestartResync(Wallet wallet, ref string message)
       {
         Console.WriteLine("  8. Restart Resync: Resync at restart when RollBackUnanchored drops below the window.");

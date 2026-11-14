@@ -79,8 +79,8 @@ internal partial class Testbench
         && TestServingDOS(Testbench.Wallet, ref message)
         && TestBlockAnnouncement(Testbench.Wallet, ref message)
         && TestSegmentServing(Testbench.Wallet, ref message)
-        && TestUnrequestedSegment(ref message)
         && BlockchainNetwork.TryCreateBlocks(Testbench.Wallet, [t => { }], out List<Block> blocksWindow, out List<BlockchainBToken.TXBToken> spendsWindow, ref message, HEIGHT_TIP_WINDOW)
+        && TestUnrequestedSegment(blocksWindow, ref message)
         && TestSegmentRequest(blocksWindow, ref message)
         && TestSegmentRefusal(blocksWindow, ref message)
         && TestTXRequest(Testbench.Wallet, ref message)
@@ -115,6 +115,7 @@ internal partial class Testbench
         && TestHeadersFlood(ref message);
     }
 
+    // Counter-tested 2026-11-14 03:01
     static bool TestHeadersRenewal(ref string message)
     {
       Console.WriteLine("  45. Headers Renewal: Renew the getheaders timeout after answered headers.");
@@ -146,6 +147,7 @@ internal partial class Testbench
       }
     }
 
+    // Counter-tested 2026-11-14 03:01
     static bool TestHeadersTimeout(ref string message)
     {
       Console.WriteLine("  44. Headers Timeout: Disconnect a Bitcoin peer ignoring getheaders past the timeout.");
@@ -170,6 +172,7 @@ internal partial class Testbench
       }
     }
 
+    // Counter-tested 2026-11-14 03:01
     static bool TestPongMissing(ref string message)
     {
       Console.WriteLine("  43. Pong Missing: Drop a peer owing the pong, ignore a wrong nonce.");
@@ -208,6 +211,7 @@ internal partial class Testbench
       }
     }
 
+    // Counter-tested 2026-11-14 03:01
     static bool TestPongAnswered(ref string message)
     {
       Console.WriteLine("  42. Pong Answered: Ping again after a matching pong, keep the peer.");
@@ -255,6 +259,7 @@ internal partial class Testbench
       return false;
     }
 
+    // Counter-tested 2026-11-14 03:01
     static bool TestAnnounceReopened(Wallet wallet, ref string message)
     {
       Console.WriteLine("  41. Announce Reopened: Announce an own TX again after its rollback.");
@@ -312,6 +317,7 @@ internal partial class Testbench
       }
     }
 
+    // Counter-tested 2026-11-14 03:01
     static bool TestNetworkRecovery(Wallet wallet, ref string message)
     {
       Console.WriteLine("  39. Network Recovery: A second node adopts the replacement after a burnt slot.");
@@ -328,6 +334,7 @@ internal partial class Testbench
       return false;
     }
 
+    // Counter-tested 2026-11-14 03:01
     static bool TestPoolConvergence(Wallet wallet, ref string message)
     {
       Console.WriteLine("  40. Pool Convergence: A relayed spend leaves both pools after the recovery.");
@@ -425,6 +432,7 @@ internal partial class Testbench
       blockchainFollower.RunLocked(() => blockchainFollower.ParentFake.MineBlock([], anchorWinner)).Wait();
     }
 
+    // Counter-tested 2026-11-14 03:01
     static bool TestEndToEnd(List<Block> blocksWindow, BlockchainBToken.TXBToken spend, ref string message)
     {
       Console.WriteLine("  38. End To End: A fresh node syncs blocks, segments and TXs from a peer.");
@@ -461,6 +469,7 @@ internal partial class Testbench
       return false;
     }
 
+    // Counter-tested 2026-11-14 03:01
     static bool TestReturnIdle(ref string message)
     {
       Console.WriteLine("  37. Return Idle: Request blocks after an empty headers message.");
@@ -491,14 +500,26 @@ internal partial class Testbench
       }
     }
 
+    // Counter-tested 2026-11-14 03:35
     static bool TestHeadersInsertion(ref string message)
     {
       Console.WriteLine("  36. Headers Insertion: Insert received headers, request the next from the new tip.");
 
-      bool isInserted = TrySendHeadersOnTip("Headers insertion", 0, out SocketFake socketSeed, out _, out _, ref message);
+      const string NAME_CASE = "Headers insertion";
+
+      bool isSent = TrySendHeadersOnTip(NAME_CASE, 0, out SocketFake socketSeed, out List<Header> headersNew, out NetworkBitcoinTestbench network, ref message);
       socketSeed.Dispose();
 
-      return isInserted;
+      if (!isSent)
+        return false;
+
+      byte[] hashTip = network.Blockchain.RunLocked(network.Blockchain.GetLocator).Result[0];
+
+      if (hashTip.IsAllBytesEqual(headersNew[^1].Hash))
+        return true;
+
+      message = $"{NAME_CASE}: the header tip is {hashTip.ToHexString()}, expected the last received header {headersNew[^1].Hash.ToHexString()}.";
+      return false;
     }
 
     static bool TrySendHeadersOnTip(string nameCase, int secondsAgedBeforeHeaders, out SocketFake socketSeed, out List<Header> headersNew, out NetworkBitcoinTestbench network, ref string message)
@@ -540,6 +561,7 @@ internal partial class Testbench
       return false;
     }
 
+    // Counter-tested 2026-11-14 04:01
     static bool TestLocatorLimit(ref string message)
     {
       Console.WriteLine("  35. Locator Limit: Serve headers after the locator, reject an oversized locator.");
@@ -556,7 +578,7 @@ internal partial class Testbench
         if (!TryHandshakeBitcoin(NAME_CASE, socketSeed, out _, ref message))
           return false;
 
-        SendGetheaders(socketSeed, [headers[HEIGHT_LOCATOR - 1].Hash]);
+        SendGetheaders(socketSeed, [.. Enumerable.Range(1, COUNT_HASHES_LOCATOR_OVERSIZED - 2).Select(i => RandomNumberGenerator.GetBytes(Crypto.LENGTH_HASH256)), headers[HEIGHT_LOCATOR - 1].Hash], new byte[Crypto.LENGTH_HASH256]);
 
         if (!socketSeed.TryReceive(NAME_CASE, COMMAND_HEADERS, out byte[] payload, ref message))
           return false;
@@ -564,13 +586,13 @@ internal partial class Testbench
         List<Header> headersExpected = headers.Skip(HEIGHT_LOCATOR).ToList();
         byte[] payloadExpected = [.. VarInt.GetBytes(headersExpected.Count), .. headersExpected.SelectMany(h => (byte[])[.. h.Serialize(), 0x00])];
 
-        if (!payload.IsAllBytesEqual(payloadExpected))
+        if (payload.Length != payloadExpected.Length || !payload.IsAllBytesEqual(payloadExpected))
         {
           message = $"{NAME_CASE}: the node serves {payload.ToHexString()}, expected the headers at heights {HEIGHT_LOCATOR + 1} to {COUNT_BLOCKS}.";
           return false;
         }
 
-        SendGetheaders(socketSeed, [.. Enumerable.Range(0, COUNT_HASHES_LOCATOR_OVERSIZED).Select(i => RandomNumberGenerator.GetBytes(Crypto.LENGTH_HASH256))]);
+        SendGetheaders(socketSeed, [.. Enumerable.Range(0, COUNT_HASHES_LOCATOR_OVERSIZED).Select(i => RandomNumberGenerator.GetBytes(Crypto.LENGTH_HASH256))], []);
 
         return socketSeed.IsDisconnected(NAME_CASE, ref message);
       }
@@ -580,17 +602,18 @@ internal partial class Testbench
       }
     }
 
-    static void SendGetheaders(SocketFake socketPeer, List<byte[]> locator)
+    static void SendGetheaders(SocketFake socketPeer, List<byte[]> locator, byte[] hashStop)
     {
       byte[] payload = [
         .. BitConverter.GetBytes(PROTOCOL_VERSION),
         .. VarInt.GetBytes(locator.Count),
         .. locator.SelectMany(h => h),
-        .. new byte[Crypto.LENGTH_HASH256]];
+        .. hashStop];
 
       socketPeer.SendMessage(COMMAND_GETHEADERS, payload.Length, payload).Wait();
     }
 
+    // Counter-tested 2026-11-14 03:01
     static bool TestGetheadersLocator(ref string message)
     {
       Console.WriteLine("  34. Getheaders Locator: Send getheaders with an exponential locator after verack.");
@@ -647,6 +670,7 @@ internal partial class Testbench
       return true;
     }
 
+    // Counter-tested 2026-11-14 03:01
     static bool TestStreamEnd(ref string message)
     {
       Console.WriteLine("  33. Stream End: Throw IOException when the stream ends early.");
@@ -689,6 +713,7 @@ internal partial class Testbench
       return false;
     }
 
+    // Counter-tested 2026-11-14 03:01
     static bool TestPayloadLength(ref string message)
     {
       Console.WriteLine("  32. Payload Length: Reject payload lengths beyond the buffer or negative.");
@@ -716,6 +741,7 @@ internal partial class Testbench
       return IsRejected(nameRule, receive, ref message);
     }
 
+    // Counter-tested 2026-11-14 03:01
     static bool TestMagicMismatch(ref string message)
     {
       Console.WriteLine("  31. Magic Mismatch: Reject a message with other magic bytes.");
@@ -729,6 +755,7 @@ internal partial class Testbench
       return IsRejected("Magic mismatch", () => connection.Socket.ReceiveCommandMessageNext().GetAwaiter().GetResult(), ref message);
     }
 
+    // Counter-tested 2026-11-14 03:35
     static bool TestSplitReads(ref string message)
     {
       Console.WriteLine("  30. Split Reads: Reassemble a message written one byte at a time.");
@@ -764,7 +791,7 @@ internal partial class Testbench
 
       (string commandReceived, int lengthReceived) = receive.Result;
 
-      if (commandReceived == COMMAND_FRAMING && buffer[..lengthReceived].IsAllBytesEqual(payload))
+      if (commandReceived == COMMAND_FRAMING && lengthReceived == payload.Length && buffer[..lengthReceived].IsAllBytesEqual(payload))
         return true;
 
       message = $"{NAME_CASE}: SocketTCP receives command {commandReceived} with payload {buffer[..lengthReceived].ToHexString()}, " +
@@ -772,6 +799,7 @@ internal partial class Testbench
       return false;
     }
 
+    // Counter-tested 2026-11-14 03:35
     static bool TestFramingSend(ref string message)
     {
       Console.WriteLine("  29. Framing Send: Frame magic, padded command, length, checksum and payload.");
@@ -788,11 +816,12 @@ internal partial class Testbench
       byte[] messageSent = new byte[messageExpected.Length];
 
       connection.StreamRaw.ReadExactly(messageSent);
+      connection.Socket.Dispose();
 
-      if (messageSent.IsAllBytesEqual(messageExpected))
+      if (messageSent.IsAllBytesEqual(messageExpected) && connection.StreamRaw.ReadByte() == -1)
         return true;
 
-      message = $"Framing send: SocketTCP sends {messageSent.ToHexString()}, expected {messageExpected.ToHexString()}.";
+      message = $"Framing send: SocketTCP sends {messageSent.ToHexString()}, expected {messageExpected.ToHexString()} with no byte after it.";
       return false;
     }
 
@@ -836,6 +865,7 @@ internal partial class Testbench
       }
     }
 
+    // Counter-tested 2026-11-14 03:01
     static bool TestTXTimeout(Wallet wallet, ref string message)
     {
       Console.WriteLine("  24. TX Timeout: Disconnect a peer that does not answer a TX request.");
@@ -857,6 +887,7 @@ internal partial class Testbench
       }
     }
 
+    // Counter-tested 2026-11-14 03:01
     static bool TestTXNotFound(Wallet wallet, ref string message)
     {
       Console.WriteLine("  25. TX Notfound: Clear TX requests answered by notfound, keep the peer.");
@@ -911,28 +942,35 @@ internal partial class Testbench
       return false;
     }
 
+    // Counter-tested 2026-11-14 04:49
     static bool TestTXRelay(Wallet wallet, ref string message)
     {
       Console.WriteLine("  23. TX Relay: Relay a received TX to the other peers and serve it.");
 
       const string NAME_CASE = "TX relay";
+      const string IP_PEER_THIRD = "10.0.0.5";
 
       if (!BlockchainNetwork.TryCreateBlocks(wallet, [t => { }], out List<Block> blocks, out List<BlockchainBToken.TXBToken> spends, ref message))
         return false;
 
       BlockchainBToken.TXBToken spend = spends[0];
 
-      NetworkTestbench network = StartNodeWithTwoPeers(blocks, out SocketFake socketPeer, out SocketFake socketOther);
+      NetworkTestbench network = StartNodeWithInboundPeer(out SocketFake socketPeer, out CommunicationFake communication, b => b.AnchorAndDeliver(blocks));
+      SocketFake socketOther = communication.ConnectInbound(IP_PEER_OTHER);
+      SocketFake socketThird = communication.ConnectInbound(IP_PEER_THIRD);
 
       try
       {
         if (!TryHandshakeTwoPeers(NAME_CASE, network, socketPeer, socketOther, ref message)
+          || !TryHandshakeInbound(NAME_CASE, socketThird, ref message)
+          || !IsPeerListed(NAME_CASE, network, IP_PEER_THIRD, ref message)
           || !IsOnlyTXRequested(NAME_CASE, socketPeer, [spend.Hash], spend.Hash, ref message))
           return false;
 
         socketPeer.SendMessage(COMMAND_TX, spend.TXRaw.Length, spend.TXRaw).Wait();
 
-        if (!IsTXAnnounced(NAME_CASE, socketOther, spend.Hash, ref message))
+        if (!IsTXAnnounced(NAME_CASE, socketOther, spend.Hash, ref message)
+          || !IsTXAnnounced(NAME_CASE, socketThird, spend.Hash, ref message))
           return false;
 
         SendInventory(socketOther, MSG_TX, COMMAND_GETDATA, spend.Hash);
@@ -940,7 +978,7 @@ internal partial class Testbench
         if (!socketOther.TryReceive(NAME_CASE, COMMAND_TX, out byte[] tXRaw, ref message))
           return false;
 
-        if (!tXRaw.IsAllBytesEqual(spend.TXRaw))
+        if (tXRaw.Length != spend.TXRaw.Length || !tXRaw.IsAllBytesEqual(spend.TXRaw))
         {
           message = $"{NAME_CASE}: the node serves the TX {tXRaw.ToHexString()}, expected the relayed spend {spend.TXRaw.ToHexString()}.";
           return false;
@@ -959,9 +997,11 @@ internal partial class Testbench
       {
         socketPeer.Dispose();
         socketOther.Dispose();
+        socketThird.Dispose();
       }
     }
 
+    // Counter-tested 2026-11-14 03:01
     static bool TestFeeFilter(Wallet wallet, ref string message)
     {
       Console.WriteLine("  26. Fee Filter: Announce no TX below the peer's fee filter.");
@@ -1005,6 +1045,7 @@ internal partial class Testbench
       }
     }
 
+    // Counter-tested 2026-11-14 03:01
     static bool TestTXThrottle(Wallet wallet, ref string message)
     {
       Console.WriteLine("  27. TX Throttle: Hold back a TX beyond the announcement throttle until drained.");
@@ -1050,6 +1091,7 @@ internal partial class Testbench
       }
     }
 
+    // Counter-tested 2026-11-14 03:01
     static bool TestOwnTX(Wallet wallet, ref string message)
     {
       Console.WriteLine("  28. Own TX: Announce an own unconfirmed TX once to each peer.");
@@ -1124,6 +1166,7 @@ internal partial class Testbench
       return false;
     }
 
+    // Counter-tested 2026-11-14 03:01
     static bool TestTXRequest(Wallet wallet, ref string message)
     {
       Console.WriteLine("  22. TX Request: Request only the TXs missing from the TX pool.");
@@ -1165,6 +1208,7 @@ internal partial class Testbench
       return false;
     }
 
+    // Counter-tested 2026-11-14 03:01
     static bool TestHandshakeOutbound(ref string message)
     {
       Console.WriteLine("  1. Handshake Outbound: Complete version and verack with the seed peer.");
@@ -1184,6 +1228,7 @@ internal partial class Testbench
       }
     }
 
+    // Counter-tested 2026-11-14 03:01
     static bool TestHandshakeInbound(ref string message)
     {
       Console.WriteLine("  2. Handshake Inbound: Accept an inbound peer and store its IP.");
@@ -1213,6 +1258,7 @@ internal partial class Testbench
       }
     }
 
+    // Counter-tested 2026-11-14 03:01
     static bool TestServicesMissing(ref string message)
     {
       Console.WriteLine("  3. Services Missing: Disconnect an inbound peer lacking NODE_NETWORK.");
@@ -1238,6 +1284,7 @@ internal partial class Testbench
       }
     }
 
+    // Counter-tested 2026-11-14 03:01
     static bool TestHandshakeTimeout(ref string message)
     {
       bool isSkipped = true;
@@ -1279,6 +1326,7 @@ internal partial class Testbench
       }
     }
 
+    // Counter-tested 2026-11-14 03:01
     static bool TestOutboundLimit(ref string message)
     {
       Console.WriteLine("  5. Outbound Limit: Hold back connections beyond CountMaxOutboundConnections.");
@@ -1316,6 +1364,7 @@ internal partial class Testbench
       }
     }
 
+    // Counter-tested 2026-11-14 03:01
     static bool TestOutboundFailure(ref string message)
     {
       Console.WriteLine("  6. Outbound Failure: Drop the IP of a failed outbound connection.");
@@ -1353,20 +1402,24 @@ internal partial class Testbench
       }
     }
 
+    // Counter-tested 2026-11-14 04:01
     static bool TestInboundDuplicate(ref string message)
     {
       Console.WriteLine("  7. Inbound Duplicate: Reject a second inbound connection from one IP.");
 
       const string NAME_CASE = "Inbound duplicate";
+      const int SECONDS_HOLD = 3;
 
       CommunicationFake communication = new();
       NetworkTestbench network = BlockchainNetwork.StartNode(communication);
       SocketFake socketPeer = communication.ConnectInbound(IP_PEER);
+      SocketFake socketDuplicateHandshake = communication.ConnectInbound(IP_PEER);
       SocketFake socketDuplicate = null;
 
       try
       {
-        if (!TryHandshakeInbound(NAME_CASE, socketPeer, ref message)
+        if (!socketDuplicateHandshake.IsDisconnected($"{NAME_CASE} during the handshake of the first peer", ref message)
+          || !TryHandshakeInbound(NAME_CASE, socketPeer, ref message)
           || !IsPeerListed(NAME_CASE, network, IP_PEER, ref message))
           return false;
 
@@ -1375,7 +1428,9 @@ internal partial class Testbench
         if (!socketDuplicate.IsDisconnected(NAME_CASE, ref message))
           return false;
 
-        if (network.IsPeerListed(IP_PEER))
+        string messageHold = "";
+
+        if (!socketPeer.IsDisconnected(NAME_CASE, ref messageHold, SECONDS_HOLD) && network.IsPeerListed(IP_PEER))
           return true;
 
         message = $"{NAME_CASE}: the node dropped the first peer {IP_PEER} when rejecting the duplicate.";
@@ -1384,23 +1439,28 @@ internal partial class Testbench
       finally
       {
         socketPeer.Dispose();
+        socketDuplicateHandshake.Dispose();
         socketDuplicate?.Dispose();
       }
     }
 
+    // Counter-tested 2026-11-14 03:35
     static bool TestInboundEviction(ref string message)
     {
-      Console.WriteLine("  8. Inbound Eviction: Evict the unprotected inbound peer, keep the TX deliverer.");
+      Console.WriteLine("  8. Inbound Eviction: Evict an unprotected inbound peer, never a TX deliverer.");
 
       const string NAME_CASE = "Inbound eviction";
       const string IP_UNPROTECTED = "10.0.0.3";
       const string IP_NEW = "10.0.0.4";
+      const string IP_LAST = "10.0.0.5";
+      const int SECONDS_HOLD = 3;
 
       CommunicationFake communication = new();
       NetworkTestbench network = BlockchainNetwork.StartNode(communication, countMaxInbound: 2);
       SocketFake socketProtected = communication.ConnectInbound(IP_PEER);
       SocketFake socketUnprotected = communication.ConnectInbound(IP_UNPROTECTED);
       SocketFake socketNew = null;
+      SocketFake socketLast = null;
 
       try
       {
@@ -1419,10 +1479,34 @@ internal partial class Testbench
           || !IsPeerListed(NAME_CASE, network, IP_NEW, ref message))
           return false;
 
-        if (network.IsPeerListed(IP_PEER))
+        if (!SpinWait.SpinUntil(() => !network.IsPeerListed(IP_UNPROTECTED), TimeSpan.FromSeconds(SECONDS_TIMEOUT_PEER_LISTED)))
+        {
+          message = $"{NAME_CASE}: the node lists the evicted peer {IP_UNPROTECTED} in Peers.";
+          return false;
+        }
+
+        if (!network.IsPeerListed(IP_PEER))
+        {
+          message = $"{NAME_CASE}: the node evicted the TX deliverer {IP_PEER}.";
+          return false;
+        }
+
+        network.MarkTXDelivered(IP_NEW);
+
+        socketLast = communication.ConnectInbound(IP_LAST);
+
+        if (!socketLast.IsDisconnected($"{NAME_CASE}, all inbound peers TX deliverers", ref message))
+          return false;
+
+        string messageHold = "";
+
+        if (!socketProtected.IsDisconnected(NAME_CASE, ref messageHold, SECONDS_HOLD)
+          && !socketNew.IsDisconnected(NAME_CASE, ref messageHold, SECONDS_HOLD)
+          && network.IsPeerListed(IP_PEER)
+          && network.IsPeerListed(IP_NEW))
           return true;
 
-        message = $"{NAME_CASE}: the node evicted the TX deliverer {IP_PEER}.";
+        message = $"{NAME_CASE}: the node evicted a TX deliverer to admit {IP_LAST}.";
         return false;
       }
       finally
@@ -1430,9 +1514,11 @@ internal partial class Testbench
         socketProtected.Dispose();
         socketUnprotected.Dispose();
         socketNew?.Dispose();
+        socketLast?.Dispose();
       }
     }
 
+    // Counter-tested 2026-11-14 03:01
     static bool TestAddressPort(ref string message)
     {
       Console.WriteLine("  9. Address Port: Store only learned addresses with the network's port.");
@@ -1467,6 +1553,7 @@ internal partial class Testbench
       }
     }
 
+    // Counter-tested 2026-11-14 03:01
     static bool TestAddressDOS(ref string message)
     {
       Console.WriteLine("  10. Address DOS: Ignore addr messages beyond the address DOSMonitor.");
@@ -1520,6 +1607,7 @@ internal partial class Testbench
       }
     }
 
+    // Counter-tested 2026-11-14 03:01
     static bool TestBlockDownload(Wallet wallet, ref string message)
     {
       Console.WriteLine("  11. Block Download: Download missing blocks, the newest only after its announcement.");
@@ -1559,6 +1647,7 @@ internal partial class Testbench
       }
     }
 
+    // Counter-tested 2026-11-14 03:01
     static bool TestBlockRefusal(Wallet wallet, ref string message)
     {
       Console.WriteLine("  12. Block Refusal: Retry a refused block only after the refusal delay.");
@@ -1610,6 +1699,7 @@ internal partial class Testbench
       }
     }
 
+    // Counter-tested 2026-11-14 03:01
     static bool TestUnrequestedBlock(ref string message)
     {
       Console.WriteLine("  13. Unrequested Block: Disconnect a peer that sends a block unasked.");
@@ -1617,23 +1707,21 @@ internal partial class Testbench
       return IsDisconnectedOnUnasked("Unrequested block", COMMAND_BLOCK, ref message);
     }
 
-    static bool TestUnrequestedSegment(ref string message)
+    // Counter-tested 2026-11-14 03:35
+    static bool TestUnrequestedSegment(List<Block> blocksWindow, ref string message)
     {
       Console.WriteLine("  19. Unrequested Segment: Disconnect a peer that sends a segment unasked.");
 
-      return IsDisconnectedOnUnasked("Unrequested segment", COMMAND_SEGMENT, ref message);
-    }
+      const string NAME_CASE = "Unrequested segment";
+      const int COUNT_SEGMENTS_MISSING = 1;
+      const int COUNT_SEGMENTS_SENT = 2;
 
-    static bool TestSegmentRequest(List<Block> blocksWindow, ref string message)
-    {
-      Console.WriteLine("  20. Segment Request: Request segments without accounts, accept a matching one.");
-
-      const string NAME_CASE = "Segment request";
-      const int COUNT_SEGMENTS_RECORDED = 2;
+      if (!IsDisconnectedOnUnasked(NAME_CASE, COMMAND_SEGMENT, ref message))
+        return false;
 
       List<(byte[] hash, byte[] segment)> segments = null;
 
-      StartNodeWithInboundPeer(out SocketFake socketPeer, out _, b => segments = b.AnchorAndDeliverWithoutAccounts(blocksWindow, COUNT_SEGMENTS_RECORDED));
+      StartNodeWithInboundPeer(out SocketFake socketPeer, out _, b => segments = b.AnchorAndDeliverWithoutAccounts(blocksWindow, COUNT_SEGMENTS_MISSING));
 
       try
       {
@@ -1641,9 +1729,10 @@ internal partial class Testbench
           || !IsSegmentRequested(NAME_CASE, socketPeer, segments[0].hash, ref message))
           return false;
 
-        socketPeer.SendMessage(COMMAND_SEGMENT, segments[0].segment.Length, segments[0].segment).Wait();
+        for (int i = 0; i < COUNT_SEGMENTS_SENT; i++)
+          socketPeer.SendMessage(COMMAND_SEGMENT, segments[0].segment.Length, segments[0].segment).Wait();
 
-        return IsSegmentRequested(NAME_CASE, socketPeer, segments[1].hash, ref message);
+        return socketPeer.IsDisconnected($"{NAME_CASE}, segment sent again after its request was answered", ref message);
       }
       finally
       {
@@ -1651,14 +1740,49 @@ internal partial class Testbench
       }
     }
 
+    // Counter-tested 2026-11-14 03:35
+    static bool TestSegmentRequest(List<Block> blocksWindow, ref string message)
+    {
+      Console.WriteLine("  20. Segment Request: Request segments without accounts, accept a matching one.");
+
+      const string NAME_CASE = "Segment request";
+      const int COUNT_SEGMENTS_MISSING = 2;
+
+      List<(byte[] hash, byte[] segment)> segments = null;
+
+      NetworkTestbench network = StartNodeWithInboundPeer(out SocketFake socketPeer, out _, b => segments = b.AnchorAndDeliverWithoutAccounts(blocksWindow, COUNT_SEGMENTS_MISSING));
+
+      try
+      {
+        if (!TryHandshakeInbound(NAME_CASE, socketPeer, ref message))
+          return false;
+
+        foreach ((byte[] hash, byte[] segment) in segments)
+        {
+          if (!IsSegmentRequested(NAME_CASE, socketPeer, hash, ref message))
+            return false;
+
+          socketPeer.SendMessage(COMMAND_SEGMENT, segment.Length, segment).Wait();
+        }
+
+        return ((BlockchainNetwork)network.Blockchain).IsAccountsSynchronized(NAME_CASE, SECONDS_TIMEOUT_REQUEST, ref message);
+      }
+      finally
+      {
+        socketPeer.Dispose();
+      }
+    }
+
+    // Counter-tested 2026-11-14 03:35
     static bool TestSegmentRefusal(List<Block> blocksWindow, ref string message)
     {
       Console.WriteLine("  21. Segment Refusal: Never ask a peer again for a segment it refused.");
 
       const string NAME_CASE = "Segment refusal";
       const int COUNT_REFUSALS = 4;
+      const int SECONDS_HOLD = 10;
 
-      StartNodeWithInboundPeer(out SocketFake socketPeer, out _, b => b.AnchorAndDeliverWithoutAccounts(blocksWindow, 0));
+      StartNodeWithInboundPeer(out SocketFake socketPeer, out _, b => b.AnchorAndDeliverWithoutAccounts(blocksWindow, COUNT_REFUSALS));
 
       try
       {
@@ -1681,7 +1805,13 @@ internal partial class Testbench
           SendInventory(socketPeer, MSG_SEGMENT_SWEEP, COMMAND_NOTFOUND, hash);
         }
 
-        return true;
+        string messageHold = "";
+
+        if (!TryReceiveRequest(NAME_CASE, socketPeer, MSG_SEGMENT_SWEEP, out byte[] hashRequested, ref messageHold, SECONDS_HOLD))
+          return true;
+
+        message = $"{NAME_CASE}: the node requests the refused segment of block {hashRequested.ToHexString()} again after the hedged request delay.";
+        return false;
       }
       finally
       {
@@ -1720,11 +1850,14 @@ internal partial class Testbench
       }
     }
 
+    // Counter-tested 2026-11-14 03:35
     static bool TestRequestTimeout(Wallet wallet, ref string message)
     {
       Console.WriteLine("  14. Request Timeout: Disconnect a peer that does not deliver a requested block.");
 
       const string NAME_CASE = "Request timeout";
+      const int SECONDS_MARGIN = 10;
+      const int SECONDS_HOLD = 3;
 
       if (!BlockchainNetwork.TryCreateBlocks(wallet, [], out List<Block> blocks, out _, ref message))
         return false;
@@ -1738,7 +1871,17 @@ internal partial class Testbench
           || !TryReceiveRequest(NAME_CASE, socketPeer, MSG_BLOCK, out _, ref message))
           return false;
 
-        network.AgeBlockRequest(IP_PEER, Network.TIMEOUT_REQUEST_SECONDS);
+        network.AgeBlockRequest(IP_PEER, Network.TIMEOUT_REQUEST_SECONDS - SECONDS_MARGIN);
+
+        string messageHold = "";
+
+        if (socketPeer.IsDisconnected(NAME_CASE, ref messageHold, SECONDS_HOLD) || !network.IsPeerListed(IP_PEER))
+        {
+          message = $"{NAME_CASE}: the node dropped the peer before its block request reached TIMEOUT_REQUEST_SECONDS.";
+          return false;
+        }
+
+        network.AgeBlockRequest(IP_PEER, SECONDS_MARGIN);
 
         return socketPeer.IsDisconnected(NAME_CASE, ref message);
       }
@@ -1748,6 +1891,7 @@ internal partial class Testbench
       }
     }
 
+    // Counter-tested 2026-11-14 04:01
     static bool TestBlockServing(Wallet wallet, ref string message)
     {
       Console.WriteLine("  15. Block Serving: Serve a stored block, answer an unknown one with notfound.");
@@ -1762,7 +1906,7 @@ internal partial class Testbench
       try
       {
         return TryHandshakeInbound(NAME_CASE, socketPeer, ref message)
-          && TryReceiveBlockServed(NAME_CASE, socketPeer, blocks[2].Header.Hash, ref message)
+          && TryReceiveBlockServed(NAME_CASE, socketPeer, blocks[2], ref message)
           && IsAnsweredNotFound(NAME_CASE, socketPeer, MSG_BLOCK, ref message);
       }
       finally
@@ -1771,23 +1915,24 @@ internal partial class Testbench
       }
     }
 
+    // Counter-tested 2026-11-14 04:49
     static bool TestSegmentServing(Wallet wallet, ref string message)
     {
       Console.WriteLine("  18. Segment Serving: Serve the segment of a block, answer an unknown one with notfound.");
 
       const string NAME_CASE = "Segment serving";
+      const int HEIGHT_SPEND_CONFIRMED = 7;
 
-      if (!BlockchainNetwork.TryCreateBlocks(wallet, [], out List<Block> blocks, out _, ref message))
+      if (!BlockchainNetwork.TryCreateBlocks(wallet, [t => { }], out List<Block> blocks, out _, ref message, isSpendFirstConfirmed: true, indexSegmentReceiver: HEIGHT_SPEND_CONFIRMED))
         return false;
-
-      HeaderBToken header = (HeaderBToken)blocks[2].Header;
 
       StartNodeWithInboundPeer(out SocketFake socketPeer, out _, b => b.AnchorAndDeliver(blocks));
 
       try
       {
         return TryHandshakeInbound(NAME_CASE, socketPeer, ref message)
-          && TryReceiveSegmentServed(NAME_CASE, socketPeer, header, ref message)
+          && TryReceiveSegmentServed(NAME_CASE, socketPeer, (HeaderBToken)blocks[^1].Header, ref message)
+          && TryReceiveSegmentServed($"{NAME_CASE} below the tip", socketPeer, (HeaderBToken)blocks[^2].Header, ref message)
           && IsAnsweredNotFound(NAME_CASE, socketPeer, MSG_SEGMENT_SWEEP, ref message);
       }
       finally
@@ -1796,6 +1941,7 @@ internal partial class Testbench
       }
     }
 
+    // Counter-tested 2026-11-14 03:01
     static bool TestSegmentServingDOS(Wallet wallet, ref string message)
     {
       Console.WriteLine("  48. Segment Serving DOS: Disconnect a peer that re-requests a served segment too often.");
@@ -1858,13 +2004,14 @@ internal partial class Testbench
 
       byte[] payloadExpected = [.. VarInt.GetBytes(1), .. BitConverter.GetBytes((uint)type), .. hashUnknown];
 
-      if (payload.IsAllBytesEqual(payloadExpected))
+      if (payload.AsSpan().SequenceEqual(payloadExpected))
         return true;
 
       message = $"{nameCase}: the node answers an unknown {type} with notfound {payload.ToHexString()}, expected {payloadExpected.ToHexString()}.";
       return false;
     }
 
+    // Counter-tested 2026-11-14 03:35
     static bool TestServingDOS(Wallet wallet, ref string message)
     {
       Console.WriteLine("  16. Serving DOS: Disconnect a peer that re-requests an old block too often.");
@@ -1875,7 +2022,7 @@ internal partial class Testbench
       if (!BlockchainNetwork.TryCreateBlocks(wallet, [], out List<Block> blocks, out _, ref message))
         return false;
 
-      byte[] hashOld = blocks[0].Header.Hash;
+      Block blockOld = blocks[0];
 
       StartNodeWithInboundPeer(out SocketFake socketPeer, out _, b => b.AnchorAndDeliver(blocks));
 
@@ -1885,14 +2032,14 @@ internal partial class Testbench
           return false;
 
         foreach (Block block in blocks)
-          if (!TryReceiveBlockServed($"{NAME_CASE}, chain served forward", socketPeer, block.Header.Hash, ref message))
+          if (!TryReceiveBlockServed($"{NAME_CASE}, chain served forward", socketPeer, block, ref message))
             return false;
 
         for (int i = 0; i < MAX_LEVEL_DOS_GETDATA; i++)
-          if (!TryReceiveBlockServed($"{NAME_CASE}, old block requested again", socketPeer, hashOld, ref message))
+          if (!TryReceiveBlockServed($"{NAME_CASE}, old block requested again", socketPeer, blockOld, ref message))
             return false;
 
-        SendInventory(socketPeer, MSG_BLOCK, COMMAND_GETDATA, hashOld);
+        SendInventory(socketPeer, MSG_BLOCK, COMMAND_GETDATA, blockOld.Header.Hash);
 
         return socketPeer.IsDisconnected(NAME_CASE, ref message);
       }
@@ -1902,6 +2049,7 @@ internal partial class Testbench
       }
     }
 
+    // Counter-tested 2026-11-14 03:01
     static bool TestTXServingDOS(ref string message)
     {
       Console.WriteLine("  46. TX Serving DOS: Disconnect a peer requesting unknown TXs beyond the byte budget.");
@@ -1941,6 +2089,7 @@ internal partial class Testbench
       }
     }
 
+    // Counter-tested 2026-11-14 03:01
     static bool TestRequestThrottle(Wallet wallet, ref string message)
     {
       Console.WriteLine("  47. Request Throttle: Stop requesting blocks once notfound answers exhaust the budget.");
@@ -1982,6 +2131,7 @@ internal partial class Testbench
       }
     }
 
+    // Counter-tested 2026-11-14 03:01
     static bool TestTXFlood(Wallet wallet, ref string message)
     {
       Console.WriteLine("  49. TX Flood: Disconnect a peer sending TX bytes beyond the budget.");
@@ -2004,6 +2154,7 @@ internal partial class Testbench
       return IsDisconnectedOnFlood(NAME_CASE, s => s.SendMessage(COMMAND_TX, tXRaw.Length, tXRaw).Wait(), MAX_LEVEL_DOS_TX / tXRaw.Length, COUNT_TXS_BEYOND_BUDGET_MAX, ref message);
     }
 
+    // Counter-tested 2026-11-14 03:01
     static bool TestInvFlood(ref string message)
     {
       Console.WriteLine("  50. Inv Flood: Disconnect a peer sending inv messages beyond the budget.");
@@ -2014,6 +2165,7 @@ internal partial class Testbench
       return IsDisconnectedOnFlood("Inv flood", s => SendInventory(s, MSG_TX, COMMAND_INV), MAX_LEVEL_DOS_INV, COUNT_INVS_BEYOND_BUDGET_MAX, ref message);
     }
 
+    // Counter-tested 2026-11-14 03:01
     static bool TestHeadersFlood(ref string message)
     {
       Console.WriteLine("  51. Headers Flood: Disconnect a peer sending headers messages beyond the budget.");
@@ -2054,11 +2206,13 @@ internal partial class Testbench
       }
     }
 
+    // Counter-tested 2026-11-14 04:01
     static bool TestBlockAnnouncement(Wallet wallet, ref string message)
     {
       Console.WriteLine("  17. Block Announcement: Announce the newest inserted block to every peer.");
 
       const string NAME_CASE = "Block announcement";
+      const int SECONDS_HOLD = 3;
 
       if (!BlockchainNetwork.TryCreateBlocks(wallet, [], out List<Block> blocks, out _, ref message))
         return false;
@@ -2074,6 +2228,14 @@ internal partial class Testbench
           || !TryServeBlocksRequested(NAME_CASE, socketPeer, blocks.Take(blocks.Count - 1).ToList(), ref message)
           || !IsAtHeight(NAME_CASE, network, blocks[^2].Header.Height, ref message))
           return false;
+
+        string messageHold = "";
+
+        if (socketPeer.TryReceive(NAME_CASE, COMMAND_HEADERS, out _, ref messageHold, SECONDS_HOLD))
+        {
+          message = $"{NAME_CASE}: the node announces a block inserted while catching up to the newest anchor.";
+          return false;
+        }
 
         socketOther = communication.ConnectInbound(IP_PEER_OTHER);
 
@@ -2101,7 +2263,7 @@ internal partial class Testbench
 
       byte[] payloadExpected = [.. VarInt.GetBytes(1), .. header.Serialize(), 0x00];
 
-      if (payload.IsAllBytesEqual(payloadExpected))
+      if (payload.AsSpan().SequenceEqual(payloadExpected))
         return true;
 
       message = $"{nameCase}: the node announces {payload.ToHexString()}, expected the newest header {payloadExpected.ToHexString()}.";
@@ -2117,19 +2279,17 @@ internal partial class Testbench
       return network;
     }
 
-    static bool TryReceiveBlockServed(string nameCase, SocketFake socketPeer, byte[] hash, ref string message)
+    static bool TryReceiveBlockServed(string nameCase, SocketFake socketPeer, Block block, ref string message)
     {
-      SendInventory(socketPeer, MSG_BLOCK, COMMAND_GETDATA, hash);
+      SendInventory(socketPeer, MSG_BLOCK, COMMAND_GETDATA, block.Header.Hash);
 
       if (!socketPeer.TryReceive(nameCase, COMMAND_BLOCK, out byte[] payload, ref message))
         return false;
 
-      byte[] hashServed = Crypto.ComputeHash256(payload.AsSpan(0, HeaderBToken.COUNT_HEADER_BYTES));
-
-      if (hashServed.IsAllBytesEqual(hash))
+      if (payload.AsSpan().SequenceEqual(block.Buffer.AsSpan(0, block.LengthDataPayload)))
         return true;
 
-      message = $"{nameCase}: the node serves block {hashServed.ToHexString()}, expected {hash.ToHexString()}.";
+      message = $"{nameCase}: the node serves {payload.ToHexString()}, expected the block at height {block.Header.Height}.";
       return false;
     }
 
@@ -2415,7 +2575,7 @@ internal partial class Testbench
         return isMined;
       }
 
-      internal static bool TryCreateBlocks(Wallet wallet, List<Action<TXBToken>> altersSpend, out List<Block> blocks, out List<TXBToken> spends, ref string message, int heightTip = 0, bool isSpendFirstConfirmed = false)
+      internal static bool TryCreateBlocks(Wallet wallet, List<Action<TXBToken>> altersSpend, out List<Block> blocks, out List<TXBToken> spends, ref string message, int heightTip = 0, bool isSpendFirstConfirmed = false, int indexSegmentReceiver = 1001)
       {
         blocks = null;
         spends = null;
@@ -2426,7 +2586,7 @@ internal partial class Testbench
           || !TryInsertCoinbasesUpTo(ledger, wallet, iDMiner, heightTip, ref message))
           return false;
 
-        spends = altersSpend.Select(a => ledger.CreateTXSpend(wallet, CreateIDAccount(1001, 2), VALUE_SPEND, a)).ToList();
+        spends = altersSpend.Select(a => ledger.CreateTXSpend(wallet, CreateIDAccount(indexSegmentReceiver, 2), VALUE_SPEND, a)).ToList();
 
         if (isSpendFirstConfirmed
           && !ledger.TryInsertBlock("block confirming the first spend", [ledger.CreateCoinbase(wallet, iDMiner, spends[0].Fee), spends[0]], isValidExpected: true, null, ref message))
@@ -2445,7 +2605,7 @@ internal partial class Testbench
         }
       }
 
-      internal List<(byte[] hash, byte[] segment)> AnchorAndDeliverWithoutAccounts(List<Block> blocks, int countSegmentsRecorded)
+      internal List<(byte[] hash, byte[] segment)> AnchorAndDeliverWithoutAccounts(List<Block> blocks, int countSegmentsMissing)
       {
         AnchorAndDeliver(blocks);
 
@@ -2453,13 +2613,16 @@ internal partial class Testbench
 
         for (
           Header header = ChainRoot.HeaderTipBlockchain.GetHeaderAncestor(GetHeight() - BITCOIN_REORG_MARGIN);
-          segments.Count < countSegmentsRecorded;
+          segments.Count < COUNT_SEGMENTS;
           header = header.HeaderPrevious)
           segments.Add((header.Hash, GetSegmentSweptByBlock(header.Hash)));
 
         Synchronizer.Drop();
 
-        return segments;
+        foreach ((byte[] hash, byte[] segment) in segments.Skip(countSegmentsMissing))
+          AddSegmentDownload(hash, segment, segment.Length);
+
+        return segments.Take(countSegmentsMissing).ToList();
       }
 
       internal static NetworkTestbench StartNode(

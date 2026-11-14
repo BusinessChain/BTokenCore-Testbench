@@ -36,7 +36,8 @@ internal partial class Testbench
         && BlockchainMining.TestOwnMiss(Testbench.Wallet, ref message)
         && BlockchainMining.TestTimerStop(Testbench.Wallet, ref message)
         && BlockchainMining.TestKeyKept(Testbench.Wallet, ref message)
-        && BlockchainMining.TestKeyChanged(Testbench.Wallet, ref message);
+        && BlockchainMining.TestKeyChanged(Testbench.Wallet, ref message)
+        && BlockchainMining.TestOccupiedOutput(Testbench.Wallet, ref message);
     }
 
     class BlockchainMining : BlockchainTestbench
@@ -45,6 +46,7 @@ internal partial class Testbench
       const int LENGTH_ANCHOR = 10 + 148 + 9 + TXOutputTokenAnchor.LENGTH_SCRIPT_ANCHOR_TOKEN + 34;
       const int COUNT_ANCHORS_PER_10_MINUTES_TIMER = 600;
       const int SECONDS_TIMEOUT_TIMER = 3;
+      const int SECONDS_TIMEOUT_RECEIVE = 10;
       const int COUNT_ACCOUNTS_MAX = 100;
       const int INDEX_SEGMENT_MIN_WALLET_TEMP = 16;
 
@@ -54,13 +56,15 @@ internal partial class Testbench
         : base(NAME_TOKEN, liteDatabase, blockchainParent)
       { }
 
+      // Counter-tested 2026-11-14 03:43
       internal static bool TestMineCoinbase(Wallet wallet, ref string message)
       {
         Console.WriteLine("  1. Mine Coinbase: Insert a coinbase-only mined block after its anchor.");
 
         const string NAME_CASE = "Mine coinbase";
 
-        if (!TryStartNode(wallet, NAME_CASE, VALUE_FUNDING, out BlockchainMining blockchain, out Ledger ledger, ref message))
+        if (!TryStartNode(wallet, NAME_CASE, VALUE_FUNDING, out BlockchainMining blockchain, out Ledger ledger, ref message)
+          || !blockchain.TryCreateAccountsSwept(NAME_CASE, ledger, wallet, 1, ref message))
           return false;
 
         long valueExpected = GetBlockReward(ledger.GetHeightTip() + 1) + ledger.GetRentNext();
@@ -69,6 +73,7 @@ internal partial class Testbench
           && blockchain.IsBlockMinedCorrect(NAME_CASE, block, [], valueExpected, ref message);
       }
 
+      // Counter-tested 2026-11-14 03:57
       internal static bool TestMinePoolTXs(Wallet wallet, ref string message)
       {
         Console.WriteLine("  2. Mine PoolTXs: Include ranked pool TXs, pay their fees, empty the pool.");
@@ -79,8 +84,14 @@ internal partial class Testbench
         if (!TryStartNode(wallet, NAME_CASE, VALUE_FUNDING, out BlockchainMining blockchain, out Ledger ledger, ref message))
           return false;
 
-        if (!blockchain.TryAddSpends(NAME_CASE, ledger, wallet, COUNT_TXS, 0, out List<TXBToken> tXsRanked, ref message))
+        List<Wallet> walletsSource = [.. Enumerable.Range(0, COUNT_TXS).Select(_ => CreateWallet())];
+
+        if (!ledger.TryInsertBlock($"{NAME_CASE}, coinbase funding {COUNT_TXS} source accounts", [ledger.CreateCoinbase(wallet, CreateIDAccount(1000, 1), 0, [.. walletsSource.Select(w => new TXOutputP2PKH(VALUE_FUNDING, w.Hash160PKeyPublic))])], isValidExpected: true, null, ref message)
+          || !blockchain.TryDeliverBlocksLedgerNew(NAME_CASE, ledger, ref message)
+          || !blockchain.TryAddSpends(NAME_CASE, ledger, walletsSource, [.. Enumerable.Repeat<(int, int?)>((0, null), COUNT_TXS)], out List<TXBToken> tXsCreated, ref message))
           return false;
+
+        List<TXBToken> tXsRanked = [.. tXsCreated.OrderByDescending(t => (double)t.Fee / t.TXRaw.Length)];
 
         long valueExpected = GetBlockReward(ledger.GetHeightTip() + 1) + ledger.GetRentNext() + tXsRanked.Sum(t => t.Fee);
 
@@ -95,49 +106,86 @@ internal partial class Testbench
         return false;
       }
 
+      // Counter-tested 2026-11-14 03:57
       internal static bool TestFillBlock(Wallet wallet, ref string message)
       {
-        Console.WriteLine("  3. Fill Block: Mine a pool larger than SizeBlockMax into one block.");
+        Console.WriteLine("  3. Fill Block: Fill one block to its byte limit from a larger pool.");
 
-        const string NAME_CASE = "Fill block";
-        const int COUNT_TXS = 25;
-        const int COUNT_OUTPUTS_ADDED = 1500;
+        return IsBlockFilled(wallet, "Fill block, fitting TXs flush with the byte limit", isFlush: true, ref message)
+          && IsBlockFilled(wallet, "Fill block, next TX one byte over the byte limit", isFlush: false, ref message);
+      }
 
-        if (!TryStartNode(wallet, NAME_CASE, VALUE_FUNDING, out BlockchainMining blockchain, out Ledger ledger, ref message)
-          || !blockchain.TryAddSpends(NAME_CASE, ledger, wallet, COUNT_TXS, COUNT_OUTPUTS_ADDED, out List<TXBToken> tXsRanked, ref message))
+      static bool IsBlockFilled(Wallet wallet, string nameCase, bool isFlush, ref string message)
+      {
+        const int COUNT_OUTPUTS_NEXT = 1501;
+        const int LENGTH_OUTPUT_P2PKH = 34;
+        const int LENGTH_SIGNATURE_MIN = 70;
+        const int COUNT_TXS_MAX_ACCOUNT = 25;
+        const int COUNT_TXS_FITTING_MIN = 15;
+
+        if (!TryStartNode(wallet, nameCase, VALUE_FUNDING, out BlockchainMining blockchain, out Ledger ledger, ref message))
           return false;
 
-        if (tXsRanked.Sum(t => t.TXRaw.Length) <= blockchain.SizeBlockMax)
+        int countBytesTXsMax = blockchain.SizeBlockMax - HeaderBToken.COUNT_HEADER_BYTES - VarInt.GetBytes(int.MaxValue).Length - TXBToken.LENGTH_TX_COINBASE;
+        int lengthTXBase = TXBToken.LENGTH_TX_COINBASE - 1 - LENGTH_OUTPUT_P2PKH + VarInt.GetBytes(COUNT_OUTPUTS_NEXT).Length + 1 + LENGTH_SIGNATURE_MIN;
+        int lengthTXNext = lengthTXBase + LENGTH_OUTPUT_P2PKH * COUNT_OUTPUTS_NEXT;
+        int countBytesFitting = isFlush ? countBytesTXsMax : countBytesTXsMax - lengthTXNext + 1;
+
+        int countTXsFittingPlanned = Enumerable.Range(COUNT_TXS_FITTING_MIN, COUNT_TXS_MAX_ACCOUNT - 1 - COUNT_TXS_FITTING_MIN)
+          .LastOrDefault(n => (countBytesFitting - n * lengthTXBase) % LENGTH_OUTPUT_P2PKH <= n);
+
+        if (countTXsFittingPlanned == 0)
         {
-          message = $"{NAME_CASE}: the pool holds only {tXsRanked.Sum(t => t.TXRaw.Length)} bytes, not more than SizeBlockMax {blockchain.SizeBlockMax}.";
+          message = $"{nameCase}: no count of fitting TXs sums to exactly {countBytesFitting} bytes.";
+          return false;
+        }
+
+        int countSignaturesLonger = (countBytesFitting - countTXsFittingPlanned * lengthTXBase) % LENGTH_OUTPUT_P2PKH;
+        int countOutputs = (countBytesFitting - countTXsFittingPlanned * lengthTXBase) / LENGTH_OUTPUT_P2PKH;
+
+        List<(int, int?)> specsTX = [.. Enumerable.Range(0, countTXsFittingPlanned)
+          .Select(i => countOutputs / countTXsFittingPlanned + (i < countOutputs % countTXsFittingPlanned ? 1 : 0))
+          .Select((c, i) => (c - 1, (int?)(lengthTXBase + LENGTH_OUTPUT_P2PKH * c + (i < countSignaturesLonger ? 1 : 0))))];
+
+        specsTX.Add((COUNT_OUTPUTS_NEXT - 1, lengthTXNext));
+        specsTX.Add((COUNT_OUTPUTS_NEXT - 1, lengthTXNext));
+
+        if (!blockchain.TryAddSpends(nameCase, ledger, [wallet], specsTX, out List<TXBToken> tXsCreated, ref message))
+          return false;
+
+        if (tXsCreated.Sum(t => t.TXRaw.Length) <= blockchain.SizeBlockMax)
+        {
+          message = $"{nameCase}: the pool holds only {tXsCreated.Sum(t => t.TXRaw.Length)} bytes, not more than SizeBlockMax {blockchain.SizeBlockMax}.";
           return false;
         }
 
         long rent = ledger.GetRentNext();
         int heightMined = ledger.GetHeightTip() + 1;
 
-        if (!blockchain.TryMineBlock(NAME_CASE, out Block block, ref message))
+        if (!blockchain.TryMineBlock(nameCase, out Block block, ref message))
           return false;
 
         if (block.Buffer.Length > blockchain.SizeBlockMax)
         {
-          message = $"{NAME_CASE}: the mined block at height {heightMined} takes {block.Buffer.Length} bytes, more than SizeBlockMax {blockchain.SizeBlockMax}.";
+          message = $"{nameCase}: the mined block at height {heightMined} takes {block.Buffer.Length} bytes, more than SizeBlockMax {blockchain.SizeBlockMax}.";
           return false;
         }
 
         int countTXsMined = block.TXs.Count - 1;
+        int countTXsFitting = Enumerable.Range(1, tXsCreated.Count).Count(c => tXsCreated.Take(c).Sum(t => t.TXRaw.Length) <= countBytesTXsMax);
 
-        if (countTXsMined < 1 || countTXsMined >= COUNT_TXS)
+        if (countTXsMined != countTXsFitting)
         {
-          message = $"{NAME_CASE}: the mined block holds {countTXsMined} pool TXs, expected a strict prefix of the {COUNT_TXS} ranked pool TXs.";
+          message = $"{nameCase}: the mined block holds {countTXsMined} pool TXs, expected the {countTXsFitting} pool TXs in nonce order fitting beside header and coinbase.";
           return false;
         }
 
-        List<TXBToken> tXsExpected = tXsRanked.Take(countTXsMined).ToList();
+        List<TXBToken> tXsExpected = tXsCreated.Take(countTXsMined).ToList();
 
-        return blockchain.IsBlockMinedCorrect(NAME_CASE, block, tXsExpected, GetBlockReward(heightMined) + rent + tXsExpected.Sum(t => t.Fee), ref message);
+        return blockchain.IsBlockMinedCorrect(nameCase, block, tXsExpected, GetBlockReward(heightMined) + rent + tXsExpected.Sum(t => t.Fee), ref message);
       }
 
+      // Counter-tested 2026-11-14 03:01
       internal static bool TestAnchorFunding(Wallet wallet, ref string message)
       {
         Console.WriteLine("  4. Anchor Funding: Spend the funded output, confirm, fund the next anchor from change.");
@@ -175,6 +223,7 @@ internal partial class Testbench
           && blockchain.IsAnchorSpending($"{NAME_CASE}, next anchor", tXAnchorNext, tXAnchor.Hash, 1, FEE_ANCHOR, ref message);
       }
 
+      // Counter-tested 2026-11-14 03:43
       internal static bool TestMissedReplacement(Wallet wallet, ref string message)
       {
         Console.WriteLine("  5. Missed Replacement: Replace a missed anchor with raised fee, unless unaffordable.");
@@ -186,8 +235,19 @@ internal partial class Testbench
 
         blockchain.SetFeeAnchor();
 
+        string nameCasePending = $"{NAME_CASE}, anchor at the Bitcoin tip kept";
+
         if (!blockchain.TryMineAnchor(NAME_CASE, blockchain.MinerBlockchain.MineBlock, out BlockchainBitcoin.TXBitcoin tXMissed, ref message)
-          || !blockchain.TryMissAnchor(NAME_CASE, [], 1, ref message))
+          || !blockchain.TryMineAnchor(nameCasePending, blockchain.MinerBlockchain.ReplaceAnchorsMissed, out BlockchainBitcoin.TXBitcoin tXPending, ref message))
+          return false;
+
+        if (!tXPending.Hash.IsAllBytesEqual(tXMissed.Hash))
+        {
+          message = $"{nameCasePending}: ReplaceAnchorsMissed replaced the anchor built on the Bitcoin tip.";
+          return false;
+        }
+
+        if (!blockchain.TryMissAnchor(NAME_CASE, [], 1, ref message))
           return false;
 
         long feeReplacement = Math.Max(FEE_ANCHOR, tXMissed.Fee + LENGTH_ANCHOR);
@@ -231,6 +291,7 @@ internal partial class Testbench
         return false;
       }
 
+      // Counter-tested 2026-11-14 03:01
       internal static bool TestCandidateExpiry(Wallet wallet, ref string message)
       {
         Console.WriteLine("  6. Candidate Expiry: Prune missed and replaced candidates after the reorg margin.");
@@ -276,6 +337,7 @@ internal partial class Testbench
         }
       }
 
+      // Counter-tested 2026-11-14 03:43
       internal static bool TestInsertedRemoval(Wallet wallet, ref string message)
       {
         Console.WriteLine("  7. Inserted Removal: Remove the inserted candidate at once, its missed rival after the margin.");
@@ -311,8 +373,16 @@ internal partial class Testbench
           return false;
         }
 
-        while (blockchain.ParentFake.GetHeight() < tXMissed.LockTime + BITCOIN_REORG_MARGIN)
+        while (blockchain.ParentFake.GetHeight() < tXMissed.LockTime + BITCOIN_REORG_MARGIN - 1)
           blockchain.ParentFake.MineBlock([]);
+
+        if (blockchain.BlocksStoredAwaitingAnchor.FindById(hashMissed) == null)
+        {
+          message = $"{NAME_CASE}: the store dropped the missed candidate less than {BITCOIN_REORG_MARGIN} Bitcoin blocks after its LockTime.";
+          return false;
+        }
+
+        blockchain.ParentFake.MineBlock([]);
 
         if (blockchain.BlocksStoredAwaitingAnchor.Count() == 0)
           return true;
@@ -321,13 +391,15 @@ internal partial class Testbench
         return false;
       }
 
+      // Counter-tested 2026-11-14 03:43
       internal static bool TestBurntSlot(Wallet wallet, ref string message)
       {
         Console.WriteLine("  8. Burnt Slot: Replacement anchor wins after a withheld anchor winner.");
 
         const string NAME_CASE = "Burnt slot";
 
-        if (!TryStartNode(wallet, NAME_CASE, VALUE_FUNDING, out BlockchainMining blockchain, out Ledger ledger, ref message))
+        if (!TryStartNode(wallet, NAME_CASE, VALUE_FUNDING, out BlockchainMining blockchain, out Ledger ledger, ref message)
+          || !blockchain.TryCreateAccountsSwept(NAME_CASE, ledger, wallet, 2, ref message))
           return false;
 
         blockchain.SetFeeAnchor();
@@ -338,6 +410,7 @@ internal partial class Testbench
           && blockchain.TryMineBlock($"{NAME_CASE}, block mined on the replacement", out _, ref message);
       }
 
+      // Counter-tested 2026-11-14 03:01
       internal static bool TestLateTie(Wallet wallet, ref string message)
       {
         Console.WriteLine("  11. Late Tie: Keep the honest tip when the withheld block arrives.");
@@ -365,6 +438,7 @@ internal partial class Testbench
           && blockchain.TryMineBlock($"{NAME_CASE}, block mined on the replacement", out _, ref message);
       }
 
+      // Counter-tested 2026-11-14 03:01
       internal static bool TestLateBehind(Wallet wallet, ref string message)
       {
         Console.WriteLine("  12. Late Behind: Ignore an unrequested withheld block behind the honest fork.");
@@ -426,6 +500,7 @@ internal partial class Testbench
         return true;
       }
 
+      // Counter-tested 2026-11-14 03:01
       internal static bool TestLosingAnchor(Wallet wallet, ref string message)
       {
         Console.WriteLine("  9. Losing Anchor: Fund the next anchor from a mined losing anchor.");
@@ -459,6 +534,7 @@ internal partial class Testbench
           && blockchain.IsRequestingNoBlock(nameCaseNext, ref message);
       }
 
+      // Counter-tested 2026-11-14 03:43
       internal static bool TestWithheldRun(Wallet wallet, ref string message)
       {
         Console.WriteLine("  10. Withheld Run: Honest block outruns two withheld anchor winners.");
@@ -476,6 +552,7 @@ internal partial class Testbench
         return blockchain.TryOutrunWithheldRun(NAME_CASE, ledger, anchorWithheldFirst, anchorWithheldSecond, ref message);
       }
 
+      // Counter-tested 2026-11-14 03:57
       internal static bool TestLateRun(Wallet wallet, ref string message)
       {
         Console.WriteLine("  13. Late Run: Keep the honest tip when two withheld blocks tie.");
@@ -494,9 +571,19 @@ internal partial class Testbench
         if (!blockchain.TryOutrunWithheldRun(NAME_CASE, ledger, anchorWithheldFirst, anchorWithheldSecond, ref message))
           return false;
 
-        blocksWithheld.ForEach(blockchain.ReceiveBlock);
-
         string nameCaseLate = $"{NAME_CASE}, both withheld blocks arrived at the same height as the honest fork";
+
+        if (!Task.Run(() => blocksWithheld.ForEach(blockchain.ReceiveBlock)).Wait(TimeSpan.FromSeconds(SECONDS_TIMEOUT_RECEIVE)))
+        {
+          message = $"{nameCaseLate}: receiving the withheld blocks did not finish within {SECONDS_TIMEOUT_RECEIVE} seconds.";
+          return false;
+        }
+
+        if (blockchain.ChainRoot.FindInTree(chain => chain != blockchain.ChainRoot && chain.HeaderTipBlockchain?.Hash.IsAllBytesEqual(blocksWithheld[1].Header.Hash) == true ? chain : null) == null)
+        {
+          message = $"{nameCaseLate}: no fork holds the withheld blocks up to {blocksWithheld[1].Header.Hash.ToHexString()}.";
+          return false;
+        }
 
         return blockchain.IsSynchronized(ledger, nameCaseLate, ledger.GetHeightTip(), ref message)
           && blockchain.IsRequestingNoBlock(nameCaseLate, ref message);
@@ -509,19 +596,24 @@ internal partial class Testbench
         string nameCaseTaller = $"{nameCaseReplaced}, taller placeholder fork";
         string nameCaseNext = $"{nameCase}, next block as tall as the placeholder fork";
 
-        return TryMineAnchor(nameCase, MinerBlockchain.MineBlock, out _, ref message)
-          && TryMissAnchor($"{nameCase}, first withheld slot", [], 1, ref message, anchorWithheldFirst)
-          && TryMissAnchor($"{nameCase}, second withheld slot", [], 1, ref message, anchorWithheldSecond)
-          && IsAtHeight($"{nameCase}, two slots won by withheld blocks", heightTip, ref message)
-          && TryMineAnchor(nameCaseReplaced, MinerBlockchain.ReplaceAnchorsMissed, out BlockchainBitcoin.TXBitcoin tXReplacement, ref message)
-          && TryInsertAnchoredSynchronized(nameCaseReplaced, ledger, tXReplacement, ref message)
-          && IsRequestingBlock(nameCaseTaller, anchorWithheldFirst.HashBlockReferenced, ref message)
-          && IsRequestingBlock(nameCaseTaller, anchorWithheldSecond.HashBlockReferenced, ref message)
-          && TryMineAnchor(nameCaseNext, MinerBlockchain.MineBlock, out BlockchainBitcoin.TXBitcoin tXNext, ref message)
-          && TryInsertAnchoredSynchronized(nameCaseNext, ledger, tXNext, ref message)
-          && IsRequestingNoBlock(nameCaseNext, ref message);
+        if (!TryMineAnchor(nameCase, MinerBlockchain.MineBlock, out _, ref message)
+          || !TryMissAnchor($"{nameCase}, first withheld slot", [], 1, ref message, anchorWithheldFirst)
+          || !TryMissAnchor($"{nameCase}, second withheld slot", [], 1, ref message, anchorWithheldSecond)
+          || !IsAtHeight($"{nameCase}, two slots won by withheld blocks", heightTip, ref message)
+          || !TryMineAnchor(nameCaseReplaced, MinerBlockchain.ReplaceAnchorsMissed, out BlockchainBitcoin.TXBitcoin tXReplacement, ref message)
+          || !TryInsertAnchoredSynchronized(nameCaseReplaced, ledger, tXReplacement, ref message)
+          || !IsRequestingBlock(nameCaseTaller, anchorWithheldFirst.HashBlockReferenced, ref message)
+          || !IsRequestingBlock(nameCaseTaller, anchorWithheldSecond.HashBlockReferenced, ref message)
+          || !TryMineAnchor(nameCaseNext, MinerBlockchain.MineBlock, out BlockchainBitcoin.TXBitcoin tXNext, ref message)
+          || !TryInsertAnchoredSynchronized(nameCaseNext, ledger, tXNext, ref message))
+          return false;
+
+        ExpireRequestsHedged();
+
+        return IsRequestingNoBlock($"{nameCaseNext}, requests hedged after their delay", ref message);
       }
 
+      // Counter-tested 2026-11-14 03:01
       internal static bool TestTimerTick(Wallet wallet, ref string message)
       {
         Console.WriteLine("  14. Timer Tick: Tick mines anchors on the inserted tip.");
@@ -548,65 +640,58 @@ internal partial class Testbench
         }
       }
 
+      // Counter-tested 2026-11-14 03:43
       internal static bool TestBlankWindow(Wallet wallet, ref string message)
       {
         Console.WriteLine("  15. Blank Window: Foreign winner delays the replacement five seconds.");
 
-        const string NAME_CASE = "Blank window";
-        const int SECONDS_WINDOW_BLANK_CHECKED = 4;
-
-        if (!TryStartNode(wallet, NAME_CASE, VALUE_FUNDING, out BlockchainMining blockchain, out _, ref message))
-          return false;
-
-        blockchain.RunLocked(() => blockchain.StartMining(COUNT_ANCHORS_PER_10_MINUTES_TIMER, FEE_ANCHOR)).Wait();
-
-        try
-        {
-          if (!blockchain.TryAwaitAnchor($"{NAME_CASE}, first tick", out BlockchainBitcoin.TXBitcoin tXMissed, ref message))
-            return false;
-
-          TXOutputTokenAnchor anchorForeign = BlockchainParentFake.CreateAnchor(RandomNumberGenerator.GetBytes(32), tXMissed.TXOutputs.OfType<TXOutputTokenAnchor>().Single().HashBlockPreviousReferenced);
-
-          blockchain.RunLocked(() => blockchain.ParentFake.MineBlock([], anchorForeign)).Wait();
-
-          string messageEarly = "";
-
-          if (blockchain.TryAwaitAnchor($"{NAME_CASE}, inside the blank window", out _, ref messageEarly, SECONDS_WINDOW_BLANK_CHECKED))
-          {
-            message = $"{NAME_CASE}: an anchor appeared within {SECONDS_WINDOW_BLANK_CHECKED} seconds after the foreign winner, inside the blank window.";
-            return false;
-          }
-
-          return blockchain.IsMissedReplaced($"{NAME_CASE}, replacement after the blank window", tXMissed, SECONDS_TIMEOUT_TIMER, ref message);
-        }
-        finally
-        {
-          blockchain.RunLocked(blockchain.StopMining).Wait();
-        }
+        return IsMissReplaced(wallet, "Blank window, ticking timer", COUNT_ANCHORS_PER_10_MINUTES_TIMER, isWinnerForeign: true, ref message)
+          && IsMissReplaced(wallet, "Blank window, replacement timer alone", 1, isWinnerForeign: true, ref message);
       }
 
+      // Counter-tested 2026-11-14 03:43
       internal static bool TestOwnMiss(Wallet wallet, ref string message)
       {
         Console.WriteLine("  16. Own Miss: Replace an own missed anchor at once.");
 
-        const string NAME_CASE = "Own miss";
+        return IsMissReplaced(wallet, "Own miss", 1, isWinnerForeign: false, ref message);
+      }
+
+      static bool IsMissReplaced(Wallet wallet, string nameCase, int countAnchorsPer10Minutes, bool isWinnerForeign, ref string message)
+      {
+        const int SECONDS_WINDOW_BLANK_CHECKED = 4;
         const int SECONDS_REPLACEMENT_AT_ONCE = 1;
 
-        if (!TryStartNode(wallet, NAME_CASE, VALUE_FUNDING, out BlockchainMining blockchain, out _, ref message))
+        if (!TryStartNode(wallet, nameCase, VALUE_FUNDING, out BlockchainMining blockchain, out _, ref message))
           return false;
 
-        blockchain.RunLocked(() => blockchain.StartMining(1, FEE_ANCHOR)).Wait();
+        blockchain.RunLocked(() => blockchain.StartMining(countAnchorsPer10Minutes, FEE_ANCHOR)).Wait();
 
         try
         {
           BlockchainBitcoin.TXBitcoin tXMissed = null;
 
-          if (!blockchain.IsPassedLocked((ref string m) => blockchain.TryMineAnchor(NAME_CASE, blockchain.MinerBlockchain.MineBlock, out tXMissed, ref m), ref message))
+          if (!blockchain.IsPassedLocked((ref string m) => blockchain.TryMineAnchor(nameCase, blockchain.MinerBlockchain.MineBlock, out tXMissed, ref m), ref message))
             return false;
 
-          blockchain.RunLocked(() => blockchain.ParentFake.MineBlock([])).Wait();
+          TXOutputTokenAnchor[] anchorsWinner = isWinnerForeign
+            ? [BlockchainParentFake.CreateAnchor(RandomNumberGenerator.GetBytes(32), tXMissed.TXOutputs.OfType<TXOutputTokenAnchor>().Single().HashBlockPreviousReferenced)]
+            : [];
 
-          return blockchain.IsMissedReplaced($"{NAME_CASE}, replacement after a Bitcoin block without anchor winner", tXMissed, SECONDS_REPLACEMENT_AT_ONCE, ref message);
+          blockchain.RunLocked(() => blockchain.ParentFake.MineBlock([], anchorsWinner)).Wait();
+
+          if (!isWinnerForeign)
+            return blockchain.IsMissedReplaced($"{nameCase}, replacement after a Bitcoin block without anchor winner", tXMissed, SECONDS_REPLACEMENT_AT_ONCE, ref message);
+
+          string messageEarly = "";
+
+          if (blockchain.TryAwaitAnchor($"{nameCase}, inside the blank window", out _, ref messageEarly, SECONDS_WINDOW_BLANK_CHECKED))
+          {
+            message = $"{nameCase}: an anchor appeared within {SECONDS_WINDOW_BLANK_CHECKED} seconds after the foreign winner, inside the blank window.";
+            return false;
+          }
+
+          return blockchain.IsMissedReplaced($"{nameCase}, replacement after the blank window", tXMissed, SECONDS_TIMEOUT_TIMER, ref message);
         }
         finally
         {
@@ -614,6 +699,7 @@ internal partial class Testbench
         }
       }
 
+      // Counter-tested 2026-11-14 03:01
       internal static bool TestTimerStop(Wallet wallet, ref string message)
       {
         Console.WriteLine("  17. Timer Stop: A throwing mining round stops the timers.");
@@ -650,11 +736,13 @@ internal partial class Testbench
         }
       }
 
+      // Counter-tested 2026-11-14 03:43
       internal static bool TestKeyKept(Wallet wallet, ref string message)
       {
         Console.WriteLine("  18. Key Kept: Coinbase keeps the receiving key while CanReceive accepts it.");
 
         return IsKeyKept(wallet, "Key kept, segment with room", isAccountKeyCreated: false, 0, ref message)
+          && IsKeyKept(wallet, "Key kept, last free slot in the segment", isAccountKeyCreated: false, COUNT_ACCOUNTS_MAX - 1, ref message)
           && IsKeyKept(wallet, "Key kept, existing account in a full segment", isAccountKeyCreated: true, COUNT_ACCOUNTS_MAX - 1, ref message);
       }
 
@@ -688,6 +776,38 @@ internal partial class Testbench
         }
       }
 
+      // Counter-tested 2026-11-14 10:41
+      internal static bool TestOccupiedOutput(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  20. Occupied Output: Fund each anchor at one Bitcoin height from another output.");
+
+        const string NAME_CASE = "Occupied output";
+
+        if (!TryStartNode(wallet, NAME_CASE, VALUE_FUNDING, out BlockchainMining blockchain, out _, ref message))
+          return false;
+
+        BlockchainBitcoin.TXBitcoin tXFundingSecond = blockchain.ParentFake.Fund(VALUE_FUNDING);
+        bool[] isCreatedExpected = [true, true, false];
+
+        for (int i = 0; i < isCreatedExpected.Length; i++)
+          if (blockchain.ParentFake.TryCreateTXAnchor(BlockchainParentFake.CreateAnchor(RandomNumberGenerator.GetBytes(32), RandomNumberGenerator.GetBytes(32)), FEE_ANCHOR, out _) != isCreatedExpected[i])
+          {
+            message = $"{NAME_CASE}: anchor {i + 1} at one Bitcoin height with two funded outputs is {(isCreatedExpected[i] ? "not created" : "created")}.";
+            return false;
+          }
+
+        List<byte[]> tXIDsSpent = [.. blockchain.ParentFake.GetHashesTXOwnedUnconfirmed().Select(h => ((BlockchainBitcoin.TXBitcoin)blockchain.ParentFake.GetTX(h)).Inputs.Single().TXIDOutput)];
+
+        if (tXIDsSpent.Count == 2
+          && tXIDsSpent.Any(h => h.IsAllBytesEqual(blockchain.TXFunding.Hash))
+          && tXIDsSpent.Any(h => h.IsAllBytesEqual(tXFundingSecond.Hash)))
+          return true;
+
+        message = $"{NAME_CASE}: the {tXIDsSpent.Count} anchors at one Bitcoin height do not spend the two funded outputs once each.";
+        return false;
+      }
+
+      // Counter-tested 2026-11-14 03:01
       internal static bool TestKeyChanged(Wallet wallet, ref string message)
       {
         Console.WriteLine("  19. Key Changed: Full segment moves the coinbase to an appended key.");
@@ -837,31 +957,45 @@ internal partial class Testbench
         return true;
       }
 
-      bool TryAddSpends(string nameCase, Ledger ledger, Wallet wallet, int countTXs, int countOutputsAdded, out List<TXBToken> tXsRanked, ref string message)
+      bool TryAddSpends(string nameCase, Ledger ledger, List<Wallet> walletsSource, List<(int countOutputsAdded, int? lengthTX)> specsTX, out List<TXBToken> tXsCreated, ref string message)
       {
-        tXsRanked = null;
+        const int COUNT_SIGNINGS_MAX = 64;
 
         byte[] iDReceiver = CreateIDAccount(1001, 2);
-        HashSet<byte[]> hashesTX = new(new EqualityComparerByteArray());
+        tXsCreated = [];
 
-        for (int i = 0; i < countTXs; i++)
+        for (int i = 0; i < specsTX.Count; i++)
         {
-          int offsetNonce = i;
+          int offsetNonce = i / walletsSource.Count;
+          long fee = FEE * (i + 1);
+          (int countOutputsAdded, int? lengthTX) = specsTX[i];
+          int countSignings = 0;
+          TXBToken tX;
 
-          TXBToken tX = ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t =>
+          do
           {
-            t.Nonce += offsetNonce;
-            t.Fee = FEE * (offsetNonce + 1);
-            t.TXOutputs.AddRange(Enumerable.Range(0, countOutputsAdded).Select(_ => new TXOutputP2PKH(1, iDReceiver)));
-          });
+            tX = ledger.CreateTXSpend(walletsSource[i % walletsSource.Count], iDReceiver, VALUE_SPEND, t =>
+            {
+              t.Nonce += offsetNonce;
+              t.Fee = fee;
+              t.TXOutputs.AddRange(Enumerable.Range(0, countOutputsAdded).Select(_ => new TXOutputP2PKH(1, iDReceiver)));
+            });
+
+            countSignings += 1;
+          }
+          while (lengthTX.HasValue && tX.TXRaw.Length != lengthTX && countSignings < COUNT_SIGNINGS_MAX);
+
+          if (lengthTX.HasValue && tX.TXRaw.Length != lengthTX)
+          {
+            message = $"{nameCase}: spend {i} takes {tX.TXRaw.Length} bytes after {COUNT_SIGNINGS_MAX} signings, expected {lengthTX}.";
+            return false;
+          }
 
           if (!IsAccepted($"{nameCase}, spend {i} added to the pool", () => AddTX(ParseTXRaw(tX.TXRaw)), ref message))
             return false;
 
-          hashesTX.Add(tX.Hash);
+          tXsCreated.Add(tX);
         }
-
-        tXsRanked = GetTXsRanked(hashesTX);
 
         return true;
       }
@@ -963,6 +1097,26 @@ internal partial class Testbench
         DeliverBlocks(blocksNew);
 
         return IsSynchronized(ledger, $"{nameCase}, Ledger blocks anchored and delivered", ledger.GetHeightTip(), ref message);
+      }
+
+      bool TryCreateAccountsSwept(string nameCase, Ledger ledger, Wallet wallet, int countBlocksSweeping, ref string message)
+      {
+        int height = ledger.GetHeightTip() + 1;
+        TXOutputP2PKH[] tXOutputsSwept = [.. Enumerable.Range(1, countBlocksSweeping).Select(i => new TXOutputP2PKH(VALUE_SPEND, CreateIDAccount((height + i) % COUNT_SEGMENTS, 0)))];
+
+        return ledger.TryInsertBlock($"{nameCase}, coinbase creating accounts swept by the next {countBlocksSweeping} blocks", [ledger.CreateCoinbase(wallet, CreateIDAccount(1000, 1), 0, tXOutputsSwept)], isValidExpected: true, null, ref message)
+          && TryDeliverBlocksLedgerNew(nameCase, ledger, ref message);
+      }
+
+      void ExpireRequestsHedged()
+      {
+        ChainRoot.FindInTree<Chain>(chain =>
+        {
+          foreach (byte[] hash in chain.HeadersAwaitingBlock.Keys.ToList())
+            chain.HeadersAwaitingBlock[hash] = (chain.HeadersAwaitingBlock[hash].header, DateTime.MinValue);
+
+          return null;
+        });
       }
 
       static void WriteWalletFileTemp(string pathWallet, Wallet walletLedger, bool isEndingWithLineBreak)

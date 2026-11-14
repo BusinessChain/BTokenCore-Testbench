@@ -17,7 +17,6 @@ internal partial class Testbench
     const string HASH_HEADER_ROOT = "000000000000000000001e39df127cbab82a824ac43cfcdbf62e59f6a08b9f0b";
     const uint UNIX_TIME_SECONDS_ROOT = 1791011796;
     const uint N_BITS_ROOT = 0x17021EF0;
-    const int COUNT_HEADERS_MEDIAN_TIME_PAST = 11;
     const uint TIMESPAN_ROOT_TO_HEADER_BEFORE_RETARGET_SECONDS = 971711 - 969696;
     const uint TIMESPAN_RETARGET_SECONDS = 14 * 24 * 60 * 60;
     const uint N_BITS_TARGET_QUADRUPLED = 0x17087BC0;
@@ -45,6 +44,7 @@ internal partial class Testbench
         && Test_WalletReorg(ref message);
     }
 
+    // Counter-tested 2026-11-14 03:01
     bool Test_ProofOfWork(ref string message)
     {
       Console.WriteLine("  1. Proof Of Work: Reject mainnet header with altered nonce.");
@@ -57,6 +57,7 @@ internal partial class Testbench
       return IsRejected("Proof of work", () => ParseHeader(headerRaw), ref message);
     }
 
+    // Counter-tested 2026-11-14 03:01
     bool Test_TimestampPremature(ref string message)
     {
       Console.WriteLine("  2. Timestamp Premature: Reject header timestamp over two hours ahead.");
@@ -70,47 +71,73 @@ internal partial class Testbench
         && IsRejected("Timestamp premature", () => ParseHeader(headerRawPremature), ref message);
     }
 
+    // Counter-tested 2026-11-14 04:59
     bool Test_MedianTimePast(ref string message)
     {
       Console.WriteLine("  3. Median Time Past: Reject header timestamp below median of last eleven.");
 
-      BlockchainBitcoin blockchain = CreateBlockchainBitcoin();
-      byte[] hashPrevious = HASH_HEADER_ROOT.ToBinary();
-
-      for (uint i = 1; i < COUNT_HEADERS_MEDIAN_TIME_PAST; i++)
-        hashPrevious = blockchain.InsertHeadersInTree([CreateHeader(hashPrevious, UNIX_TIME_SECONDS_ROOT + i, N_BITS_ROOT)]).Hash;
-
-      uint unixTimeSecondsMedian = UNIX_TIME_SECONDS_ROOT + COUNT_HEADERS_MEDIAN_TIME_PAST / 2;
-
-      return IsRejected("Timestamp below median time past", () => blockchain.InsertHeadersInTree([CreateHeader(hashPrevious, unixTimeSecondsMedian - 1, N_BITS_ROOT)]), ref message)
-        && IsAccepted("Timestamp equal to median time past", () => blockchain.InsertHeadersInTree([CreateHeader(hashPrevious, unixTimeSecondsMedian, N_BITS_ROOT)]), ref message);
+      return IsMedianTimePastEnforced("Headers with a timestamp out of order, the twelfth last above the median", [1, 2, 100, 4, 5, 6, 7, 8, 9, 10, 11, 7, 13, 14], 8, ref message)
+        && IsMedianTimePastEnforced("Headers with the last above and the twelfth last below the median", [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 100], 9, ref message);
     }
 
+    static bool IsMedianTimePastEnforced(string nameCase, uint[] secondsAfterRoot, uint secondsAfterRootMedian, ref string message)
+    {
+      BlockchainBitcoin blockchain = CreateBlockchainBitcoin();
+      byte[] hashPrevious = HASH_HEADER_ROOT.ToBinary();
+      uint unixTimeSecondsMedian = UNIX_TIME_SECONDS_ROOT + secondsAfterRootMedian;
+
+      return IsAccepted(nameCase, () =>
+        {
+          foreach (uint seconds in secondsAfterRoot)
+            hashPrevious = blockchain.InsertHeadersInTree([CreateHeader(hashPrevious, UNIX_TIME_SECONDS_ROOT + seconds, N_BITS_ROOT)]).Hash;
+        }, ref message)
+        && IsRejected($"{nameCase}, timestamp below median time past", () => blockchain.InsertHeadersInTree([CreateHeader(hashPrevious, unixTimeSecondsMedian - 1, N_BITS_ROOT)]), ref message)
+        && IsAccepted($"{nameCase}, timestamp equal to median time past", () => blockchain.InsertHeadersInTree([CreateHeader(hashPrevious, unixTimeSecondsMedian, N_BITS_ROOT)]), ref message);
+    }
+
+    // Counter-tested 2026-11-14 04:59
     bool Test_Retargeting(ref string message)
     {
       Console.WriteLine("  4. Retargeting: Keep NBits between retargets, clamp the retarget timespan.");
 
       BlockchainBitcoin blockchain = CreateBlockchainBitcoin();
-      List<Header> headersBase = [];
-      byte[] hashPrevious = HASH_HEADER_ROOT.ToBinary();
-
-      for (uint i = 1; i < TIMESPAN_ROOT_TO_HEADER_BEFORE_RETARGET_SECONDS; i++)
-      {
-        headersBase.Add(CreateHeader(hashPrevious, UNIX_TIME_SECONDS_ROOT + i, N_BITS_ROOT));
-        hashPrevious = headersBase[^1].Hash;
-      }
+      List<Header> headersBase = CreateHeadersInterval(HASH_HEADER_ROOT.ToBinary(), UNIX_TIME_SECONDS_ROOT + 1);
+      byte[] hashPrevious = headersBase[^1].Hash;
 
       blockchain.InsertHeadersInTree(headersBase);
 
+      HeaderBitcoin headerBeforeRetargetFirst = CreateHeader(hashPrevious, UNIX_TIME_SECONDS_ROOT + TIMESPAN_RETARGET_SECONDS, N_BITS_ROOT);
+      uint unixTimeSecondsIntervalSecond = UNIX_TIME_SECONDS_ROOT + TIMESPAN_RETARGET_SECONDS * 3 / 2;
+      Header headerIntervalSecondFirst = CreateHeader(headerBeforeRetargetFirst.Hash, unixTimeSecondsIntervalSecond, N_BITS_ROOT);
+      List<Header> headersIntervalSecond = [headerBeforeRetargetFirst, headerIntervalSecondFirst, .. CreateHeadersInterval(headerIntervalSecondFirst.Hash, unixTimeSecondsIntervalSecond + 1)];
+      List<Header> headersIntervalBackdated = CreateHeadersInterval(headerIntervalSecondFirst.Hash, unixTimeSecondsIntervalSecond - TIMESPAN_RETARGET_SECONDS - TIMESPAN_ROOT_TO_HEADER_BEFORE_RETARGET_SECONDS);
+
       return IsRejected("NBits changed between retargets", () => blockchain.InsertHeadersInTree([CreateHeader(hashPrevious, UNIX_TIME_SECONDS_ROOT + TIMESPAN_ROOT_TO_HEADER_BEFORE_RETARGET_SECONDS, N_BITS_ROOT + 1)]), ref message)
-        && IsRetargetCorrect(blockchain, hashPrevious, TIMESPAN_RETARGET_SECONDS, N_BITS_ROOT, N_BITS_TARGET_QUADRUPLED, ref message)
-        && IsRetargetCorrect(blockchain, hashPrevious, 4 * TIMESPAN_RETARGET_SECONDS + 1, N_BITS_TARGET_QUADRUPLED, N_BITS_ROOT, ref message)
-        && IsRetargetCorrect(blockchain, hashPrevious, TIMESPAN_ROOT_TO_HEADER_BEFORE_RETARGET_SECONDS, N_BITS_TARGET_QUARTERED, N_BITS_ROOT, ref message);
+        && IsRetargetCorrect(blockchain, hashPrevious, UNIX_TIME_SECONDS_ROOT, TIMESPAN_RETARGET_SECONDS, N_BITS_ROOT, N_BITS_TARGET_QUADRUPLED, ref message)
+        && IsRetargetCorrect(blockchain, hashPrevious, UNIX_TIME_SECONDS_ROOT, 8 * TIMESPAN_RETARGET_SECONDS, N_BITS_TARGET_QUADRUPLED, N_BITS_ROOT, ref message)
+        && IsRetargetCorrect(blockchain, hashPrevious, UNIX_TIME_SECONDS_ROOT, TIMESPAN_ROOT_TO_HEADER_BEFORE_RETARGET_SECONDS, N_BITS_TARGET_QUARTERED, N_BITS_ROOT, ref message)
+        && IsAccepted("Headers of the second retarget interval", () => blockchain.InsertHeadersInTree(headersIntervalSecond), ref message)
+        && IsRetargetCorrect(blockchain, headersIntervalSecond[^1].Hash, unixTimeSecondsIntervalSecond, TIMESPAN_RETARGET_SECONDS, N_BITS_ROOT, N_BITS_TARGET_QUADRUPLED, ref message)
+        && IsAccepted("Headers of a retarget interval older than its first header", () => blockchain.InsertHeadersInTree(headersIntervalBackdated), ref message)
+        && IsRetargetCorrect(blockchain, headersIntervalBackdated[^1].Hash, unixTimeSecondsIntervalSecond, -TIMESPAN_RETARGET_SECONDS, N_BITS_TARGET_QUARTERED, N_BITS_ROOT, ref message);
     }
 
-    static bool IsRetargetCorrect(BlockchainBitcoin blockchain, byte[] hashPrevious, uint timespan, uint nBitsExpected, uint nBitsWrong, ref string message)
+    static List<Header> CreateHeadersInterval(byte[] hashPrevious, uint unixTimeSecondsFirst)
     {
-      uint unixTimeSeconds = UNIX_TIME_SECONDS_ROOT + timespan;
+      List<Header> headers = [];
+
+      for (uint i = 0; i < TIMESPAN_ROOT_TO_HEADER_BEFORE_RETARGET_SECONDS - 1; i++)
+      {
+        headers.Add(CreateHeader(hashPrevious, unixTimeSecondsFirst + i, N_BITS_ROOT));
+        hashPrevious = headers[^1].Hash;
+      }
+
+      return headers;
+    }
+
+    static bool IsRetargetCorrect(BlockchainBitcoin blockchain, byte[] hashPrevious, uint unixTimeSecondsIntervalStart, long timespan, uint nBitsExpected, uint nBitsWrong, ref string message)
+    {
+      uint unixTimeSeconds = (uint)(unixTimeSecondsIntervalStart + timespan);
       Header headerBeforeRetarget = CreateHeader(hashPrevious, unixTimeSeconds, N_BITS_ROOT);
 
       return IsRejected($"Retarget with timespan {timespan} and NBits {nBitsWrong:X8}", () => blockchain.InsertHeadersInTree([headerBeforeRetarget, CreateHeader(headerBeforeRetarget.Hash, unixTimeSeconds, nBitsWrong)]), ref message)
@@ -187,9 +214,10 @@ internal partial class Testbench
       return header;
     }
 
+    // Counter-tested 2026-11-14 03:35
     bool Test_AnchorsBitcoin(out Block blockParsed, ref string message)
     {
-      Console.WriteLine("  5. Bitcoin Anchors: Draw anchor winners from TXBitcoin outputs of a Bitcoin block.");
+      Console.WriteLine("  5. Bitcoin Anchors: Draw anchor winners from TXBitcoin outputs of twenty Bitcoin blocks.");
 
       const int HEIGHT_BLOCK = 800000;
       byte[] iDTokenSecond = [0x05, 0x06, 0x07, 0x08];
@@ -213,29 +241,39 @@ internal partial class Testbench
         CreateTXBitcoin(HEIGHT_BLOCK - 1, anchorsFirst[2], anchorsSecond[1]),
         CreateTXBitcoin(HEIGHT_BLOCK, anchorIneligible, CreateTXOutputP2PKH())]);
 
-      block.Header = MineHeader(
-        UNIX_TIME_SECONDS_ROOT,
-        new byte[32],
-        block.ComputeMerkleRoot(),
-        h => string.CompareOrdinal(ComputeScoreAnchor(h, anchorIneligible), ComputeScoreAnchor(h, GetAnchorScoreLowest(h, anchorsFirst))) < 0);
+      const int COUNT_BLOCKS_DRAWN = 20;
+      blockParsed = null;
 
-      block.Header.Height = HEIGHT_BLOCK;
-      block.Serialize();
-
-      blockParsed = new(block.Buffer[..block.LengthDataPayload])
+      for (uint i = 0; i < COUNT_BLOCKS_DRAWN; i++)
       {
-        Header = block.Header
-      };
+        block.Header = MineHeader(
+          UNIX_TIME_SECONDS_ROOT + i,
+          new byte[32],
+          block.ComputeMerkleRoot(),
+          h => string.CompareOrdinal(ComputeScoreAnchor(h, anchorIneligible), ComputeScoreAnchor(h, GetAnchorScoreLowest(h, anchorsFirst))) < 0);
 
-      new ParserBitcoin().ParseBlock(blockParsed, verifySignatures: false);
+        block.Header.Height = HEIGHT_BLOCK;
+        block.Serialize();
 
-      string nameParser = "Anchor winners drawn by ParserBitcoin";
+        blockParsed = new(block.Buffer[..block.LengthDataPayload])
+        {
+          Header = block.Header
+        };
 
-      return IsFieldEqual(nameParser, "AnchorsWinner.Count", 2, blockParsed.Header.AnchorsWinner.Count, ref message)
-        && IsAnchorWinnerLowestScore(nameParser, blockParsed.Header, anchorsFirst, ref message)
-        && IsAnchorWinnerLowestScore(nameParser, blockParsed.Header, anchorsSecond, ref message);
+        new ParserBitcoin().ParseBlock(blockParsed, verifySignatures: false);
+
+        string nameParser = $"Anchor winners drawn by ParserBitcoin in block {block.Header.Hash.ToHexString()}";
+
+        if (!IsFieldEqual(nameParser, "AnchorsWinner.Count", 2, blockParsed.Header.AnchorsWinner.Count, ref message)
+          || !IsAnchorWinnerLowestScore(nameParser, blockParsed.Header, anchorsFirst, ref message)
+          || !IsAnchorWinnerLowestScore(nameParser, blockParsed.Header, anchorsSecond, ref message))
+          return false;
+      }
+
+      return true;
     }
 
+    // Counter-tested 2026-11-14 03:35
     bool Test_AnchorsStored(Block blockParsed, ref string message)
     {
       Console.WriteLine("  6. Stored Anchors: Keep anchor winners through SerializeBlockStored and ParseBlockStored.");
@@ -290,6 +328,7 @@ internal partial class Testbench
       return tX;
     }
 
+    // Counter-tested 2026-11-14 03:01
     bool Test_WalletReorg(ref string message)
     {
       Console.WriteLine("  7. Wallet Reorg: Roll back wallet outputs and own TXs, restore on reversal.");

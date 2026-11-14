@@ -139,6 +139,7 @@ internal partial class Testbench
 
     abstract partial class BlockchainAccounts : BlockchainTestbench
     {
+      // Counter-tested 2026-11-14 03:01
       internal static bool TestSpendingRules(Wallet wallet, ref string message)
       {
         Console.WriteLine("  4. Spending Rules: Reject wrong Nonce, low Balance, unknown accounts, replays, wrong HashAccounts.");
@@ -177,6 +178,7 @@ internal partial class Testbench
           && ledger.TryInsertBlock("spend of the whole Balance", [ledger.CreateCoinbase(wallet, iDMiner, FEE), tXSpendBalance], isValidExpected: true, null, ref message);
       }
 
+      // Counter-tested 2026-11-14 03:01
       internal static bool TestCoinbaseRules(Wallet wallet, ref string message)
       {
         Console.WriteLine("  5. Coinbase Rules: Check coinbase against block reward, fees, rent and halving.");
@@ -228,6 +230,7 @@ internal partial class Testbench
           && ledgerHalvingLast.TryInsertBlock("coinbase paying no block reward after 64 halvings", [ledgerHalvingLast.CreateCoinbase(wallet, iDMiner, 0)], isValidExpected: true, null, ref message);
       }
 
+      // Counter-tested 2026-11-14 03:01
       internal static bool TestBlockLimits(Wallet wallet, ref string message)
       {
         Console.WriteLine("  6. Block Limits: Reject wrong anchor LockTime and accounts above CountAccountsMax.");
@@ -250,6 +253,7 @@ internal partial class Testbench
           && ledger.TryInsertBlock("coinbase creating 100 accounts in one segment", [CreateCoinbaseAccounts(ledger, wallet, indexSegmentAccounts, 100)], isValidExpected: true, null, ref message);
       }
 
+      // Counter-tested 2026-11-14 03:01
       internal static bool TestSingleRollbacks(Wallet wallet, ref string message)
       {
         Console.WriteLine("  13. Single Rollbacks: Roll back to root comparing accounts, then reinsert blocks.");
@@ -289,6 +293,7 @@ internal partial class Testbench
         return ledger.TryRollBackAndInsertAgain("single rollbacks", heightTarget: 0, ref message);
       }
 
+      // Counter-tested 2026-11-14 03:01
       internal static bool TestRetentionWindow(Wallet wallet, ref string message)
       {
         Console.WriteLine("  16. Retention Window: Roll back all blocks with undo records, then reinsert.");
@@ -315,6 +320,7 @@ internal partial class Testbench
           && ledger.TryRollBackAndInsertAgain("retention window", heightTarget: 0, ref message);
       }
 
+      // Counter-tested 2026-11-14 03:01
       internal static bool TestCountRestoration(Wallet wallet, ref string message)
       {
         Console.WriteLine("  14. Count Restoration: Restore segment account counts when rolling back creations or sweeps.");
@@ -339,9 +345,10 @@ internal partial class Testbench
           && ledger.TryInsertBlock("coinbase paying the 100 accounts restored by rolling back their sweep", [CreateCoinbaseAccounts(ledger, wallet, indexSegmentAccounts, 100)], isValidExpected: true, null, ref message);
       }
 
+      // Counter-tested 2026-11-14 03:35
       internal static bool TestForkReplacement(Wallet wallet, ref string message)
       {
-        Console.WriteLine("  15. Fork Replacement: Replace two rolled-back blocks, rejecting the old fork's spend.");
+        Console.WriteLine("  15. Fork Replacement: Replace two rolled-back blocks, reject old fork's spend, roll back.");
 
         Ledger ledger = new(heightRoot: 0);
 
@@ -362,7 +369,9 @@ internal partial class Testbench
           && ledger.TryInsertBlock("second spend of the replacing fork", [
             ledger.CreateCoinbase(wallet, iDMinerFork, 2 * FEE),
             ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => { }),
-            ledger.CreateTXSpend(wallet, iDReceiverFork, VALUE_SPEND, t => t.Nonce += 1)], isValidExpected: true, null, ref message);
+            ledger.CreateTXSpend(wallet, iDReceiverFork, VALUE_SPEND, t => t.Nonce += 1)], isValidExpected: true, null, ref message)
+          && ledger.TryRollBack("fork replacement", out _, ref message)
+          && ledger.TryRollBack("fork replacement", out _, ref message);
       }
     }
 

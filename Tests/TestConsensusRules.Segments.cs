@@ -10,6 +10,7 @@ internal partial class Testbench
   {
     abstract partial class BlockchainAccounts
     {
+      // Counter-tested 2026-11-14 03:01
       internal static bool TestServedSegments(Wallet wallet, ref string message)
       {
         Console.WriteLine("  17. Served Segments: Serve each block's segment as it was after that block.");
@@ -46,6 +47,7 @@ internal partial class Testbench
           && TestHeightGuards(ledger, wallet, iDMiner, ref message);
       }
 
+      // Counter-tested 2026-11-14 03:01
       static bool TestHeightGuards(Ledger ledgerServing, Wallet wallet, byte[] iDMiner, ref string message)
       {
         Console.WriteLine("  18. Height Guards: Serve nothing above tip, below undo records or installation.");
@@ -61,6 +63,7 @@ internal partial class Testbench
 
       const int INDEX_SEGMENT = 5;
 
+      // Counter-tested 2026-11-14 03:35
       internal static bool TestMalformedSegments(ref string message)
       {
         Console.WriteLine("  19. Malformed Segments: Reject segments with wrong length, count, segment or order.");
@@ -81,6 +84,7 @@ internal partial class Testbench
           && IsSegmentValidExpected("account with the lowest ID of the next segment", SerializeSegment(2, iDFirst, CreateIDAccount(INDEX_SEGMENT + 1, 0)), isValidExpected: false, ref message)
           && IsSegmentValidExpected("account with the highest ID of the previous segment", SerializeSegment(2, CreateIDAccountHighest(INDEX_SEGMENT - 1), iDFirst), isValidExpected: false, ref message)
           && IsSegmentValidExpected("two accounts in descending order", SerializeSegment(2, iDSecond, iDFirst), isValidExpected: false, ref message)
+          && IsSegmentValidExpected("three accounts with the last two in descending order", SerializeSegment(3, iDFirst, iDThird, iDSecond), isValidExpected: false, ref message)
           && IsSegmentValidExpected("same ID twice", SerializeSegment(2, iDFirst, iDFirst), isValidExpected: false, ref message);
       }
 
@@ -131,11 +135,13 @@ internal partial class Testbench
         return iDAccount;
       }
 
+      // Counter-tested 2026-11-14 04:59
       internal static bool TestInstalledAccounts(Wallet wallet, ref string message)
       {
         Console.WriteLine("  20. Installed Accounts: Install served segments, compare all accounts and account counts.");
 
         const int HEIGHT_INSTALLED = COUNT_SEGMENTS + BITCOIN_REORG_MARGIN;
+        const int HEIGHT_SWEEP_OLDEST = HEIGHT_INSTALLED - COUNT_SEGMENTS + 1;
 
         Ledger ledgerServing = new(heightRoot: 0);
 
@@ -144,15 +150,23 @@ internal partial class Testbench
         byte[] iDPaidAroundSnapshot = CreateIDAccount(1000, 3);
         byte[] iDPaidBeforeSnapshot = CreateIDAccount(3, 4);
         byte[] iDCreatedAfterSnapshot = CreateIDAccount(3, 5);
+        byte[] iDPaidByCarriedBlockOldest = CreateIDAccount(HEIGHT_SWEEP_OLDEST % COUNT_SEGMENTS, 6);
+        byte[] iDInSegmentFirst = CreateIDAccount(0, 7);
+        byte[] iDInSegmentLast = CreateIDAccount(COUNT_SEGMENTS - 1, 8);
+        Wallet walletSpendingAfterInstallation = CreateWallet();
 
-        if (!ledgerServing.TryInsertBlock("coinbase creating the wallet account and two accounts", [ledgerServing.CreateCoinbase(wallet, wallet.Hash160PKeyPublic, 0, new TXOutputP2PKH(100, iDPaidAroundSnapshot), new TXOutputP2PKH(100, iDPaidBeforeSnapshot))], isValidExpected: true, null, ref message)
+        if (!ledgerServing.TryInsertBlock("coinbase creating the wallet accounts and four accounts", [ledgerServing.CreateCoinbase(wallet, wallet.Hash160PKeyPublic, 0, new TXOutputP2PKH(100, iDPaidAroundSnapshot), new TXOutputP2PKH(100, iDPaidBeforeSnapshot), new TXOutputP2PKH(100, iDInSegmentFirst), new TXOutputP2PKH(100, iDInSegmentLast), new TXOutputP2PKH(VALUE_FUNDING, walletSpendingAfterInstallation.Hash160PKeyPublic))], isValidExpected: true, null, ref message)
           || !ledgerServing.TryInsertBlock("spend from the wallet account", [ledgerServing.CreateCoinbase(wallet, iDMiner, FEE), ledgerServing.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t => { })], isValidExpected: true, null, ref message)
+          || !TryInsertCoinbasesUpTo(ledgerServing, wallet, iDMiner, HEIGHT_SWEEP_OLDEST, ref message)
+          || !ledgerServing.TryInsertBlock("output in the oldest carried block to the segment of the oldest sweep", [ledgerServing.CreateCoinbase(wallet, iDMiner, 0, new TXOutputP2PKH(40, iDPaidByCarriedBlockOldest))], isValidExpected: true, null, ref message)
           || !TryInsertCoinbasesUpTo(ledgerServing, wallet, iDMiner, 499, ref message)
           || !ledgerServing.TryInsertBlock("output before the snapshot of its segment", [ledgerServing.CreateCoinbase(wallet, iDMiner, 0, new TXOutputP2PKH(10, iDPaidAroundSnapshot))], isValidExpected: true, null, ref message)
           || !TryInsertCoinbasesUpTo(ledgerServing, wallet, iDMiner, 1499, ref message)
           || !ledgerServing.TryInsertBlock("output after and spend before the snapshots of their segments", [ledgerServing.CreateCoinbase(wallet, iDMiner, FEE, new TXOutputP2PKH(20, iDPaidAroundSnapshot)), ledgerServing.CreateTXSpend(wallet, iDPaidBeforeSnapshot, VALUE_SPEND, t => { })], isValidExpected: true, null, ref message)
           || !TryInsertCoinbasesUpTo(ledgerServing, wallet, iDMiner, 2051, ref message)
           || !ledgerServing.TryInsertBlock("account created after its snapshot and spend of the whole Balance", [ledgerServing.CreateCoinbase(wallet, iDMiner, FEE, new TXOutputP2PKH(30, iDCreatedAfterSnapshot)), ledgerServing.CreateTXSpend(wallet, iDReceiver, ledgerServing.GetBalanceNext(wallet.Hash160PKeyPublic) - FEE, t => { })], isValidExpected: true, null, ref message)
+          || !TryInsertCoinbasesUpTo(ledgerServing, wallet, iDMiner, HEIGHT_INSTALLED + 2, ref message)
+          || !ledgerServing.TryInsertBlock("spend after the installation to the segment swept first after it", [ledgerServing.CreateCoinbase(wallet, iDMiner, FEE), ledgerServing.CreateTXSpend(walletSpendingAfterInstallation, iDPaidByCarriedBlockOldest, VALUE_SPEND, t => { })], isValidExpected: true, null, ref message)
           || !TryInsertCoinbasesUpTo(ledgerServing, wallet, iDMiner, HEIGHT_INSTALLED + BITCOIN_REORG_MARGIN, ref message))
           return false;
 
@@ -162,11 +176,16 @@ internal partial class Testbench
           && TestContinuedBlocks(ledgerServing, ledgerInstalled, ref message);
       }
 
+      // Counter-tested 2026-11-14 04:59
       static bool TestContinuedBlocks(Ledger ledgerServing, Ledger ledgerInstalled, ref string message)
       {
-        Console.WriteLine("  21. Continued Blocks: Insert later blocks into installed database, comparing accounts.");
+        Console.WriteLine("  21. Continued Blocks: Insert later blocks into installed database, comparing accounts and segments.");
 
-        return ledgerInstalled.TryInsertBlocksAbove(ledgerServing, ref message);
+        int heightInstalled = ledgerInstalled.GetHeightTip();
+
+        return ledgerInstalled.TryInsertBlocksAbove(ledgerServing, ref message)
+          && ledgerInstalled.AreSegmentsServedCorrect("segments of the installed database", heightInstalled, ref message, ledgerServing)
+          && ledgerInstalled.AreAccountsInstalledCorrect(ref message);
       }
     }
   }

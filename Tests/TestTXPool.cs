@@ -119,7 +119,7 @@ internal partial class Testbench
           && IsAdmitted("spend creating two accounts in a full segment the next sweep empties", poolBeforeSweep, ledger.CreateTXSpend(wallet, iDCreatedOverLimit, VALUE_SPEND, t => t.TXOutputs.Add(new TXOutputP2PKH(VALUE_SPEND, iDCreatedAfterSweep))), true, ref message);
       }
 
-      // Counter-tested 2026-11-13 17:16
+      // Counter-tested 2026-11-14 03:01
       internal static bool TestBundleRanking(Wallet wallet, ref string message)
       {
         Console.WriteLine("  3. Bundle Ranking: Merge bundles, rank by fee per byte, select by size.");
@@ -164,7 +164,7 @@ internal partial class Testbench
           && ledger.TryInsertBlockFromPool("block of all ranked TXs", pool, wallet, iDMiner, 7, ref message);
       }
 
-      // Counter-tested 2026-11-13 17:16
+      // Counter-tested 2026-11-14 04:59
       internal static bool TestPoolEviction(Wallet wallet, ref string message)
       {
         Console.WriteLine("  4. Pool Eviction: Reject low bids, evict worst bundles, report minimum fee.");
@@ -187,9 +187,16 @@ internal partial class Testbench
           return false;
 
         TXBToken tXB1 = CreateTXSpendFee(ledger, walletB, iDReceiver, 0, 3200);
-        TXBToken tXE1 = CreateTXSpendFee(ledger, walletE, iDReceiver, 0, 1600);
-        TXBToken tXE2 = CreateTXSpendFee(ledger, walletE, iDReceiver, 1, 1920);
+        TXBToken tXE1 = CreateTXSpendFeePerByte(ledger, walletE, iDReceiver, 10);
+        TXBToken tXE2 = CreateTXSpendFee(ledger, walletE, iDReceiver, 1, 1680);
+        TXBToken tXE2Merging = CreateTXSpendFee(ledger, walletE, iDReceiver, 1, 1920);
         TXBToken tXE2Paying = CreateTXSpendFee(ledger, walletE, iDReceiver, 1, 16000);
+        TXBToken tXB1Outsizing = ledger.CreateTXSpend(walletB, iDReceiver, VALUE_SPEND, t =>
+        {
+          t.Fee = 16000;
+          t.TXOutputs.Add(new TXOutputP2PKH(VALUE_SPEND, iDReceiver));
+          t.TXOutputs.Add(new TXOutputP2PKH(VALUE_SPEND, iDReceiver));
+        });
 
         TXBToken tXD1 = ledger.CreateTXSpend(walletD, iDReceiver, 0, t =>
         {
@@ -212,20 +219,33 @@ internal partial class Testbench
           t.TXOutputs.Clear();
         });
 
+        double feePerByteMinLast = (double)tXE1.Fee / tXE1.TXRaw.Length + FEE_PER_BYTE_INCREMENT;
+        TXBToken tXC1Minimum = CreateTXSpendFeePerByte(ledger, walletC, iDReceiver, (long)feePerByteMinLast);
+
+        PoolTXBToken poolRoomBlock = ledger.CreateTXPool(tXB1.TXRaw.Length + SIZE_BLOCK_MAX);
         PoolTXBToken pool = ledger.CreateTXPool(tXB1.TXRaw.Length + tXD1.TXRaw.Length + tXE1.TXRaw.Length + tXE2.TXRaw.Length);
 
-        return IsAdmitted("spend at about 20 per byte", pool, tXB1, true, ref message)
+        return IsAdmitted("spend leaving exactly one block of room", poolRoomBlock, tXB1, true, ref message)
+          && IsFeePerByteMinCorrect("pool with exactly one block of room", poolRoomBlock, 0, ref message)
+          && IsAdmitted("spend at about 20 per byte", pool, tXB1, true, ref message)
           && IsFeePerByteMinCorrect("pool with more than one block of room", pool, 0, ref message)
           && IsAdmitted("filler TX of almost one block", pool, tXD1, true, ref message)
+          && IsFeePerByteMinCorrect("pool with less than one block of room", pool, (double)tXB1.Fee / tXB1.TXRaw.Length + FEE_PER_BYTE_INCREMENT, ref message)
           && IsAdmitted("first spend of the worst bundle", pool, tXE1, true, ref message)
           && IsAdmitted("second spend of the worst bundle filling the pool to its cap", pool, tXE2, true, ref message)
           && IsFeePerByteMinCorrect("pool at its cap", pool, feePerByteMinFull, ref message)
           && IsAdmitted("TX outranking the worst bundle by less than the outbid of the full pool", pool, tXC1Low, false, ref message)
           && IsAdmitted("TX paying only a Fee above the outbid of the full pool", pool, tXC1, true, ref message)
           && AreTXsRankedCorrect("pool after evicting the last TX of the worst bundle", pool.GetTXsRanked(), [tXD1, tXC1, tXB1, tXE1], ref message)
-          && IsAdmitted("evicted spend merging into the worst bundle again", pool, tXE2, false, ref message)
+          && IsFeePerByteMinCorrect("pool after evicting the last TX of the worst bundle", pool, feePerByteMinLast, ref message)
+          && IsAdmitted("evicted spend merging into the worst bundle again", pool, tXE2Merging, false, ref message)
           && IsAdmitted("evicted spend replaced with a higher Fee", pool, tXE2Paying, true, ref message)
-          && AreTXsRankedCorrect("pool after evicting the worst bundle of a single TX", pool.GetTXsRanked(), [tXD1, tXE1, tXE2Paying, tXC1], ref message);
+          && AreTXsRankedCorrect("pool after evicting the worst bundle of a single TX", pool.GetTXsRanked(), [tXD1, tXE1, tXE2Paying, tXC1], ref message)
+          && IsAdmitted("spend outsizing the room the worst bundle leaves", pool, tXB1Outsizing, true, ref message)
+          && AreTXsRankedCorrect("pool after evicting from two bundles for one TX", pool.GetTXsRanked(), [tXD1, tXB1Outsizing, tXE1], ref message)
+          && IsFeePerByteMinCorrect("pool after evicting from two bundles for one TX", pool, feePerByteMinLast, ref message)
+          && IsAdmitted("TX paying exactly the minimum fee per byte", pool, tXC1Minimum, true, ref message)
+          && AreTXsRankedCorrect("pool after the TX paying exactly the minimum fee per byte", pool.GetTXsRanked(), [tXD1, tXB1Outsizing, tXC1Minimum], ref message);
       }
 
       // Counter-tested 2026-11-13 17:16
@@ -357,22 +377,6 @@ internal partial class Testbench
         return false;
       }
 
-      static Wallet CreateWallet()
-      {
-        string pathWallet = Path.GetTempFileName();
-
-        try
-        {
-          File.WriteAllText(pathWallet, Crypto.GenerateKeyPrivate());
-
-          return new Wallet(pathWallet);
-        }
-        finally
-        {
-          File.Delete(pathWallet);
-        }
-      }
-
       static TXBToken CreateTXSpendFee(Ledger ledger, Wallet wallet, byte[] iDReceiver, int offsetNonce, long fee)
       {
         return ledger.CreateTXSpend(wallet, iDReceiver, VALUE_SPEND, t =>
@@ -380,6 +384,16 @@ internal partial class Testbench
           t.Nonce += offsetNonce;
           t.Fee = fee;
         });
+      }
+
+      static TXBToken CreateTXSpendFeePerByte(Ledger ledger, Wallet wallet, byte[] iDReceiver, long feePerByte)
+      {
+        TXBToken tX = CreateTXSpendFee(ledger, wallet, iDReceiver, 0, 0);
+
+        while (tX.Fee != feePerByte * tX.TXRaw.Length)
+          tX = CreateTXSpendFee(ledger, wallet, iDReceiver, 0, feePerByte * tX.TXRaw.Length);
+
+        return tX;
       }
 
       static bool AreTXsRankedCorrect(string nameCase, IEnumerable<TXBToken> tXs, List<TXBToken> tXsExpected, ref string message)

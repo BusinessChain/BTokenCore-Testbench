@@ -104,7 +104,7 @@ internal partial class Testbench
         return blockchain.IsSynchronized(ledger, "Account synchronizer, replacing fork inserted after the rollback to height 3", 6, ref message);
       }
 
-      // Counter-tested 2026-11-13 17:16
+      // Counter-tested 2026-11-14 03:01
       internal static bool TestRestartRollback(Wallet wallet, ref string message)
       {
         Console.WriteLine("  3. Restart Rollback: Restart rolls accounts back with unanchored blocks before replaying.");
@@ -211,7 +211,7 @@ internal partial class Testbench
           && blockchainReloaded.IsInPool("owned TX reloaded after the replay", tXSpend.Hash, true, ref message);
       }
 
-      // Counter-tested 2026-11-13 17:16
+      // Counter-tested 2026-11-14 03:01
       internal static bool TestRollbackGating(Wallet wallet, ref string message)
       {
         Console.WriteLine("  10. Rollback Gating: Return rolled-back TXs to the pool only with accounts.");
@@ -246,28 +246,57 @@ internal partial class Testbench
           && blockchainRestarted.IsInPool("restart rolling back unanchored blocks while the replay is pending", hashSpend, false, ref message);
       }
 
+      // Counter-tested 2026-11-14 04:59
       internal static bool TestConfirmReopen(Wallet wallet, ref string message)
       {
-        Console.WriteLine("  11. Confirm Reopen: Mark confirmed own TX, reopen it on rollback.");
+        Console.WriteLine("  11. Confirm Reopen: Mark only confirmed own TX, reopen it on rollback.");
 
         if (!TryCreateLedger(wallet, out Ledger ledger, ref message))
           return false;
 
-        List<Block> blocksLedger = ledger.GetBlocksInserted();
-        TXBToken tXSpend = (TXBToken)blocksLedger.Single(b => b.Header.Height == 2).TXs[1];
+        while (ledger.GetHeightTip() > 2)
+          if (!ledger.TryRollBack("own TX lifecycle", out _, ref message))
+            return false;
+
+        TXBToken tXSpend = (TXBToken)ledger.GetBlocksInserted().Single(b => b.Header.Height == 2).TXs[1];
+        TXBToken tXSpendNext = ledger.CreateTXSpend(wallet, CreateIDAccount(1001, 2), VALUE_SPEND, t => t.Nonce = tXSpend.Nonce + 1);
         byte[] iDMiner = CreateIDAccount(1000, 1);
+        Wallet walletForeign = CreateWallet();
+        Wallet walletOwn = CreateWallet();
+
+        if (!ledger.TryInsertBlock("spend with the next Nonce beside a coinbase creating an own account", [ledger.CreateCoinbase(wallet, iDMiner, FEE, new TXOutputP2PKH(VALUE_FUNDING, walletOwn.Hash160PKeyPublic)), tXSpendNext], isValidExpected: true, null, ref message))
+          return false;
+
+        List<Block> blocksLedger = ledger.GetBlocksInserted();
+        TXBToken tXOwnCreatedEarlier = ledger.CreateTXSpend(walletOwn, CreateIDAccount(1001, 2), VALUE_SPEND, t => { });
 
         BlockchainSynchronizing blockchain = StartNode(CreateLiteDatabase(), int.MaxValue);
         blockchain.InsertBlocks(blocksLedger.Where(b => b.Header.Height == 1).ToList());
 
         if (!IsAccepted("Own TX lifecycle, spend submitted at height 1", () => blockchain.SubmitTX(tXSpend.TXRaw), ref message)
-          || !blockchain.IsTXOwnedAtHeight("spend submitted at height 1", tXSpend.Hash, 0, ref message))
+          || !blockchain.IsTXOwnedAtHeight("spend submitted at height 1", tXSpend.Hash, 0, ref message)
+          || !IsAccepted("Own TX lifecycle, spend with the next Nonce submitted at height 1", () => blockchain.SubmitTX(tXSpendNext.TXRaw), ref message))
           return false;
 
         blockchain.InsertBlocks(blocksLedger.Where(b => b.Header.Height == 2).ToList());
 
         if (!blockchain.IsSynchronized(ledger, "Own TX lifecycle, block confirming the spend at height 2", 2, ref message)
-          || !blockchain.IsTXOwnedAtHeight("block confirming the spend at height 2", tXSpend.Hash, 2, ref message))
+          || !blockchain.IsTXOwnedAtHeight("block confirming the spend at height 2", tXSpend.Hash, 2, ref message)
+          || !blockchain.IsTXOwnedAtHeight("block confirming the spend, leaving the next Nonce open", tXSpendNext.Hash, 0, ref message))
+          return false;
+
+        blockchain.InsertBlocks(blocksLedger.Where(b => b.Header.Height == 3).ToList());
+
+        if (!blockchain.IsSynchronized(ledger, "Own TX lifecycle, block confirming the next Nonce at height 3", 3, ref message)
+          || !blockchain.IsTXOwnedAtHeight("block confirming the next Nonce at height 3", tXSpendNext.Hash, 3, ref message)
+          || !IsAccepted("Own TX lifecycle, spend of the own account created at height 3", () => blockchain.SubmitTX(tXOwnCreatedEarlier.TXRaw), ref message))
+          return false;
+
+        blockchain.RollBackTo(2);
+
+        if (!blockchain.IsSynchronized(ledger, "Own TX lifecycle, rollback of the block confirming the next Nonce", 2, ref message)
+          || !blockchain.IsTXOwnedAtHeight("rollback of the block confirming the next Nonce", tXSpendNext.Hash, 0, ref message)
+          || !blockchain.IsTXOwnedAtHeight("rollback keeping the spend confirmed below", tXSpend.Hash, 2, ref message))
           return false;
 
         blockchain.RollBackTo(1);
@@ -280,8 +309,19 @@ internal partial class Testbench
           if (!ledger.TryRollBack("own TX lifecycle", out _, ref message))
             return false;
 
-        if (!ledger.TryInsertBlock("coinbase-only block of the fork", [ledger.CreateCoinbase(wallet, iDMiner, 0)], isValidExpected: true, null, ref message)
-          || !ledger.TryInsertBlock("spend of the fork", [ledger.CreateCoinbase(wallet, iDMiner, FEE), tXSpend], isValidExpected: true, null, ref message))
+        TXBToken tXCoinbaseFork = ledger.CreateCoinbase(wallet, iDMiner, 0, new TXOutputP2PKH(VALUE_FUNDING, walletForeign.Hash160PKeyPublic), new TXOutputP2PKH(VALUE_FUNDING, walletOwn.Hash160PKeyPublic));
+        tXCoinbaseFork.HeightAccountCreated = tXSpend.HeightAccountCreated;
+        tXCoinbaseFork.Nonce = tXSpend.Nonce;
+        tXCoinbaseFork.SerializeUnsigned();
+
+        if (!ledger.TryInsertBlock("coinbase-only block of the fork with the fields of an own spend creating two accounts", [tXCoinbaseFork], isValidExpected: true, null, ref message))
+          return false;
+
+        TXBToken tXForeign = ledger.CreateTXSpend(walletForeign, CreateIDAccount(1001, 2), VALUE_SPEND, t => { });
+        TXBToken tXOwnOpen = ledger.CreateTXSpend(walletOwn, CreateIDAccount(1001, 2), VALUE_SPEND, t => { });
+
+        if (!ledger.TryInsertBlock("spend of the fork beside a foreign spend", [ledger.CreateCoinbase(wallet, iDMiner, 2 * FEE), tXSpend, tXForeign], isValidExpected: true, null, ref message)
+          || !ledger.TryInsertBlock("spend of the own account recreated in the fork", [ledger.CreateCoinbase(wallet, iDMiner, FEE), tXOwnOpen], isValidExpected: true, null, ref message))
           return false;
 
         List<Block> blocksFork = ledger.GetBlocksInserted();
@@ -289,13 +329,22 @@ internal partial class Testbench
         blockchain.InsertBlocks(blocksFork.Where(b => b.Header.Height == 2).ToList());
 
         if (!blockchain.IsSynchronized(ledger, "Own TX lifecycle, coinbase-only block of the fork at height 2", 2, ref message)
-          || !blockchain.IsTXOwnedAtHeight("coinbase-only block of the fork at height 2", tXSpend.Hash, 0, ref message))
+          || !blockchain.IsTXOwnedAtHeight("coinbase-only block of the fork at height 2", tXSpend.Hash, 0, ref message)
+          || !IsAccepted("Own TX lifecycle, spend with the Nonce of a foreign spend submitted at height 2", () => blockchain.SubmitTX(tXOwnOpen.TXRaw), ref message))
           return false;
 
         blockchain.InsertBlocks(blocksFork.Where(b => b.Header.Height == 3).ToList());
 
         if (!blockchain.IsSynchronized(ledger, "Own TX lifecycle, fork confirming the spend at height 3", 3, ref message)
-          || !blockchain.IsTXOwnedAtHeight("fork confirming the spend at height 3", tXSpend.Hash, 3, ref message))
+          || !blockchain.IsTXOwnedAtHeight("fork confirming the spend at height 3", tXSpend.Hash, 3, ref message)
+          || !blockchain.IsTXOwnedAtHeight("fork confirming a foreign spend with the Nonce of an open own spend", tXOwnOpen.Hash, 0, ref message))
+          return false;
+
+        blockchain.InsertBlocks(blocksFork.Where(b => b.Header.Height == 4).ToList());
+
+        if (!blockchain.IsSynchronized(ledger, "Own TX lifecycle, fork confirming the spend of the recreated own account at height 4", 4, ref message)
+          || !blockchain.IsTXOwnedAtHeight("fork confirming the spend of the recreated own account at height 4", tXOwnOpen.Hash, 4, ref message)
+          || !blockchain.IsTXOwnedAtHeight("fork confirming a spend with the Nonce of an own spend from an earlier account creation", tXOwnCreatedEarlier.Hash, 0, ref message, isInPoolExpected: false))
           return false;
 
         blockchain.RollBackTo(2);
@@ -304,6 +353,7 @@ internal partial class Testbench
           && blockchain.IsTXOwnedAtHeight("rollback of the fork's confirming block", tXSpend.Hash, 0, ref message);
       }
 
+      // Counter-tested 2026-11-14 03:35
       internal static bool TestPruneConfirmed(Wallet wallet, ref string message)
       {
         Console.WriteLine("  12. Prune Confirmed: Delete a confirmed own TX after the stored window.");
@@ -318,6 +368,7 @@ internal partial class Testbench
 
         List<Block> blocksLedger = ledger.GetBlocksInserted();
         TXBToken tXSpend = (TXBToken)blocksLedger.Single(b => b.Header.Height == HEIGHT_CONFIRMED).TXs[1];
+        TXBToken tXOpen = ledger.CreateTXSpend(wallet, CreateIDAccount(1001, 2), VALUE_SPEND, t => { });
 
         BlockchainSynchronizing blockchain = StartNode(CreateLiteDatabase(), int.MaxValue);
         blockchain.InsertBlocks(blocksLedger.Where(b => b.Header.Height < HEIGHT_CONFIRMED).ToList());
@@ -330,7 +381,8 @@ internal partial class Testbench
         string nameCaseKept = $"last block at height {HEIGHT_PRUNE - 1} before the prune";
 
         if (!blockchain.IsSynchronized(ledger, $"Own TX lifecycle, {nameCaseKept}", HEIGHT_PRUNE - 1, ref message)
-          || !blockchain.IsTXOwnedAtHeight(nameCaseKept, tXSpend.Hash, HEIGHT_CONFIRMED, ref message))
+          || !blockchain.IsTXOwnedAtHeight(nameCaseKept, tXSpend.Hash, HEIGHT_CONFIRMED, ref message)
+          || !IsAccepted($"Own TX lifecycle, open spend submitted at height {HEIGHT_PRUNE - 1}", () => blockchain.SubmitTX(tXOpen.TXRaw), ref message))
           return false;
 
         blockchain.InsertBlocks(blocksLedger.Where(b => b.Header.Height == HEIGHT_PRUNE).ToList());
@@ -338,9 +390,11 @@ internal partial class Testbench
         string nameCasePruned = $"block at height {HEIGHT_PRUNE} pruning the confirmed spend";
 
         return blockchain.IsSynchronized(ledger, $"Own TX lifecycle, {nameCasePruned}", HEIGHT_PRUNE, ref message)
-          && blockchain.IsTXOwnedAtHeight(nameCasePruned, tXSpend.Hash, null, ref message);
+          && blockchain.IsTXOwnedAtHeight(nameCasePruned, tXSpend.Hash, null, ref message)
+          && blockchain.IsTXOwnedAtHeight($"block at height {HEIGHT_PRUNE} keeping the open spend", tXOpen.Hash, 0, ref message);
       }
 
+      // Counter-tested 2026-11-14 03:01
       internal static bool TestRestartReload(Wallet wallet, ref string message)
       {
         Console.WriteLine("  13. Restart Reload: Reload unconfirmed own TX after restart, keep confirmed one.");
@@ -371,6 +425,7 @@ internal partial class Testbench
           && blockchainRestartedAgain.IsTXOwnedAtHeight("restart with the confirmed spend", tXSpend.Hash, 2, ref message);
       }
 
+      // Counter-tested 2026-11-14 03:01
       internal static bool TestReplayConfirmation(Wallet wallet, ref string message)
       {
         Console.WriteLine("  14. Replay Confirmation: Mark own TX confirmed by a block replayed after restart.");
@@ -399,6 +454,7 @@ internal partial class Testbench
           && blockchainRestarted.IsTXOwnedAtHeight("replay of the confirming block after the restart", tXSpend.Hash, 2, ref message);
       }
 
+      // Counter-tested 2026-11-14 03:35
       internal static bool TestRejectionReopen(Wallet wallet, ref string message)
       {
         Console.WriteLine("  16. Rejection Reopen: Reopen own TX confirmed by a block rejected in replay.");
@@ -408,35 +464,51 @@ internal partial class Testbench
         if (!TryCreateLedger(wallet, out Ledger ledger, ref message))
           return false;
 
+        while (ledger.GetHeightTip() > HEIGHT_FORGED)
+          if (!ledger.TryRollBack("own TX lifecycle", out _, ref message))
+            return false;
+
+        byte[] iDMiner = CreateIDAccount(1000, 1);
+
+        if (!ledger.TryInsertBlock("second spend above the forged block", [ledger.CreateCoinbase(wallet, iDMiner, FEE), ledger.CreateTXSpend(wallet, CreateIDAccount(1001, 2), VALUE_SPEND, t => { })], isValidExpected: true, null, ref message)
+          || !TryInsertCoinbasesUpTo(ledger, wallet, iDMiner, 6, ref message))
+          return false;
+
         List<Block> blocksLedger = ledger.GetBlocksInserted();
         TXBToken tXSpend = (TXBToken)blocksLedger.Single(b => b.Header.Height == HEIGHT_FORGED).TXs[1];
+        TXBToken tXSpendAbove = (TXBToken)blocksLedger.Single(b => b.Header.Height == HEIGHT_FORGED + 1).TXs[1];
         TXBToken tXSpendInvalid = ledger.CreateTXSpend(wallet, CreateIDAccount(1001, 2), VALUE_SPEND, t => t.Nonce = 99);
 
         BlockchainSynchronizing blockchain = StartNode(CreateLiteDatabase(), int.MaxValue);
         blockchain.InsertBlocks(blocksLedger.Where(b => b.Header.Height < HEIGHT_FORGED).ToList());
 
-        if (!IsAccepted("Own TX lifecycle, spend submitted at height 1", () => blockchain.SubmitTX(tXSpend.TXRaw), ref message))
+        if (!IsAccepted("Own TX lifecycle, spend submitted at height 1", () => blockchain.SubmitTX(tXSpend.TXRaw), ref message)
+          || !IsAccepted("Own TX lifecycle, second spend submitted at height 1", () => blockchain.SubmitTX(tXSpendAbove.TXRaw), ref message))
           return false;
 
         blockchain.Synchronizer.Drop();
         blockchain.InsertBlocks(ForgeBlocks(blocksLedger, HEIGHT_FORGED, (tXs, header) => tXs.Add(tXSpendInvalid)));
 
         if (!blockchain.IsWithoutAccounts("Own TX lifecycle, forged blocks stored without accounts", 6, ref message)
-          || !blockchain.IsTXOwnedAtHeight("forged block confirming the spend", tXSpend.Hash, HEIGHT_FORGED, ref message))
+          || !blockchain.IsTXOwnedAtHeight("forged block confirming the spend", tXSpend.Hash, HEIGHT_FORGED, ref message)
+          || !blockchain.IsTXOwnedAtHeight("block above the forged block confirming the second spend", tXSpendAbove.Hash, HEIGHT_FORGED + 1, ref message))
           return false;
 
         BlockchainSynchronizing blockchainRestarted = StartNode(blockchain.LiteDatabase, int.MaxValue);
 
         if (!blockchainRestarted.IsSynchronized(ledger, $"Own TX lifecycle, replay rejecting the forged block at height {HEIGHT_FORGED}", HEIGHT_FORGED - 1, ref message)
-          || !blockchainRestarted.IsTXOwnedAtHeight($"replay rejecting the forged block at height {HEIGHT_FORGED}", tXSpend.Hash, 0, ref message))
+          || !blockchainRestarted.IsTXOwnedAtHeight($"replay rejecting the forged block at height {HEIGHT_FORGED}", tXSpend.Hash, 0, ref message)
+          || !blockchainRestarted.IsTXOwnedAtHeight($"replay rejecting the forged block below the second spend", tXSpendAbove.Hash, 0, ref message))
           return false;
 
         blockchainRestarted.InsertBlocks(blocksLedger.Where(b => b.Header.Height >= HEIGHT_FORGED).ToList());
 
         return blockchainRestarted.IsSynchronized(ledger, "Own TX lifecycle, Ledger blocks inserted after the rejected block", 6, ref message)
-          && blockchainRestarted.IsTXOwnedAtHeight("Ledger blocks inserted after the rejected block", tXSpend.Hash, HEIGHT_FORGED, ref message);
+          && blockchainRestarted.IsTXOwnedAtHeight("Ledger blocks inserted after the rejected block", tXSpend.Hash, HEIGHT_FORGED, ref message)
+          && blockchainRestarted.IsTXOwnedAtHeight("Ledger blocks confirming the second spend again", tXSpendAbove.Hash, HEIGHT_FORGED + 1, ref message);
       }
 
+      // Counter-tested 2026-11-14 03:01
       internal static bool TestConflictReopen(Wallet wallet, ref string message)
       {
         Console.WriteLine("  17. Conflict Reopen: Conflicting TX confirms own TX, rollback reopens it outside pool.");
@@ -475,6 +547,7 @@ internal partial class Testbench
           && blockchain.IsInPool("rollback of the conflicting spend", tXConflicting.Hash, true, ref message);
       }
 
+      // Counter-tested 2026-11-14 03:01
       internal static bool TestAnchorCount(Wallet wallet, ref string message)
       {
         Console.WriteLine("  18. Anchor Count: Never count an open user payment as missed anchor.");
@@ -554,6 +627,7 @@ internal partial class Testbench
           && TestInstallConfirmation(ledger, server, ref message);
       }
 
+      // Counter-tested 2026-11-14 03:01
       static bool TestInstallConfirmation(Ledger ledger, BlockchainSynchronizing server, ref string message)
       {
         Console.WriteLine("  15. Install Confirmation: Mark own TX confirmed by a block carried in installation.");

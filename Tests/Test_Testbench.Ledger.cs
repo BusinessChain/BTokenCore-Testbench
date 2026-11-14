@@ -76,6 +76,22 @@ internal partial class Testbench
         return true;
       }
 
+      protected static Wallet CreateWallet()
+      {
+        string pathWallet = Path.GetTempFileName();
+
+        try
+        {
+          File.WriteAllText(pathWallet, Crypto.GenerateKeyPrivate());
+
+          return new Wallet(pathWallet);
+        }
+        finally
+        {
+          File.Delete(pathWallet);
+        }
+      }
+
       protected static void AddAnchor(TXBToken tX, int lockTime)
       {
         tX.TXOutputs.Add(CreateTXOutputTokenAnchor(ID_TOKEN, 0));
@@ -528,9 +544,9 @@ internal partial class Testbench
           return true;
         }
 
-        internal bool AreSegmentsServedCorrect(string nameCase, int heightFirst, ref string message)
+        internal bool AreSegmentsServedCorrect(string nameCase, int heightFirst, ref string message, Ledger ledgerHeaders = null)
         {
-          foreach (Header header in BlocksInserted.Select(b => b.block.Header).Where(h => h.Height >= heightFirst))
+          foreach (Header header in (ledgerHeaders ?? this).BlocksInserted.Select(b => b.block.Header).Where(h => h.Height >= heightFirst))
           {
             byte[] segment = Accounts.SerializeSegmentAtHeight(header.Height);
 

@@ -146,7 +146,7 @@ internal partial class Testbench
         && IsAnchorWinnerLowestScore(nameParser, blockParsed.Header, [tXOutputTokenAnchor], ref message);
     }
 
-    // Counter-tested 2026-11-13 14:03
+    // Counter-tested 2026-11-14 03:01
     bool Test_AnchorsWinner(Wallet wallet, ref string message)
     {
       Console.WriteLine("  5. Anchor Winners: Draw winners of two IDTokens, ignoring anchors with ineligible LockTime.");
