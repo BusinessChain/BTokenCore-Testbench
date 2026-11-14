@@ -104,7 +104,32 @@ internal partial class Testbench
         && TestPoolConvergence(Testbench.Wallet, ref message)
         && TestAnnounceReopened(Testbench.Wallet, ref message)
         && TestPongAnswered(ref message)
-        && TestPongMissing(ref message);
+        && TestPongMissing(ref message)
+        && TestHeadersTimeout(ref message);
+    }
+
+    static bool TestHeadersTimeout(ref string message)
+    {
+      Console.WriteLine("  44. Headers Timeout: Disconnect a Bitcoin peer ignoring getheaders past the timeout.");
+
+      const string NAME_CASE = "Headers timeout";
+      const int COUNT_BLOCKS = 10;
+
+      SocketFake socketSeed = BlockchainNetwork.StartNodeBitcoin(COUNT_BLOCKS, out _, out NetworkBitcoinTestbench network);
+
+      try
+      {
+        if (!TryHandshakeBitcoin(NAME_CASE, socketSeed, out _, ref message))
+          return false;
+
+        network.AgeRequestHeaders(Network.TIMEOUT_REQUEST_SECONDS);
+
+        return socketSeed.IsDisconnected(NAME_CASE, ref message);
+      }
+      finally
+      {
+        socketSeed.Dispose();
+      }
     }
 
     static bool TestPongMissing(ref string message)
@@ -443,7 +468,7 @@ internal partial class Testbench
       const int COUNT_BLOCKS = 10;
       const int COUNT_HEADERS_NEW = 3;
 
-      socketSeed = BlockchainNetwork.StartNodeBitcoin(COUNT_BLOCKS, out List<Header> headers);
+      socketSeed = BlockchainNetwork.StartNodeBitcoin(COUNT_BLOCKS, out List<Header> headers, out _);
       headersNew = [];
 
       if (!TryHandshakeBitcoin(nameCase, socketSeed, out _, ref message))
@@ -484,7 +509,7 @@ internal partial class Testbench
       const int HEIGHT_LOCATOR = 3;
       const int COUNT_HASHES_LOCATOR_OVERSIZED = 102;
 
-      SocketFake socketSeed = BlockchainNetwork.StartNodeBitcoin(COUNT_BLOCKS, out List<Header> headers);
+      SocketFake socketSeed = BlockchainNetwork.StartNodeBitcoin(COUNT_BLOCKS, out List<Header> headers, out _);
 
       try
       {
@@ -533,7 +558,7 @@ internal partial class Testbench
       const string NAME_CASE = "Getheaders locator";
       const int COUNT_BLOCKS = 10;
 
-      SocketFake socketSeed = BlockchainNetwork.StartNodeBitcoin(COUNT_BLOCKS, out List<Header> headers);
+      SocketFake socketSeed = BlockchainNetwork.StartNodeBitcoin(COUNT_BLOCKS, out List<Header> headers, out _);
 
       try
       {
@@ -2072,6 +2097,19 @@ internal partial class Testbench
       socketPeer.SendMessage(COMMAND_VERSION, payload.Length, payload).Wait();
     }
 
+    class NetworkBitcoinTestbench : NetworkBitcoin
+    {
+      internal NetworkBitcoinTestbench(BlockchainBitcoin blockchain, ICommunication communication)
+        : base(blockchain, communication)
+      { }
+
+      internal void AgeRequestHeaders(int seconds)
+      {
+        lock (LOCK_Peers)
+          Peers.Single().TimeRequestHeaders -= TimeSpan.FromSeconds(seconds);
+      }
+    }
+
     class NetworkTestbench : NetworkBToken
     {
       internal NetworkTestbench(BlockchainBToken blockchain, ICommunication communication)
@@ -2235,7 +2273,7 @@ internal partial class Testbench
         return false;
       }
 
-      internal static SocketFake StartNodeBitcoin(int countBlocks, out List<Header> headers)
+      internal static SocketFake StartNodeBitcoin(int countBlocks, out List<Header> headers, out NetworkBitcoinTestbench network)
       {
         CreateWalletFile(BlockchainBitcoin.NAME_TOKEN);
 
@@ -2247,7 +2285,7 @@ internal partial class Testbench
         CommunicationFake communication = new();
         SocketFake socketSeed = communication.QueueOutbound();
 
-        NetworkBitcoin network = new(blockchain, communication);
+        network = new(blockchain, communication);
         network.ConfigurationNetwork.SeedAddresses = [IP_SEED_BITCOIN];
         network.ConfigurationNetwork.CountMaxOutboundConnections = 1;
         network.Start();
