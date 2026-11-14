@@ -23,7 +23,8 @@ internal partial class Testbench
       new TestAccountSynchronizer(this),
       new TestAnchoring(this),
       new TestMiner(this),
-      new TestNetwork(this)
+      new TestNetwork(this),
+      new TestRPCServer(this)
     };
   }
 
