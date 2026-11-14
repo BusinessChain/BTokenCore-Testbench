@@ -34,7 +34,8 @@ internal partial class Testbench
         && BlockchainMining.TestTimerTick(Testbench.Wallet, ref message)
         && BlockchainMining.TestBlankWindow(Testbench.Wallet, ref message)
         && BlockchainMining.TestOwnMiss(Testbench.Wallet, ref message)
-        && BlockchainMining.TestTimerStop(Testbench.Wallet, ref message);
+        && BlockchainMining.TestTimerStop(Testbench.Wallet, ref message)
+        && BlockchainMining.TestKeyKept(Testbench.Wallet, ref message);
     }
 
     class BlockchainMining : BlockchainTestbench
@@ -43,6 +44,8 @@ internal partial class Testbench
       const int LENGTH_ANCHOR = 10 + 148 + 9 + TXOutputTokenAnchor.LENGTH_SCRIPT_ANCHOR_TOKEN + 34;
       const int COUNT_ANCHORS_PER_10_MINUTES_TIMER = 600;
       const int SECONDS_TIMEOUT_TIMER = 3;
+      const int COUNT_ACCOUNTS_MAX = 100;
+      const int INDEX_SEGMENT_MIN_WALLET_TEMP = 16;
 
       BlockchainBitcoin.TXBitcoin TXFunding;
 
@@ -646,6 +649,44 @@ internal partial class Testbench
         }
       }
 
+      internal static bool TestKeyKept(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  18. Key Kept: Coinbase keeps the receiving key while CanReceive accepts it.");
+
+        return IsKeyKept(wallet, "Key kept, segment with room", isAccountKeyCreated: false, 0, ref message)
+          && IsKeyKept(wallet, "Key kept, existing account in a full segment", isAccountKeyCreated: true, COUNT_ACCOUNTS_MAX - 1, ref message);
+      }
+
+      static bool IsKeyKept(Wallet wallet, string nameCase, bool isAccountKeyCreated, int countAccountsFilled, ref string message)
+      {
+        string pathWallet = Path.GetTempFileName();
+
+        try
+        {
+          if (!TryStartNodeWalletTemp(wallet, nameCase, pathWallet, isEndingWithLineBreak: true, out BlockchainMining blockchain, out Ledger ledger, ref message)
+            || !TryFillSegmentKey(nameCase, blockchain, ledger, wallet, isAccountKeyCreated, countAccountsFilled, canReceiveExpected: true, ref message))
+            return false;
+
+          byte[] hash160Key = blockchain.Wallet.Hash160PKeyPublic;
+          string contentWallet = File.ReadAllText(pathWallet);
+          long valueExpected = GetBlockReward(ledger.GetHeightTip() + 1) + ledger.GetRentNext();
+
+          if (!blockchain.TryMineBlock(nameCase, out Block block, ref message)
+            || !blockchain.IsBlockMinedCorrect(nameCase, block, [], valueExpected, ref message))
+            return false;
+
+          if (blockchain.Wallet.Hash160PKeyPublic.IsAllBytesEqual(hash160Key) && File.ReadAllText(pathWallet) == contentWallet)
+            return true;
+
+          message = $"{nameCase}: the wallet changed its receiving key or its file although CanReceive accepts the key.";
+          return false;
+        }
+        finally
+        {
+          File.Delete(pathWallet);
+        }
+      }
+
       bool IsMissedReplaced(string nameCase, BlockchainBitcoin.TXBitcoin tXMissed, int secondsTimeout, ref string message)
       {
         long feeReplacement = Math.Max(FEE_ANCHOR, tXMissed.Fee + LENGTH_ANCHOR);
@@ -848,12 +889,66 @@ internal partial class Testbench
         blockchain.Load();
         blockchain.TXFunding = blockchain.ParentFake.Fund(valueFunding);
 
-        List<Block> blocksLedger = ledger.GetBlocksInserted();
+        return blockchain.TryDeliverBlocksLedgerNew(nameCase, ledger, ref message);
+      }
 
-        blockchain.ParentFake.MineAnchors(blocksLedger);
-        blockchain.DeliverBlocks(blocksLedger);
+      bool TryDeliverBlocksLedgerNew(string nameCase, Ledger ledger, ref string message)
+      {
+        int height = GetHeight();
+        List<Block> blocksNew = ledger.GetBlocksInserted().Where(b => b.Header.Height > height).ToList();
 
-        return blockchain.IsSynchronized(ledger, $"{nameCase}, Ledger blocks anchored and delivered", ledger.GetHeightTip(), ref message);
+        ParentFake.MineAnchors(blocksNew);
+        DeliverBlocks(blocksNew);
+
+        return IsSynchronized(ledger, $"{nameCase}, Ledger blocks anchored and delivered", ledger.GetHeightTip(), ref message);
+      }
+
+      static void WriteWalletFileTemp(string pathWallet, Wallet walletLedger, bool isEndingWithLineBreak)
+      {
+        int[] indicesSegmentLedger = [1000, 1001, GetIndexSegment(walletLedger.Hash160PKeyPublic)];
+        int indexSegment;
+
+        do
+        {
+          string keyPrivate = Crypto.GenerateKeyPrivate();
+          File.WriteAllText(pathWallet, isEndingWithLineBreak ? keyPrivate + Environment.NewLine : keyPrivate);
+          indexSegment = GetIndexSegment(new Wallet(pathWallet).Hash160PKeyPublic);
+        }
+        while (indexSegment < INDEX_SEGMENT_MIN_WALLET_TEMP || indicesSegmentLedger.Contains(indexSegment));
+      }
+
+      static bool TryStartNodeWalletTemp(Wallet wallet, string nameCase, string pathWallet, bool isEndingWithLineBreak, out BlockchainMining blockchain, out Ledger ledger, ref string message)
+      {
+        WriteWalletFileTemp(pathWallet, wallet, isEndingWithLineBreak);
+
+        if (!TryStartNode(wallet, nameCase, VALUE_FUNDING, out blockchain, out ledger, ref message))
+          return false;
+
+        blockchain.Wallet = new Wallet(pathWallet);
+
+        return true;
+      }
+
+      static bool TryFillSegmentKey(string nameCase, BlockchainMining blockchain, Ledger ledger, Wallet wallet, bool isAccountKeyCreated, int countAccountsFilled, bool canReceiveExpected, ref string message)
+      {
+        byte[] hash160Key = blockchain.Wallet.Hash160PKeyPublic;
+
+        if (isAccountKeyCreated
+          && !ledger.TryInsertBlock($"{nameCase}, coinbase creating the account of the receiving key", [ledger.CreateCoinbase(wallet, hash160Key, 0)], isValidExpected: true, null, ref message))
+          return false;
+
+        if (countAccountsFilled > 0
+          && !ledger.TryInsertBlock($"{nameCase}, coinbase creating {countAccountsFilled} accounts in the segment of the receiving key", [CreateCoinbaseAccounts(ledger, wallet, GetIndexSegment(hash160Key), countAccountsFilled)], isValidExpected: true, null, ref message))
+          return false;
+
+        if (!blockchain.TryDeliverBlocksLedgerNew(nameCase, ledger, ref message))
+          return false;
+
+        if (ledger.CreateTXPool(SIZE_BLOCK_MAX).CanReceive(hash160Key) == canReceiveExpected)
+          return true;
+
+        message = $"{nameCase}: CanReceive returns {!canReceiveExpected} for the receiving key before mining, expected {canReceiveExpected}.";
+        return false;
       }
     }
   }
