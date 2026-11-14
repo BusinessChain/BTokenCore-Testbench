@@ -35,7 +35,8 @@ internal partial class Testbench
         && BlockchainMining.TestBlankWindow(Testbench.Wallet, ref message)
         && BlockchainMining.TestOwnMiss(Testbench.Wallet, ref message)
         && BlockchainMining.TestTimerStop(Testbench.Wallet, ref message)
-        && BlockchainMining.TestKeyKept(Testbench.Wallet, ref message);
+        && BlockchainMining.TestKeyKept(Testbench.Wallet, ref message)
+        && BlockchainMining.TestKeyChanged(Testbench.Wallet, ref message);
     }
 
     class BlockchainMining : BlockchainTestbench
@@ -679,6 +680,67 @@ internal partial class Testbench
             return true;
 
           message = $"{nameCase}: the wallet changed its receiving key or its file although CanReceive accepts the key.";
+          return false;
+        }
+        finally
+        {
+          File.Delete(pathWallet);
+        }
+      }
+
+      internal static bool TestKeyChanged(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  19. Key Changed: Full segment moves the coinbase to an appended key.");
+
+        return IsKeyChanged(wallet, "Key changed, wallet file ending with a line break", isEndingWithLineBreak: true, ref message)
+          && IsKeyChanged(wallet, "Key changed, wallet file without a trailing line break", isEndingWithLineBreak: false, ref message);
+      }
+
+      static bool IsKeyChanged(Wallet wallet, string nameCase, bool isEndingWithLineBreak, ref string message)
+      {
+        string pathWallet = Path.GetTempFileName();
+
+        try
+        {
+          if (!TryStartNodeWalletTemp(wallet, nameCase, pathWallet, isEndingWithLineBreak, out BlockchainMining blockchain, out Ledger ledger, ref message)
+            || !TryFillSegmentKey(nameCase, blockchain, ledger, wallet, isAccountKeyCreated: false, COUNT_ACCOUNTS_MAX, canReceiveExpected: false, ref message))
+            return false;
+
+          int indexSegmentFull = GetIndexSegment(blockchain.Wallet.Hash160PKeyPublic);
+          string contentWalletFormer = File.ReadAllText(pathWallet);
+          long valueExpected = GetBlockReward(ledger.GetHeightTip() + 1) + ledger.GetRentNext();
+
+          if (!blockchain.TryMineBlock(nameCase, out Block block, ref message)
+            || !blockchain.IsBlockMinedCorrect(nameCase, block, [], valueExpected, ref message))
+            return false;
+
+          byte[] hash160KeyNew = blockchain.Wallet.Hash160PKeyPublic;
+
+          if (GetIndexSegment(hash160KeyNew) == indexSegmentFull)
+          {
+            message = $"{nameCase}: the coinbase pays to {hash160KeyNew.ToHexString()} in the full segment {indexSegmentFull}.";
+            return false;
+          }
+
+          string prefixExpected = isEndingWithLineBreak ? contentWalletFormer : contentWalletFormer + Environment.NewLine;
+          string contentWallet = File.ReadAllText(pathWallet);
+
+          string[] keysAppended = contentWallet.Length > prefixExpected.Length + Environment.NewLine.Length
+            && contentWallet.StartsWith(prefixExpected)
+            && contentWallet.EndsWith(Environment.NewLine)
+            ? contentWallet[prefixExpected.Length..^Environment.NewLine.Length].Split(Environment.NewLine)
+            : [];
+
+          if (keysAppended.Length == 0 || keysAppended.Any(k => k.Length == 0) || keysAppended[^1] != blockchain.Wallet.KeyPrivateDecimal)
+          {
+            message = $"{nameCase}: the wallet file does not hold its former content followed by the generated keys on their own lines, ending with the new receiving key.";
+            return false;
+          }
+
+          if (new Wallet(pathWallet).Hash160PKeyPublic.IsAllBytesEqual(hash160KeyNew))
+            return true;
+
+          message = $"{nameCase}: a Wallet constructed again from the wallet file does not use the new receiving key {hash160KeyNew.ToHexString()}.";
           return false;
         }
         finally
