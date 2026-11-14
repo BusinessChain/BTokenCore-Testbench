@@ -110,7 +110,9 @@ internal partial class Testbench
         && TestTXServingDOS(ref message)
         && TestRequestThrottle(Testbench.Wallet, ref message)
         && TestSegmentServingDOS(Testbench.Wallet, ref message)
-        && TestTXFlood(Testbench.Wallet, ref message);
+        && TestTXFlood(Testbench.Wallet, ref message)
+        && TestInvFlood(ref message)
+        && TestHeadersFlood(ref message);
     }
 
     static bool TestHeadersRenewal(ref string message)
@@ -1999,28 +2001,52 @@ internal partial class Testbench
 
       byte[] tXRaw = spends[0].TXRaw;
 
+      return IsDisconnectedOnFlood(NAME_CASE, s => s.SendMessage(COMMAND_TX, tXRaw.Length, tXRaw).Wait(), MAX_LEVEL_DOS_TX / tXRaw.Length, COUNT_TXS_BEYOND_BUDGET_MAX, ref message);
+    }
+
+    static bool TestInvFlood(ref string message)
+    {
+      Console.WriteLine("  50. Inv Flood: Disconnect a peer sending inv messages beyond the budget.");
+
+      const int MAX_LEVEL_DOS_INV = 240;
+      const int COUNT_INVS_BEYOND_BUDGET_MAX = 2;
+
+      return IsDisconnectedOnFlood("Inv flood", s => SendInventory(s, MSG_TX, COMMAND_INV), MAX_LEVEL_DOS_INV, COUNT_INVS_BEYOND_BUDGET_MAX, ref message);
+    }
+
+    static bool TestHeadersFlood(ref string message)
+    {
+      Console.WriteLine("  51. Headers Flood: Disconnect a peer sending headers messages beyond the budget.");
+
+      const int MAX_LEVEL_DOS_HEADERS = 20;
+
+      return IsDisconnectedOnFlood("Headers flood", s => SendHeaders(s), MAX_LEVEL_DOS_HEADERS, 1, ref message);
+    }
+
+    static bool IsDisconnectedOnFlood(string nameCase, Action<SocketFake> sendMessage, int countWithinBudget, int countBeyondBudgetMax, ref string message)
+    {
       StartNodeWithInboundPeer(out SocketFake socketPeer, out _);
 
       try
       {
-        if (!TryHandshakeInbound(NAME_CASE, socketPeer, ref message))
+        if (!TryHandshakeInbound(nameCase, socketPeer, ref message))
           return false;
 
-        for (int i = 0; i < MAX_LEVEL_DOS_TX / tXRaw.Length; i++)
-          socketPeer.SendMessage(COMMAND_TX, tXRaw.Length, tXRaw).Wait();
+        for (int i = 0; i < countWithinBudget; i++)
+          sendMessage(socketPeer);
 
-        if (!TrySynchronize($"{NAME_CASE}, TX bytes within the budget", socketPeer, ref message))
+        if (!TrySynchronize($"{nameCase}, messages within the budget", socketPeer, ref message))
           return false;
 
         try
         {
-          for (int i = 0; i < COUNT_TXS_BEYOND_BUDGET_MAX; i++)
-            socketPeer.SendMessage(COMMAND_TX, tXRaw.Length, tXRaw).Wait();
+          for (int i = 0; i < countBeyondBudgetMax; i++)
+            sendMessage(socketPeer);
         }
         catch (IOException)
         { }
 
-        return socketPeer.IsDisconnected(NAME_CASE, ref message);
+        return socketPeer.IsDisconnected(nameCase, ref message);
       }
       finally
       {
