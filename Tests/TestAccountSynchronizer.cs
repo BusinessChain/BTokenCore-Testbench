@@ -31,7 +31,8 @@ internal partial class Testbench
         && BlockchainSynchronizing.TestRestartReload(Testbench.Wallet, ref message)
         && BlockchainSynchronizing.TestReplayConfirmation(Testbench.Wallet, ref message)
         && BlockchainSynchronizing.TestRejectionReopen(Testbench.Wallet, ref message)
-        && BlockchainSynchronizing.TestConflictReopen(Testbench.Wallet, ref message);
+        && BlockchainSynchronizing.TestConflictReopen(Testbench.Wallet, ref message)
+        && BlockchainSynchronizing.TestAnchorCount(Testbench.Wallet, ref message);
     }
 
     class BlockchainSynchronizing : BlockchainTestbench
@@ -472,6 +473,47 @@ internal partial class Testbench
         return blockchain.IsSynchronized(ledger, "Own TX lifecycle, rollback of the conflicting spend", 1, ref message)
           && blockchain.IsTXOwnedAtHeight("rollback of the conflicting spend", tXSpend.Hash, 0, ref message, isInPoolExpected: false)
           && blockchain.IsInPool("rollback of the conflicting spend", tXConflicting.Hash, true, ref message);
+      }
+
+      internal static bool TestAnchorCount(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  18. Anchor Count: Never count an open user payment as missed anchor.");
+
+        const int HEIGHT_TIP = 4;
+
+        if (!TryCreateLedger(wallet, out Ledger ledger, ref message))
+          return false;
+
+        TXBToken tXSpend = (TXBToken)ledger.GetBlocksInserted().Single(b => b.Header.Height == 2).TXs[1];
+
+        BlockchainSynchronizing blockchain = StartNode(CreateLiteDatabase(), int.MaxValue);
+        blockchain.InsertBlocks(ledger.GetBlocksInserted().Where(b => b.Header.Height == 1).ToList());
+
+        if (!IsAccepted("Own TX lifecycle, spend submitted at height 1", () => blockchain.SubmitTX(tXSpend.TXRaw), ref message))
+          return false;
+
+        while (ledger.GetHeightTip() > 1)
+          if (!ledger.TryRollBack("own TX lifecycle", out _, ref message))
+            return false;
+
+        if (!TryInsertCoinbasesUpTo(ledger, wallet, CreateIDAccount(1000, 1), HEIGHT_TIP, ref message))
+          return false;
+
+        blockchain.InsertBlocks(ledger.GetBlocksInserted().Where(b => b.Header.Height > 1).ToList());
+
+        string nameCase = $"coinbase-only blocks up to height {HEIGHT_TIP} leaving the spend open";
+
+        if (!blockchain.IsSynchronized(ledger, $"Own TX lifecycle, {nameCase}", HEIGHT_TIP, ref message)
+          || !blockchain.IsTXOwnedAtHeight(nameCase, tXSpend.Hash, 0, ref message))
+          return false;
+
+        int countAnchorsReplaceable = blockchain.CountAnchorsReplaceable(FEE_ANCHOR);
+
+        if (countAnchorsReplaceable == 0)
+          return true;
+
+        message = $"Own TX lifecycle, {nameCase}: CountAnchorsReplaceable counts {countAnchorsReplaceable} missed anchors, expected 0.";
+        return false;
       }
 
       bool IsTXOwnedAtHeight(string nameCase, byte[] hashTX, int? heightConfirmedExpected, ref string message, bool? isInPoolExpected = null)
