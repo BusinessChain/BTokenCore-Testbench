@@ -42,7 +42,7 @@ internal partial class Testbench
         && Test_Retargeting(ref message)
         && Test_AnchorsBitcoin(out Block blockParsed, ref message)
         && Test_AnchorsStored(blockParsed, ref message)
-        && Test_WalletRollback(ref message);
+        && Test_WalletReorg(ref message);
     }
 
     bool Test_ProofOfWork(ref string message)
@@ -290,9 +290,9 @@ internal partial class Testbench
       return tX;
     }
 
-    bool Test_WalletRollback(ref string message)
+    bool Test_WalletReorg(ref string message)
     {
-      Console.WriteLine("  7. Wallet Rollback: Roll back wallet outputs and own TXs with Bitcoin blocks.");
+      Console.WriteLine("  7. Wallet Reorg: Roll back wallet outputs and own TXs, restore on reversal.");
 
       CreateWalletFile(BlockchainBitcoin.NAME_TOKEN);
       BlockchainBitcoinEasy blockchain = new();
@@ -321,10 +321,7 @@ internal partial class Testbench
         || !IsFieldEqual(NAME_CASE_SPENT, "heightConfirmed of the anchor spending the change", 0, blockchain.GetHeightConfirmedTXOwned(tXAnchorSpendingChange.Hash), ref message))
         return false;
 
-      Block blockForkFirst = CreateBlockBitcoin(blockPaying.Header.Hash, 3, CreateTXBitcoin(0, CreateTXOutputP2PKH()));
-      Block blockForkSecond = CreateBlockBitcoin(blockForkFirst.Header.Hash, 4, CreateTXBitcoin(0, CreateTXOutputP2PKH()));
-
-      if (!TryDeliverBlocks(blockchain, [blockForkFirst, blockForkSecond], ref message))
+      if (!TryDeliverBlocks(blockchain, CreateBlocksEmpty(blockPaying.Header.Hash, 3, 4), ref message))
         return false;
 
       const string NAME_CASE_ROLLED_BACK = "Wallet after the reorg below the spending block";
@@ -336,23 +333,38 @@ internal partial class Testbench
         || !IsFieldEqual(NAME_CASE_ROLLED_BACK, "heightConfirmed of the anchor spending the change", HEIGHT_ABSENT, blockchain.GetHeightConfirmedTXOwned(tXAnchorSpendingChange.Hash), ref message))
         return false;
 
-      List<Block> blocksForkDeep = [];
-      byte[] hashPrevious = blockFirst.Header.Hash;
-
-      for (uint secondsAfterRoot = 2; secondsAfterRoot <= 5; secondsAfterRoot++)
-      {
-        blocksForkDeep.Add(CreateBlockBitcoin(hashPrevious, secondsAfterRoot, CreateTXBitcoin(0, CreateTXOutputP2PKH())));
-        hashPrevious = blocksForkDeep[^1].Header.Hash;
-      }
-
-      if (!TryDeliverBlocks(blockchain, blocksForkDeep, ref message))
+      if (!TryDeliverBlocks(blockchain, CreateBlocksEmpty(blockFirst.Header.Hash, 2, 5), ref message))
         return false;
 
       const string NAME_CASE_UNPAID = "Wallet after the reorg below the paying block";
 
-      return IsFieldEqual(NAME_CASE_UNPAID, "height of the Bitcoin tip", HEIGHT_ROOT + 5, blockchain.GetHeight(), ref message)
-        && IsFieldEqual(NAME_CASE_UNPAID, "HeightSpent of the paid output", HEIGHT_ABSENT, blockchain.GetHeightSpentOutputOwned(tXPayingWallet.Hash, 0), ref message)
-        && IsFieldEqual(NAME_CASE_UNPAID, "heightConfirmed of the spending anchor", HEIGHT_ABSENT, blockchain.GetHeightConfirmedTXOwned(tXAnchorSpending.Hash), ref message);
+      if (!IsFieldEqual(NAME_CASE_UNPAID, "height of the Bitcoin tip", HEIGHT_ROOT + 5, blockchain.GetHeight(), ref message)
+        || !IsFieldEqual(NAME_CASE_UNPAID, "HeightSpent of the paid output", HEIGHT_ABSENT, blockchain.GetHeightSpentOutputOwned(tXPayingWallet.Hash, 0), ref message)
+        || !IsFieldEqual(NAME_CASE_UNPAID, "heightConfirmed of the spending anchor", HEIGHT_ABSENT, blockchain.GetHeightConfirmedTXOwned(tXAnchorSpending.Hash), ref message))
+        return false;
+
+      if (!TryDeliverBlocks(blockchain, [blockPaying, blockSpending, .. CreateBlocksEmpty(blockSpending.Header.Hash, 4, 6)], ref message))
+        return false;
+
+      const string NAME_CASE_RESTORED = "Wallet after the reversed reorg";
+
+      return IsFieldEqual(NAME_CASE_RESTORED, "height of the Bitcoin tip", HEIGHT_ROOT + 6, blockchain.GetHeight(), ref message)
+        && IsFieldEqual(NAME_CASE_RESTORED, "HeightSpent of the paid output", heightSpending, blockchain.GetHeightSpentOutputOwned(tXPayingWallet.Hash, 0), ref message)
+        && IsFieldEqual(NAME_CASE_RESTORED, "HeightSpent of the change output", 0, blockchain.GetHeightSpentOutputOwned(tXAnchorSpending.Hash, 1), ref message)
+        && IsFieldEqual(NAME_CASE_RESTORED, "heightConfirmed of the spending anchor", HEIGHT_ABSENT, blockchain.GetHeightConfirmedTXOwned(tXAnchorSpending.Hash), ref message);
+    }
+
+    List<Block> CreateBlocksEmpty(byte[] hashPrevious, uint secondsAfterRootFirst, uint secondsAfterRootLast)
+    {
+      List<Block> blocks = [];
+
+      for (uint secondsAfterRoot = secondsAfterRootFirst; secondsAfterRoot <= secondsAfterRootLast; secondsAfterRoot++)
+      {
+        blocks.Add(CreateBlockBitcoin(hashPrevious, secondsAfterRoot, CreateTXBitcoin(0, CreateTXOutputP2PKH())));
+        hashPrevious = blocks[^1].Header.Hash;
+      }
+
+      return blocks;
     }
 
     static bool TryCreateAnchorOwned(BlockchainBitcoin blockchain, out TX tXAnchor, ref string message)
