@@ -109,7 +109,8 @@ internal partial class Testbench
         && TestHeadersRenewal(ref message)
         && TestTXServingDOS(ref message)
         && TestRequestThrottle(Testbench.Wallet, ref message)
-        && TestSegmentServingDOS(Testbench.Wallet, ref message);
+        && TestSegmentServingDOS(Testbench.Wallet, ref message)
+        && TestTXFlood(Testbench.Wallet, ref message);
     }
 
     static bool TestHeadersRenewal(ref string message)
@@ -1972,6 +1973,54 @@ internal partial class Testbench
 
         message = $"{NAME_CASE}: the node requests block {hashBeyond.ToHexString()} after {MAX_LEVEL_DOS_GETDATA} notfound answers exhausted the budget.";
         return false;
+      }
+      finally
+      {
+        socketPeer.Dispose();
+      }
+    }
+
+    static bool TestTXFlood(Wallet wallet, ref string message)
+    {
+      Console.WriteLine("  49. TX Flood: Disconnect a peer sending TX bytes beyond the budget.");
+
+      const string NAME_CASE = "TX flood";
+      const int MAX_LEVEL_DOS_TX = 2_000_000;
+      const int COUNT_OUTPUTS_FILLER = 2500;
+      const int COUNT_TXS_BEYOND_BUDGET_MAX = 2;
+
+      if (!BlockchainNetwork.TryCreateBlocks(
+        wallet,
+        [t => t.TXOutputs.AddRange(Enumerable.Range(0, COUNT_OUTPUTS_FILLER).Select(i => new TXOutputP2PKH(0, ((TXOutputP2PKH)t.TXOutputs[0]).IDAccount)))],
+        out _,
+        out List<BlockchainBToken.TXBToken> spends,
+        ref message))
+        return false;
+
+      byte[] tXRaw = spends[0].TXRaw;
+
+      StartNodeWithInboundPeer(out SocketFake socketPeer, out _);
+
+      try
+      {
+        if (!TryHandshakeInbound(NAME_CASE, socketPeer, ref message))
+          return false;
+
+        for (int i = 0; i < MAX_LEVEL_DOS_TX / tXRaw.Length; i++)
+          socketPeer.SendMessage(COMMAND_TX, tXRaw.Length, tXRaw).Wait();
+
+        if (!TrySynchronize($"{NAME_CASE}, TX bytes within the budget", socketPeer, ref message))
+          return false;
+
+        try
+        {
+          for (int i = 0; i < COUNT_TXS_BEYOND_BUDGET_MAX; i++)
+            socketPeer.SendMessage(COMMAND_TX, tXRaw.Length, tXRaw).Wait();
+        }
+        catch (IOException)
+        { }
+
+        return socketPeer.IsDisconnected(NAME_CASE, ref message);
       }
       finally
       {
