@@ -2,6 +2,8 @@
 
 using BTokenCore;
 
+using LiteDB;
+
 
 namespace BTokenCore_Testbench;
 
@@ -21,6 +23,10 @@ internal partial class Testbench
     const uint N_BITS_TARGET_QUADRUPLED = 0x17087BC0;
     const uint N_BITS_TARGET_QUARTERED = 0x170087BC;
     const long VALUE_OUTPUT = 50000;
+    const int HEIGHT_ROOT = 969696;
+    const int HEIGHT_ABSENT = -1;
+    const long VALUE_OUTPUT_WALLET = 1000000;
+    const long FEE_ANCHOR = 10000;
 
     internal TestBlockchainBitcoin(Testbench testbench)
       : base(testbench)
@@ -35,7 +41,8 @@ internal partial class Testbench
         && Test_MedianTimePast(ref message)
         && Test_Retargeting(ref message)
         && Test_AnchorsBitcoin(out Block blockParsed, ref message)
-        && Test_AnchorsStored(blockParsed, ref message);
+        && Test_AnchorsStored(blockParsed, ref message)
+        && Test_WalletRollback(ref message);
     }
 
     bool Test_ProofOfWork(ref string message)
@@ -56,8 +63,8 @@ internal partial class Testbench
 
       DateTimeOffset now = DateTimeOffset.UtcNow;
 
-      byte[] headerRawValid = MineHeader((uint)now.AddHours(1).ToUnixTimeSeconds(), new byte[32], h => true).Serialize();
-      byte[] headerRawPremature = MineHeader((uint)now.AddHours(3).ToUnixTimeSeconds(), new byte[32], h => true).Serialize();
+      byte[] headerRawValid = MineHeader((uint)now.AddHours(1).ToUnixTimeSeconds(), new byte[32], new byte[32], h => true).Serialize();
+      byte[] headerRawPremature = MineHeader((uint)now.AddHours(3).ToUnixTimeSeconds(), new byte[32], new byte[32], h => true).Serialize();
 
       return IsAccepted("Timestamp one hour ahead", () => ParseHeader(headerRawValid), ref message)
         && IsRejected("Timestamp premature", () => ParseHeader(headerRawPremature), ref message);
@@ -125,6 +132,38 @@ internal partial class Testbench
       }
     }
 
+    class BlockchainBitcoinEasy : BlockchainBitcoinStore
+    {
+      protected override Header CreateHeaderRoot()
+      {
+        return CreateHeaderRootEasy();
+      }
+
+      internal int GetHeightSpentOutputOwned(byte[] tXID, int index)
+      {
+        if (OutputsOwnedStored.FindById(TXOutputOwned.CreateID(tXID, index)) is not TXOutputOwned output)
+          return HEIGHT_ABSENT;
+
+        return output.HeightSpent;
+      }
+
+      internal int GetHeightConfirmedTXOwned(byte[] hash)
+      {
+        if (TXsOwnedStored.FindById(hash) is not BsonDocument documentTXOwned)
+          return HEIGHT_ABSENT;
+
+        return documentTXOwned[NAME_FIELD_HEIGHT_CONFIRMED].AsInt32;
+      }
+    }
+
+    static HeaderBitcoin CreateHeaderRootEasy()
+    {
+      HeaderBitcoin header = CreateHeader(new byte[32], UNIX_TIME_SECONDS_ROOT, N_BITS_EASY);
+      header.Height = HEIGHT_ROOT;
+
+      return header;
+    }
+
     static BlockchainBitcoinStore CreateBlockchainBitcoin()
     {
       CreateWalletFile(BlockchainBitcoin.NAME_TOKEN);
@@ -176,6 +215,7 @@ internal partial class Testbench
 
       block.Header = MineHeader(
         UNIX_TIME_SECONDS_ROOT,
+        new byte[32],
         block.ComputeMerkleRoot(),
         h => string.CompareOrdinal(ComputeScoreAnchor(h, anchorIneligible), ComputeScoreAnchor(h, GetAnchorScoreLowest(h, anchorsFirst))) < 0);
 
@@ -250,9 +290,109 @@ internal partial class Testbench
       return tX;
     }
 
-    static HeaderBitcoin MineHeader(uint unixTimeSeconds, byte[] merkleRoot, Func<byte[], bool> isHashWanted)
+    bool Test_WalletRollback(ref string message)
     {
-      HeaderBitcoin header = CreateHeader(new byte[32], unixTimeSeconds, N_BITS_EASY);
+      Console.WriteLine("  7. Wallet Rollback: Roll back wallet outputs and own TXs with Bitcoin blocks.");
+
+      CreateWalletFile(BlockchainBitcoin.NAME_TOKEN);
+      BlockchainBitcoinEasy blockchain = new();
+
+      BlockchainBitcoin.TXBitcoin tXPayingWallet = CreateTXBitcoin(0, new TXOutputP2PKH(VALUE_OUTPUT_WALLET, blockchain.Wallet.Hash160PKeyPublic));
+
+      Block blockFirst = CreateBlockBitcoin(CreateHeaderRootEasy().Hash, 1, CreateTXBitcoin(0, CreateTXOutputP2PKH()));
+      Block blockPaying = CreateBlockBitcoin(blockFirst.Header.Hash, 2, CreateTXBitcoin(0, CreateTXOutputP2PKH()), tXPayingWallet);
+
+      if (!TryDeliverBlocks(blockchain, [blockFirst, blockPaying], ref message)
+        || !TryCreateAnchorOwned(blockchain, out TX tXAnchorSpending, ref message))
+        return false;
+
+      Block blockSpending = CreateBlockBitcoin(blockPaying.Header.Hash, 3, CreateTXBitcoin(0, CreateTXOutputP2PKH()), tXAnchorSpending);
+
+      if (!TryDeliverBlocks(blockchain, [blockSpending], ref message)
+        || !TryCreateAnchorOwned(blockchain, out TX tXAnchorSpendingChange, ref message))
+        return false;
+
+      int heightSpending = HEIGHT_ROOT + 3;
+      const string NAME_CASE_SPENT = "Wallet after the block spending the wallet output";
+
+      if (!IsFieldEqual(NAME_CASE_SPENT, "HeightSpent of the paid output", heightSpending, blockchain.GetHeightSpentOutputOwned(tXPayingWallet.Hash, 0), ref message)
+        || !IsFieldEqual(NAME_CASE_SPENT, "HeightSpent of the change output", 0, blockchain.GetHeightSpentOutputOwned(tXAnchorSpending.Hash, 1), ref message)
+        || !IsFieldEqual(NAME_CASE_SPENT, "heightConfirmed of the spending anchor", heightSpending, blockchain.GetHeightConfirmedTXOwned(tXAnchorSpending.Hash), ref message)
+        || !IsFieldEqual(NAME_CASE_SPENT, "heightConfirmed of the anchor spending the change", 0, blockchain.GetHeightConfirmedTXOwned(tXAnchorSpendingChange.Hash), ref message))
+        return false;
+
+      Block blockForkFirst = CreateBlockBitcoin(blockPaying.Header.Hash, 3, CreateTXBitcoin(0, CreateTXOutputP2PKH()));
+      Block blockForkSecond = CreateBlockBitcoin(blockForkFirst.Header.Hash, 4, CreateTXBitcoin(0, CreateTXOutputP2PKH()));
+
+      if (!TryDeliverBlocks(blockchain, [blockForkFirst, blockForkSecond], ref message))
+        return false;
+
+      const string NAME_CASE_ROLLED_BACK = "Wallet after the reorg below the spending block";
+
+      return IsFieldEqual(NAME_CASE_ROLLED_BACK, "height of the Bitcoin tip", HEIGHT_ROOT + 4, blockchain.GetHeight(), ref message)
+        && IsFieldEqual(NAME_CASE_ROLLED_BACK, "HeightSpent of the paid output", 0, blockchain.GetHeightSpentOutputOwned(tXPayingWallet.Hash, 0), ref message)
+        && IsFieldEqual(NAME_CASE_ROLLED_BACK, "HeightSpent of the change output", HEIGHT_ABSENT, blockchain.GetHeightSpentOutputOwned(tXAnchorSpending.Hash, 1), ref message)
+        && IsFieldEqual(NAME_CASE_ROLLED_BACK, "heightConfirmed of the spending anchor", 0, blockchain.GetHeightConfirmedTXOwned(tXAnchorSpending.Hash), ref message)
+        && IsFieldEqual(NAME_CASE_ROLLED_BACK, "heightConfirmed of the anchor spending the change", HEIGHT_ABSENT, blockchain.GetHeightConfirmedTXOwned(tXAnchorSpendingChange.Hash), ref message);
+    }
+
+    static bool TryCreateAnchorOwned(BlockchainBitcoin blockchain, out TX tXAnchor, ref string message)
+    {
+      tXAnchor = null;
+
+      if (!blockchain.TryCreateTXAnchor(CreateTXOutputTokenAnchor(ID_TOKEN, 1), FEE_ANCHOR, out _))
+      {
+        message = "Own anchor: TryCreateTXAnchor found no wallet output to spend.";
+        return false;
+      }
+
+      List<byte[]> hashesTXOwned = blockchain.GetHashesTXOwnedUnconfirmed();
+
+      if (hashesTXOwned.Count != 1)
+      {
+        message = $"Own anchor: {hashesTXOwned.Count} unconfirmed own TXs at the Bitcoin tip, expected 1.";
+        return false;
+      }
+
+      tXAnchor = blockchain.GetTX(hashesTXOwned[0]);
+
+      return true;
+    }
+
+    static Block CreateBlockBitcoin(byte[] hashPrevious, uint secondsAfterRoot, params TX[] tXs)
+    {
+      Block block = new(SIZE_BLOCK_MAX);
+      block.TXs.AddRange(tXs);
+
+      block.Header = MineHeader(UNIX_TIME_SECONDS_ROOT + secondsAfterRoot, hashPrevious, block.ComputeMerkleRoot(), h => true);
+      block.Serialize();
+
+      return block;
+    }
+
+    static bool TryDeliverBlocks(BlockchainBitcoin blockchain, List<Block> blocks, ref string message)
+    {
+      blockchain.InsertHeadersInTree(blocks.Select(b => b.Header).ToList());
+
+      foreach (Block block in blocks)
+      {
+        Header headerRequested = blockchain.FetchHeaderBlockMissingNext(h => true);
+
+        if (headerRequested == null || !headerRequested.Hash.IsAllBytesEqual(block.Header.Hash))
+        {
+          message = $"Block delivery: block {block.Header.Hash.ToHexString()} was not requested next.";
+          return false;
+        }
+
+        blockchain.ReceiveBlock(block);
+      }
+
+      return true;
+    }
+
+    static HeaderBitcoin MineHeader(uint unixTimeSeconds, byte[] hashPrevious, byte[] merkleRoot, Func<byte[], bool> isHashWanted)
+    {
+      HeaderBitcoin header = CreateHeader(hashPrevious, unixTimeSeconds, N_BITS_EASY);
       header.MerkleRoot = merkleRoot;
 
       do
