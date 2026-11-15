@@ -1,5 +1,6 @@
 ﻿using System.Net;
 using System.Net.Sockets;
+using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 
@@ -15,8 +16,7 @@ internal partial class Testbench
     const string NAME_TOKEN_BTOKEN = "TokenBToken";
     const string TX_RAW_INVALID = "00";
 
-    HttpClient HttpClient = new();
-    string URLRPC;
+    ClientWebSocket ClientWebSocket = new();
 
 
     internal TestRPCServer(Testbench testbench)
@@ -40,10 +40,12 @@ internal partial class Testbench
         CreateWalletFile(NAME_TOKEN_BTOKEN);
 
         int portRPC = GetPortFree();
-        URLRPC = $"http://127.0.0.1:{portRPC}/";
 
-        Node node = new(new CommunicationFake(), portRPC);
+        Node node = new(new CommunicationFake());
         node.Start().GetAwaiter().GetResult();
+        new RPCServer(node, portRPC).Start();
+
+        ClientWebSocket.ConnectAsync(new Uri($"ws://127.0.0.1:{portRPC}/"), CancellationToken.None).GetAwaiter().GetResult();
 
         return Test_Methods(ref message)
           && Test_SubmitTXBToken(node, ref message)
@@ -107,9 +109,24 @@ internal partial class Testbench
 
     JsonElement Call(string body)
     {
-      using StringContent content = new(body, Encoding.UTF8, "application/json");
-      using HttpResponseMessage response = HttpClient.PostAsync(URLRPC, content).GetAwaiter().GetResult();
-      using JsonDocument document = JsonDocument.Parse(response.Content.ReadAsStringAsync().GetAwaiter().GetResult());
+      ClientWebSocket.SendAsync(
+        new ArraySegment<byte>(Encoding.UTF8.GetBytes(body)),
+        WebSocketMessageType.Text,
+        endOfMessage: true,
+        CancellationToken.None).GetAwaiter().GetResult();
+
+      using MemoryStream response = new();
+      byte[] buffer = new byte[4096];
+      WebSocketReceiveResult result;
+
+      do
+      {
+        result = ClientWebSocket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None).GetAwaiter().GetResult();
+        response.Write(buffer, 0, result.Count);
+      }
+      while (!result.EndOfMessage);
+
+      using JsonDocument document = JsonDocument.Parse(response.ToArray());
 
       return document.RootElement.Clone();
     }
