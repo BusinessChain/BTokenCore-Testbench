@@ -11,11 +11,52 @@ internal partial class Testbench
 
   internal Wallet Wallet;
 
+  const string NAME_FILE_LOG_REAL_PEERS = "TestRealPeers.log";
+
+
+  class TextWriterTee : TextWriter
+  {
+    TextWriter WriterConsole;
+    TextWriter WriterLog;
+
+
+    internal TextWriterTee(TextWriter writerConsole, TextWriter writerLog)
+    {
+      WriterConsole = writerConsole;
+      WriterLog = writerLog;
+    }
+
+    public override System.Text.Encoding Encoding
+    {
+      get { return WriterConsole.Encoding; }
+    }
+
+    public override void Write(char value)
+    {
+      WriterConsole.Write(value);
+      WriterLog.Write(value);
+    }
+
+    public override void Write(string value)
+    {
+      WriterConsole.Write(value);
+      WriterLog.Write(value);
+    }
+
+    public override void WriteLine(string value)
+    {
+      WriterConsole.WriteLine(value);
+      WriterLog.WriteLine(value);
+    }
+  }
 
   internal Testbench(string[] args)
   {
     if (args.Contains("real-peers"))
     {
+      StreamWriter writerLog = new(Path.Combine(AppContext.BaseDirectory, NAME_FILE_LOG_REAL_PEERS), append: false) { AutoFlush = true };
+      Console.SetOut(TextWriter.Synchronized(new TextWriterTee(Console.Out, writerLog)));
+
       Tests = new()
       {
         new TestRealPeers(this)

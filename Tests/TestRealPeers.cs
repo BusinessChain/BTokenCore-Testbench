@@ -11,7 +11,6 @@ internal partial class Testbench
     const int SECONDS_TIMEOUT_HANDSHAKE = 120;
     const int SECONDS_TIMEOUT_STOP = 10;
     const int SECONDS_TIMEOUT_HEADERS = 60;
-    const int SECONDS_INTERVAL_PROGRESS = 5;
     const int SECONDS_TIMEOUT_BLOCKS = 120;
     const int COUNT_BLOCKS_DOWNLOAD = 10;
 
@@ -77,8 +76,7 @@ internal partial class Testbench
       if (!WaitUntil(
         () => (heightBlockTip = blockchain.RunLocked(blockchain.GetHeight).Result) >= heightTarget,
         SECONDS_TIMEOUT_BLOCKS,
-        "block download",
-        () => $"block tip at height {heightBlockTip}, target height {heightTarget}"))
+        $"the block tip to reach height {heightTarget}"))
       {
         message = $"{nameCase}: block tip at height {heightBlockTip} after {SECONDS_TIMEOUT_BLOCKS} seconds, target height {heightTarget}.";
         return false;
@@ -100,8 +98,7 @@ internal partial class Testbench
       if (!WaitUntil(
         () => (heightHeaderTip = blockchain.GetHeightHeaderTip()) >= heightStartPeer,
         SECONDS_TIMEOUT_HEADERS,
-        "header download",
-        () => $"header tip at height {heightHeaderTip}, peer announced height {heightStartPeer}"))
+        $"the header tip to reach the peer's announced height {heightStartPeer}"))
       {
         message = $"{nameCase}: header tip at height {heightHeaderTip} after {SECONDS_TIMEOUT_HEADERS} seconds, peer announced height {heightStartPeer}.";
         return false;
@@ -120,7 +117,6 @@ internal partial class Testbench
       blockchain.LoadBlockchain();
 
       NetworkBitcoinRealPeers network = new(blockchain, new CommunicationLogging());
-      network.ConfigurationNetwork.CountMaxOutboundConnections = 1;
       network.Start();
 
       return network;
@@ -130,7 +126,10 @@ internal partial class Testbench
     {
       List<string> iPsPeer = [];
 
-      if (!SpinWait.SpinUntil(() => (iPsPeer = network.GetIPsPeer()).Count > 0, TimeSpan.FromSeconds(SECONDS_TIMEOUT_HANDSHAKE)))
+      if (!WaitUntil(
+        () => (iPsPeer = network.GetIPsPeer()).Count > 0,
+        SECONDS_TIMEOUT_HANDSHAKE,
+        "a peer to complete the handshake"))
       {
         message = $"{nameCase}: no real Bitcoin peer completed the handshake within {SECONDS_TIMEOUT_HANDSHAKE} seconds.";
         return false;
@@ -145,45 +144,26 @@ internal partial class Testbench
     {
       network.Stop();
 
-      int countPeers = 0;
-
       if (WaitUntil(
-        () => (countPeers = network.GetIPsPeer().Count) == 0,
+        () => network.GetIPsPeer().Count == 0,
         SECONDS_TIMEOUT_STOP,
-        "disconnection",
-        () => $"{countPeers} peers still in Peers"))
+        "all peers to disconnect"))
         return true;
 
       message = $"{nameCase}: Peers still lists a peer {SECONDS_TIMEOUT_STOP} seconds after Stop.";
       return false;
     }
 
-    static bool WaitUntil(Func<bool> condition, int secondsTimeout, string nameWait, Func<string> getState)
+    static bool WaitUntil(Func<bool> condition, int secondsTimeout, string goalWait)
     {
-      DateTime timeDeadline = DateTime.UtcNow.AddSeconds(secondsTimeout);
+      Console.WriteLine($"     Waiting up to {secondsTimeout} seconds for {goalWait}.");
 
-      while (true)
-      {
-        TimeSpan timeLeft = timeDeadline - DateTime.UtcNow;
-
-        if (timeLeft <= TimeSpan.Zero)
-          return false;
-
-        TimeSpan timeSlice = TimeSpan.FromSeconds(SECONDS_INTERVAL_PROGRESS);
-
-        if (SpinWait.SpinUntil(condition, timeLeft < timeSlice ? timeLeft : timeSlice))
-          return true;
-
-        int secondsLeft = (int)(timeDeadline - DateTime.UtcNow).TotalSeconds;
-
-        if (secondsLeft > 0)
-          Console.WriteLine($"     Waiting for {nameWait}: {getState()}, {secondsLeft} seconds left.");
-      }
+      return SpinWait.SpinUntil(condition, TimeSpan.FromSeconds(secondsTimeout));
     }
 
     static void WriteLog(string iP, string text)
     {
-      Console.WriteLine($"     {DateTime.Now:HH:mm:ss.fff} {iP}: {text}");
+      Console.WriteLine($"     {DateTime.Now:HH:mm:ss.fff} [{iP}] {text}");
     }
 
     class CommunicationLogging : ICommunication
@@ -366,7 +346,7 @@ internal partial class Testbench
         byte[] payload;
 
         lock (LOCK_Peers)
-          payload = Peers.Single().MessagesByCommand[COMMAND_VERSION].Payload;
+          payload = Peers.First().MessagesByCommand[COMMAND_VERSION].Payload;
 
         int index = OFFSET_USER_AGENT_VERSION;
         int lengthUserAgent = VarInt.GetInt(payload, ref index);
