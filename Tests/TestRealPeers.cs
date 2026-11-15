@@ -7,6 +7,7 @@ internal partial class Testbench
   class TestRealPeers : Test_Testbench
   {
     const int SECONDS_TIMEOUT_HANDSHAKE = 120;
+    const int SECONDS_TIMEOUT_STOP = 10;
 
 
     internal TestRealPeers(Testbench testbench)
@@ -35,13 +36,23 @@ internal partial class Testbench
 
       List<string> iPsPeer = [];
 
-      if (!SpinWait.SpinUntil(() => (iPsPeer = network.GetIPsPeer()).Count > 0, TimeSpan.FromSeconds(SECONDS_TIMEOUT_HANDSHAKE)))
+      bool isHandshakeCompleted = SpinWait.SpinUntil(() => (iPsPeer = network.GetIPsPeer()).Count > 0, TimeSpan.FromSeconds(SECONDS_TIMEOUT_HANDSHAKE));
+
+      network.Stop();
+
+      if (!isHandshakeCompleted)
       {
         message = $"Handshake real: no real Bitcoin peer completed the handshake within {SECONDS_TIMEOUT_HANDSHAKE} seconds.";
         return false;
       }
 
       Console.WriteLine($"     Peer {iPsPeer[0]} completed the handshake.");
+
+      if (!SpinWait.SpinUntil(() => network.GetIPsPeer().Count == 0, TimeSpan.FromSeconds(SECONDS_TIMEOUT_STOP)))
+      {
+        message = $"Handshake real: Peers still lists a peer {SECONDS_TIMEOUT_STOP} seconds after Stop.";
+        return false;
+      }
 
       return true;
     }
