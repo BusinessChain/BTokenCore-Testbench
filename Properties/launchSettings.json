@@ -1,0 +1,11 @@
+{
+  "profiles": {
+    "Testbench": {
+      "commandName": "Project"
+    },
+    "Testbench real peers": {
+      "commandName": "Project",
+      "commandLineArgs": "real-peers"
+    }
+  }
+}

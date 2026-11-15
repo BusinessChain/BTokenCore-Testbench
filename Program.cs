@@ -7,7 +7,7 @@ class Program
 {
   static void Main(string[] args)
   {
-    Testbench testbench = new();
+    Testbench testbench = new(args);
     testbench.Start();
   }
 }

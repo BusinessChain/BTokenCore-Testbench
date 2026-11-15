@@ -12,8 +12,14 @@ internal partial class Testbench
   internal Wallet Wallet;
 
 
-  internal Testbench()
+  internal Testbench(string[] args)
   {
+    if (args.Contains("real-peers"))
+    {
+      Tests = new();
+      return;
+    }
+
     Tests = new()
     {
       new TestParsers(this),
