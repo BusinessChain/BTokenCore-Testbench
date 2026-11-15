@@ -38,7 +38,36 @@ internal partial class Testbench
         && BlockchainAccounts.TestRetentionWindow(Testbench.Wallet, ref message)
         && BlockchainAccounts.TestServedSegments(Testbench.Wallet, ref message)
         && BlockchainAccounts.TestMalformedSegments(ref message)
-        && BlockchainAccounts.TestInstalledAccounts(Testbench.Wallet, ref message);
+        && BlockchainAccounts.TestInstalledAccounts(Testbench.Wallet, ref message)
+        && Test_HashAnchors(Testbench.Wallet, ref message);
+    }
+
+    bool Test_HashAnchors(Wallet wallet, ref string message)
+    {
+      Console.WriteLine("  22. Anchor Commitment: Accept correct HashAnchors, reject missing anchor or swapped order.");
+
+      TXOutputTokenAnchor anchorFirst = CreateTXOutputTokenAnchor(ID_TOKEN, 1);
+      TXOutputTokenAnchor anchorSecond = CreateTXOutputTokenAnchor([0x05, 0x06, 0x07, 0x08], 2);
+
+      BlockchainBToken.TXBToken tXCoinbase = CreateTXBToken(wallet.KeyPublicReceiving, wallet.Hash160KeyPublicReceiving);
+      tXCoinbase.Nonce = 0;
+      tXCoinbase.SerializeUnsigned();
+
+      BlockchainBToken.TXBToken tXAnchors = CreateTXBToken(wallet.KeyPublicReceiving, wallet.Hash160KeyPublicReceiving, anchorFirst, anchorSecond);
+      tXAnchors.Serialize(wallet, ID_TOKEN_BTOKEN);
+
+      return IsAccepted("Block with correct HashAnchors", () => ParseBlockSerialized(CreateBlock([tXCoinbase, tXAnchors])), ref message)
+        && IsRejected("Block with HashAnchors missing an anchor", () => ParseBlockSerialized(CreateBlockHashAnchors([tXCoinbase, tXAnchors], [anchorFirst])), ref message)
+        && IsRejected("Block with HashAnchors in swapped order", () => ParseBlockSerialized(CreateBlockHashAnchors([tXCoinbase, tXAnchors], [anchorSecond, anchorFirst])), ref message);
+    }
+
+    static Block CreateBlockHashAnchors(List<BlockchainBToken.TXBToken> tXs, TXOutputTokenAnchor[] anchors)
+    {
+      Block block = CreateBlock(tXs);
+      ((HeaderBToken)block.Header).HashAnchors = Blockchain.ParserToken.ComputeHashAnchors(anchors);
+      block.Header.ComputeHash();
+
+      return block;
     }
 
     static readonly byte[] MAGIC_BYTES = [0xf9, 0xbe, 0xb4, 0xd9];
