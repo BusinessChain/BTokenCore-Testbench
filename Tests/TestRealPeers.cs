@@ -144,7 +144,8 @@ internal partial class Testbench
           payload = Peers.Single().MessagesByCommand[COMMAND_VERSION].Payload;
 
         int index = OFFSET_USER_AGENT_VERSION;
-        index += VarInt.GetInt(payload, ref index);
+        int lengthUserAgent = VarInt.GetInt(payload, ref index);
+        index += lengthUserAgent;
 
         return BitConverter.ToInt32(payload, index);
       }
