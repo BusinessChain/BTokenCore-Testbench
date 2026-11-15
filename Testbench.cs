@@ -16,7 +16,11 @@ internal partial class Testbench
   {
     if (args.Contains("real-peers"))
     {
-      Tests = new();
+      Tests = new()
+      {
+        new TestRealPeers(this)
+      };
+
       return;
     }
 
