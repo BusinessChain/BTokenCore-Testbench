@@ -7,6 +7,8 @@ using System.Threading.Tasks;
 
 using BTokenCore;
 
+using LiteDB;
+
 
 namespace BTokenCore_Testbench;
 
@@ -28,7 +30,9 @@ internal partial class Testbench
         && Test_HeaderBitcoin(ref message)
         && Test_TXBToken(wallet, ref message)
         && Test_Block(wallet, ref message)
-        && Test_AnchorsWinner(wallet, ref message);
+        && Test_AnchorsWinner(wallet, ref message)
+        && Test_ScoreRootHash(wallet, out Block blockParsed, ref message)
+        && Test_WinnersStored(blockParsed, ref message);
     }
 
     const int COUNT_BYTES_LEADING = 7;
@@ -143,7 +147,7 @@ internal partial class Testbench
           return false;
 
       return IsFieldEqual(nameParser, "AnchorsWinner.Count", 1, blockParsed.Header.AnchorsWinner.Count, ref message)
-        && IsAnchorWinnerLowestScore(nameParser, blockParsed.Header, [tXOutputTokenAnchor], ref message);
+        && IsAnchorWinnerLowestScore(nameParser, blockParsed.Header.Hash, blockParsed.Header, [tXOutputTokenAnchor], ref message);
     }
 
     // Counter-tested 2026-11-14 03:01
@@ -201,11 +205,153 @@ internal partial class Testbench
         Block blockParsed = ParseBlockSerialized(block);
 
         if (!IsFieldEqual(nameParser, "AnchorsWinner.Count", 2, blockParsed.Header.AnchorsWinner.Count, ref message)
-          || !IsAnchorWinnerLowestScore(nameParser, blockParsed.Header, anchorsFirst, ref message)
-          || !IsAnchorWinnerLowestScore(nameParser, blockParsed.Header, anchorsSecond, ref message))
+          || !IsAnchorWinnerLowestScore(nameParser, blockParsed.Header.Hash, blockParsed.Header, anchorsFirst, ref message)
+          || !IsAnchorWinnerLowestScore(nameParser, blockParsed.Header.Hash, blockParsed.Header, anchorsSecond, ref message))
           return false;
 
         anchorWinnerFirstPrevious = GetAnchorScoreLowest(block.Header.Hash, anchorsFirst);
+      }
+
+      return true;
+    }
+
+    // Counter-tested 2026-11-15 16:34
+    bool Test_ScoreRootHash(Wallet wallet, out Block blockParsed, ref string message)
+    {
+      Console.WriteLine("  6. Root Hash Score: Score child anchors with the root chain's header hash.");
+
+      TXOutputTokenAnchor[] anchors = [
+        CreateTXOutputTokenAnchor(ID_TOKEN, 1),
+        CreateTXOutputTokenAnchor(ID_TOKEN, 2),
+        CreateTXOutputTokenAnchor(ID_TOKEN, 3)];
+
+      BlockchainBToken.TXBToken tXCoinbase = CreateTXBToken(wallet.KeyPublicReceiving, wallet.Hash160KeyPublicReceiving);
+      tXCoinbase.SerializeUnsigned();
+
+      List<BlockchainBToken.TXBToken> tXs = [
+        tXCoinbase,
+        CreateTXBToken(wallet.KeyPublicReceiving, wallet.Hash160KeyPublicReceiving, anchors[0]),
+        CreateTXBToken(wallet.KeyPublicReceiving, wallet.Hash160KeyPublicReceiving, anchors[1], anchors[2])];
+
+      foreach (BlockchainBToken.TXBToken tX in tXs.Skip(1))
+        tX.Serialize(wallet, ID_TOKEN_BTOKEN);
+
+      Block block = CreateBlock(tXs);
+      block.Serialize();
+
+      HeaderBToken headerRoot = new();
+      HeaderBToken headerMiddle = new() { Hash = RandomNumberGenerator.GetBytes(32), HeaderParent = headerRoot };
+
+      do
+        headerRoot.Hash = RandomNumberGenerator.GetBytes(32);
+      while (GetAnchorScoreLowest(headerRoot.Hash, anchors) == GetAnchorScoreLowest(block.Header.Hash, anchors)
+        || GetAnchorScoreLowest(headerRoot.Hash, anchors) == GetAnchorScoreLowest(headerMiddle.Hash, anchors));
+
+      blockParsed = null;
+
+      foreach ((string nameLevel, Header headerParent) in new[] { ("one level", (Header)headerRoot), ("two levels", headerMiddle) })
+      {
+        blockParsed = ParseBlockBuffer(
+          block.Buffer[..block.LengthDataPayload],
+          new HeaderBToken
+          {
+            Hash = block.Header.Hash,
+            HashPrevious = block.Header.HashPrevious,
+            Height = block.Header.Height,
+            HeaderParent = headerParent
+          });
+
+        string nameParser = $"Anchor winners of a BToken block {nameLevel} below the root chain";
+
+        if (!IsFieldEqual(nameParser, "AnchorsWinner.Count", 1, blockParsed.Header.AnchorsWinner.Count, ref message)
+          || !IsAnchorWinnerLowestScore(nameParser, headerRoot.Hash, blockParsed.Header, anchors, ref message))
+          return false;
+      }
+
+      return true;
+    }
+
+    class BlockchainStore : BlockchainTestbench
+    {
+      const string NAME_TOKEN = "TestParsers";
+
+      BlockchainStore()
+        : base(NAME_TOKEN, CreateLiteDatabase(), new BlockchainParentFake(CreateLiteDatabase()))
+      { }
+
+      internal static BlockchainStore Create()
+      {
+        CreateWalletFile(BlockchainBitcoin.NAME_TOKEN);
+        CreateWalletFile(NAME_TOKEN);
+
+        return new BlockchainStore();
+      }
+
+      internal BsonDocument CreateDocument(Block block)
+      {
+        return CreateDocumentBlockStored(block);
+      }
+
+      internal static BsonDocument CreateDocumentWithoutWinners(Block block)
+      {
+        return new BsonDocument { [NAME_FIELD_BLOCK_BYTES] = block.Buffer[..block.LengthDataPayload] };
+      }
+
+      internal static byte[] GetBytesBlock(BsonDocument documentBlock)
+      {
+        return documentBlock[NAME_FIELD_BLOCK_BYTES].AsBinary;
+      }
+
+      internal Block ReloadBlockStored(Block block, BsonDocument documentBlock)
+      {
+        Header header = new HeaderBToken
+        {
+          Hash = block.Header.Hash,
+          HashPrevious = block.Header.HashPrevious,
+          Height = block.Header.Height
+        };
+
+        return TryParseBlockStored(header, documentBlock, out Block blockReloaded) ? blockReloaded : null;
+      }
+    }
+
+    // Counter-tested 2026-11-15 16:34
+    bool Test_WinnersStored(Block blockParsed, ref string message)
+    {
+      Console.WriteLine("  7. Stored BToken Winners: Reload drawn winners from BlocksStored, never redraw.");
+
+      const string NAME_CASE = "BToken block reloaded from its stored document";
+      const string NAME_CASE_WITHOUT_WINNERS = "BToken block reloaded from a document without winners";
+
+      BlockchainStore blockchain = BlockchainStore.Create();
+      BsonDocument documentBlock = blockchain.CreateDocument(blockParsed);
+
+      if (!IsFieldEqual(NAME_CASE, "stored block bytes", blockParsed.Buffer[..blockParsed.LengthDataPayload], BlockchainStore.GetBytesBlock(documentBlock), ref message))
+        return false;
+
+      if (blockchain.ReloadBlockStored(blockParsed, documentBlock) is not Block blockReloaded
+        || blockchain.ReloadBlockStored(blockParsed, BlockchainStore.CreateDocumentWithoutWinners(blockParsed)) is not Block blockReloadedWithoutWinners)
+      {
+        message = $"{NAME_CASE}: the stored block cannot be parsed.";
+        return false;
+      }
+
+      if (!IsFieldEqual(NAME_CASE_WITHOUT_WINNERS, "AnchorsWinner.Count", 0, blockReloadedWithoutWinners.Header.AnchorsWinner.Count, ref message)
+        || !IsFieldEqual(NAME_CASE, "AnchorsWinner.Count", blockParsed.Header.AnchorsWinner.Count, blockReloaded.Header.AnchorsWinner.Count, ref message))
+        return false;
+
+      foreach (TXOutputTokenAnchor anchor in blockParsed.Header.AnchorsWinner.Values)
+      {
+        string iDToken = anchor.IDToken.ToHexString();
+
+        if (!blockReloaded.Header.AnchorsWinner.TryGetValue(anchor.IDToken, out TXOutputTokenAnchor anchorReloaded))
+        {
+          message = $"{NAME_CASE}: no anchor winner of IDToken {iDToken}.";
+          return false;
+        }
+
+        if (!IsFieldEqual(NAME_CASE, $"HashBlockReferenced of IDToken {iDToken}", anchor.HashBlockReferenced, anchorReloaded.HashBlockReferenced, ref message))
+          return false;
       }
 
       return true;

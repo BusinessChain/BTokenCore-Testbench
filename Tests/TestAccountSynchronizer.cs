@@ -845,26 +845,26 @@ internal partial class Testbench
         return blockchain;
       }
 
-      protected override void ParseBlockStored(Block block)
+      protected override void ParseBlockStored(Block block, BsonDocument documentBlock)
       {
         if (block.Header.Height <= HeightAnchored)
           block.Header.HeaderParent = ChainRoot.HeaderRoot.HeaderParent;
 
-        base.ParseBlockStored(block);
+        base.ParseBlockStored(block, documentBlock);
       }
 
       void InsertBlocks(List<Block> blocksLedger)
       {
         foreach (Block blockLedger in blocksLedger)
         {
-          Block block = new(blockLedger.Buffer[..blockLedger.LengthDataPayload]);
+          byte[] bytesBlock = blockLedger.Buffer[..blockLedger.LengthDataPayload];
 
           int index = 0;
-          Header header = Parser.ParseHeader(block.Buffer, ref index);
+          Header header = Parser.ParseHeader(bytesBlock, ref index);
 
           ChainRoot.AppendHeader(header);
 
-          if (!TryParseBlockStored(header, block))
+          if (!TryParseBlockStored(header, new BsonDocument { [NAME_FIELD_BLOCK_BYTES] = bytesBlock }, out Block block))
             throw new InvalidOperationException($"Block of the Ledger at height {header.Height} cannot be parsed.");
 
           ChainRoot.BlocksQueued.Add(header.Height, block);

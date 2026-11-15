@@ -101,9 +101,9 @@ internal partial class Testbench
         [.. hashBlock, .. tXOutputTokenAnchor.HashBlockReferenced, .. tXOutputTokenAnchor.HashBlockPreviousReferenced]));
     }
 
-    protected static bool IsAnchorWinnerLowestScore(string nameParser, Header headerParsed, TXOutputTokenAnchor[] anchorsEligible, ref string message)
+    protected static bool IsAnchorWinnerLowestScore(string nameParser, byte[] hashScore, Header headerParsed, TXOutputTokenAnchor[] anchorsEligible, ref string message)
     {
-      TXOutputTokenAnchor anchorExpected = GetAnchorScoreLowest(headerParsed.Hash, anchorsEligible);
+      TXOutputTokenAnchor anchorExpected = GetAnchorScoreLowest(hashScore, anchorsEligible);
 
       string iDToken = anchorExpected.IDToken.ToHexString();
 
@@ -151,6 +151,7 @@ internal partial class Testbench
       };
 
       new ParserBToken(NAME_ID_TOKEN_BTOKEN).ParseBlock(blockParsed, verifySignatures: true);
+      Blockchain.ParserToken.DrawAnchorsWinner(blockParsed);
 
       return blockParsed;
     }

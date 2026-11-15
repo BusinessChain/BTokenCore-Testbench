@@ -1060,9 +1060,7 @@ internal partial class Testbench
           return false;
         }
 
-        block = LoadBlock(height);
-
-        if (block == null || !TryParseBlockStored(header, block))
+        if (BlocksStored.FindById(height) is not BsonDocument documentBlock || !TryParseBlockStored(header, documentBlock, out block))
         {
           message = $"{nameCase}: the mined block at height {height} is not stored.";
           return false;
