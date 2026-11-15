@@ -12,6 +12,8 @@ internal partial class Testbench
     const int SECONDS_TIMEOUT_STOP = 10;
     const int SECONDS_TIMEOUT_HEADERS = 60;
     const int SECONDS_INTERVAL_PROGRESS = 5;
+    const int SECONDS_TIMEOUT_BLOCKS = 180;
+    const int COUNT_BLOCKS_DOWNLOAD = 10;
 
 
     internal TestRealPeers(Testbench testbench)
@@ -23,7 +25,8 @@ internal partial class Testbench
       message = "";
 
       return TestHandshakeReal(ref message)
-        && TestHeadersReal(ref message);
+        && TestHeadersReal(ref message)
+        && TestBlocksReal(ref message);
     }
 
     static bool TestHandshakeReal(ref string message)
@@ -48,6 +51,42 @@ internal partial class Testbench
 
       return TryDownloadHeaders(NAME_CASE, network, blockchain, ref message)
         & IsNetworkStopped(NAME_CASE, network, ref message);
+    }
+
+    static bool TestBlocksReal(ref string message)
+    {
+      Console.WriteLine("  3. Blocks Real: Download and insert ten real blocks after HeaderRoot.");
+
+      const string NAME_CASE = "Blocks real";
+
+      NetworkBitcoinRealPeers network = StartNetwork(out BlockchainBitcoinRealPeers blockchain);
+
+      return TryDownloadBlocks(NAME_CASE, network, blockchain, ref message)
+        & IsNetworkStopped(NAME_CASE, network, ref message);
+    }
+
+    static bool TryDownloadBlocks(string nameCase, NetworkBitcoinRealPeers network, BlockchainBitcoinRealPeers blockchain, ref string message)
+    {
+      int heightTarget = blockchain.RunLocked(blockchain.GetHeight).Result + COUNT_BLOCKS_DOWNLOAD;
+
+      if (!TryDownloadHeaders(nameCase, network, blockchain, ref message))
+        return false;
+
+      int heightBlockTip = 0;
+
+      if (!WaitUntil(
+        () => (heightBlockTip = blockchain.RunLocked(blockchain.GetHeight).Result) >= heightTarget,
+        SECONDS_TIMEOUT_BLOCKS,
+        "block download",
+        () => $"block tip at height {heightBlockTip}, target height {heightTarget}"))
+      {
+        message = $"{nameCase}: block tip at height {heightBlockTip} after {SECONDS_TIMEOUT_BLOCKS} seconds, target height {heightTarget}.";
+        return false;
+      }
+
+      Console.WriteLine($"     Block tip at height {heightBlockTip}.");
+
+      return true;
     }
 
     static bool TryDownloadHeaders(string nameCase, NetworkBitcoinRealPeers network, BlockchainBitcoinRealPeers blockchain, ref string message)
