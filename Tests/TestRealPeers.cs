@@ -12,7 +12,7 @@ internal partial class Testbench
     const int SECONDS_TIMEOUT_STOP = 10;
     const int SECONDS_TIMEOUT_HEADERS = 60;
     const int SECONDS_INTERVAL_PROGRESS = 5;
-    const int SECONDS_TIMEOUT_BLOCKS = 180;
+    const int SECONDS_TIMEOUT_BLOCKS = 120;
     const int COUNT_BLOCKS_DOWNLOAD = 10;
 
 
@@ -119,7 +119,7 @@ internal partial class Testbench
       blockchain = new(CreateLiteDatabase(), new SemaphoreSlim(1));
       blockchain.LoadBlockchain();
 
-      NetworkBitcoinRealPeers network = new(blockchain, new CommunicationTCP());
+      NetworkBitcoinRealPeers network = new(blockchain, new CommunicationLogging());
       network.ConfigurationNetwork.CountMaxOutboundConnections = 1;
       network.Start();
 
@@ -130,11 +130,7 @@ internal partial class Testbench
     {
       List<string> iPsPeer = [];
 
-      if (!WaitUntil(
-        () => (iPsPeer = network.GetIPsPeer()).Count > 0,
-        SECONDS_TIMEOUT_HANDSHAKE,
-        "handshake",
-        () => $"{iPsPeer.Count} peers in Peers"))
+      if (!SpinWait.SpinUntil(() => (iPsPeer = network.GetIPsPeer()).Count > 0, TimeSpan.FromSeconds(SECONDS_TIMEOUT_HANDSHAKE)))
       {
         message = $"{nameCase}: no real Bitcoin peer completed the handshake within {SECONDS_TIMEOUT_HANDSHAKE} seconds.";
         return false;
@@ -182,6 +178,158 @@ internal partial class Testbench
 
         if (secondsLeft > 0)
           Console.WriteLine($"     Waiting for {nameWait}: {getState()}, {secondsLeft} seconds left.");
+      }
+    }
+
+    static void WriteLog(string iP, string text)
+    {
+      Console.WriteLine($"     {DateTime.Now:HH:mm:ss.fff} {iP}: {text}");
+    }
+
+    class CommunicationLogging : ICommunication
+    {
+      ICommunication CommunicationTCP = new CommunicationTCP();
+
+
+      public void StartListenerCommunicationInbound(int port)
+      {
+        CommunicationTCP.StartListenerCommunicationInbound(port);
+      }
+
+      public async Task<ISocketCommunication> AcceptSocketCommunicationInbound()
+      {
+        return new SocketLogging(await CommunicationTCP.AcceptSocketCommunicationInbound());
+      }
+
+      public ISocketCommunication GetSocketCommunication(int port, string address)
+      {
+        return new SocketLogging(CommunicationTCP.GetSocketCommunication(port, address));
+      }
+    }
+
+    class SocketLogging : ISocketCommunication
+    {
+      const string COMMAND_BLOCK = "block";
+      const string COMMAND_HEADERS = "headers";
+      static readonly string[] COMMANDS_INVENTORY = ["inv", "getdata", "notfound"];
+      const int LENGTH_HEADER = 80;
+      const int LENGTH_INVENTORY = 36;
+      const int LENGTH_INVENTORY_TYPE = 4;
+      const int LENGTH_HASH = 32;
+
+      ISocketCommunication SocketTCP;
+      string CommandReceived;
+      bool IsDisposed;
+
+
+      internal SocketLogging(ISocketCommunication socketTCP)
+      {
+        SocketTCP = socketTCP;
+      }
+
+      public async Task Start(byte[] magicBytes)
+      {
+        WriteLog(GetIP(), "connecting");
+
+        try
+        {
+          await SocketTCP.Start(magicBytes);
+        }
+        catch (Exception exception)
+        {
+          WriteLog(GetIP(), $"connect failed: {exception.Message}");
+          throw;
+        }
+
+        WriteLog(GetIP(), "connected");
+      }
+
+      public async Task SendMessage(string commandString, int lengthDataPayload, byte[] payload)
+      {
+        WriteLog(GetIP(), $"sent {DescribeMessage(commandString, lengthDataPayload, payload)}");
+
+        await SocketTCP.SendMessage(commandString, lengthDataPayload, payload);
+      }
+
+      public async Task<string> ReceiveCommandMessageNext()
+      {
+        try
+        {
+          CommandReceived = await SocketTCP.ReceiveCommandMessageNext();
+        }
+        catch (Exception exception)
+        {
+          WriteLogReceiveFailed(exception);
+          throw;
+        }
+
+        return CommandReceived;
+      }
+
+      public async Task<int> ReceivePayloadNext(byte[] buffer)
+      {
+        int lengthDataPayload;
+
+        try
+        {
+          lengthDataPayload = await SocketTCP.ReceivePayloadNext(buffer);
+        }
+        catch (Exception exception)
+        {
+          WriteLogReceiveFailed(exception);
+          throw;
+        }
+
+        WriteLog(GetIP(), $"received {DescribeMessage(CommandReceived, lengthDataPayload, buffer)}");
+
+        return lengthDataPayload;
+      }
+
+      public void Dispose()
+      {
+        if (!IsDisposed)
+          WriteLog(GetIP(), "disconnected");
+
+        IsDisposed = true;
+        SocketTCP.Dispose();
+      }
+
+      public string GetIP()
+      {
+        return SocketTCP.GetIP();
+      }
+
+      void WriteLogReceiveFailed(Exception exception)
+      {
+        if (!IsDisposed)
+          WriteLog(GetIP(), $"receive failed: {exception.GetType().Name}: {exception.Message}");
+      }
+
+      static string DescribeMessage(string command, int lengthDataPayload, byte[] payload)
+      {
+        string description = $"{command} ({lengthDataPayload} bytes)";
+
+        if (command == COMMAND_BLOCK && lengthDataPayload >= LENGTH_HEADER)
+          return $"{description} hash {FormatHash(Crypto.ComputeHash256(payload.AsSpan(0, LENGTH_HEADER)))}";
+
+        if (lengthDataPayload == 0)
+          return description;
+
+        int index = 0;
+        int count = VarInt.GetInt(payload, ref index);
+
+        if (command == COMMAND_HEADERS)
+          return $"{description} count {count}";
+
+        if (COMMANDS_INVENTORY.Contains(command) && count > 0 && index + LENGTH_INVENTORY <= lengthDataPayload)
+          return $"{description} count {count}, first type {BitConverter.ToUInt32(payload, index)} hash {FormatHash(payload.AsSpan(index + LENGTH_INVENTORY_TYPE, LENGTH_HASH).ToArray())}";
+
+        return description;
+      }
+
+      static string FormatHash(byte[] hash)
+      {
+        return Convert.ToHexString(hash.Reverse().ToArray()).ToLowerInvariant();
       }
     }
 
