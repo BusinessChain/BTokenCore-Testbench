@@ -2504,7 +2504,7 @@ internal partial class Testbench
     class NetworkTestbench : NetworkBToken
     {
       internal NetworkTestbench(BlockchainBToken blockchain, ICommunication communication)
-        : base(blockchain, communication)
+        : base(blockchain, communication, port: 8777, seedAddresses: ["83.229.86.158"])
       { }
 
       internal bool IsPeerListed(string iP)
@@ -2672,7 +2672,7 @@ internal partial class Testbench
         CreateWalletFile(BlockchainBitcoin.NAME_TOKEN);
 
         BlockchainParentFake blockchain = new(CreateLiteDatabase());
-        blockchain.LoadBlockchain();
+        blockchain.Load();
 
         headers = Enumerable.Range(0, countBlocks).Select(i => blockchain.MineBlock([])).ToList();
 

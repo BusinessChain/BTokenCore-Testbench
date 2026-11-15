@@ -114,7 +114,7 @@ internal partial class Testbench
       CreateWalletFile(BlockchainBitcoin.NAME_TOKEN);
 
       blockchain = new(CreateLiteDatabase(), new SemaphoreSlim(1));
-      blockchain.LoadBlockchain();
+      blockchain.Load();
 
       NetworkBitcoinRealPeers network = new(blockchain, new CommunicationLogging());
       network.Start();
