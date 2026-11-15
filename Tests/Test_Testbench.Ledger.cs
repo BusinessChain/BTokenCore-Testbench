@@ -315,9 +315,8 @@ internal partial class Testbench
           int height = HeightTip + 1;
           Dictionary<byte[], Account> accountsAfter = ApplyBlock(tXs, height, out _);
 
-          Block block = CreateBlock(tXs);
+          Block block = CreateBlock(tXs, height);
           HeaderBToken header = (HeaderBToken)block.Header;
-          header.Height = height;
           header.HashPrevious = HashTip;
           header.HashAccounts = ComputeHashAccounts(accountsAfter, height);
           header.ComputeHash();

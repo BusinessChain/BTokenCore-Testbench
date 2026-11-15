@@ -757,8 +757,9 @@ internal partial class Testbench
           if (header.Height == heightForged)
             alter(tXs, header);
 
-          Block block = CreateBlock(tXs);
+          Block block = CreateBlock(tXs, header.Height);
           header.MerkleRoot = block.Header.MerkleRoot;
+          header.HashAnchors = ((HeaderBToken)block.Header).HashAnchors;
           header.ComputeHash();
           block.Header = header;
           block.Serialize();

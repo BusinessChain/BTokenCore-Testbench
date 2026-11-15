@@ -116,13 +116,15 @@ internal partial class Testbench
       return IsFieldEqual(nameParser, $"HashBlockReferenced of anchor winner of IDToken {iDToken}", anchorExpected.HashBlockReferenced, anchorWinner.HashBlockReferenced, ref message);
     }
 
-    protected static Block CreateBlock(List<BlockchainBToken.TXBToken> tXs)
+    protected static Block CreateBlock(List<BlockchainBToken.TXBToken> tXs, int height = 737858)
     {
       Block block = new(HeaderBToken.COUNT_HEADER_BYTES + 1 + tXs.Sum(t => t.TXRaw.Length));
       block.TXs.AddRange(tXs);
 
       HeaderBToken header = CreateHeaderBToken(block.ComputeMerkleRoot());
-      header.Height = 737858;
+      header.Height = height;
+      header.HashAnchors = Blockchain.ParserToken.ComputeHashAnchors(Blockchain.ParserToken.EnumerateAnchorsEligible(block.TXs, height));
+      header.ComputeHash();
 
       block.Header = header;
 
