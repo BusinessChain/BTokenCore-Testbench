@@ -213,7 +213,6 @@ internal partial class Testbench
       return header;
     }
 
-    // Counter-tested 2026-11-14 03:35
     bool Test_AnchorsBitcoin(out Block blockParsed, ref string message)
     {
       Console.WriteLine("  5. Bitcoin Anchors: Draw anchor winners from TXBitcoin outputs of twenty Bitcoin blocks.");
@@ -273,7 +272,6 @@ internal partial class Testbench
       return true;
     }
 
-    // Counter-tested 2026-11-14 03:35
     bool Test_AnchorsStored(Block blockParsed, ref string message)
     {
       Console.WriteLine("  6. Stored Anchors: Keep anchor winners through CreateDocumentBlockStored and ParseBlockStored.");

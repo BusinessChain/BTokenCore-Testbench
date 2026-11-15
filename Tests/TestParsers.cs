@@ -120,7 +120,6 @@ internal partial class Testbench
         && IsTXBTokenParsedEqual(tXCoinbase, EmbedInBuffer(tXCoinbase.TXRaw), COUNT_BYTES_LEADING, isCoinbase: true, ref message);
     }
 
-    // Counter-tested 2026-11-13 14:03
     bool Test_Block(Wallet wallet, ref string message)
     {
       Console.WriteLine("  4. Block Round-Trip: Serialize and parse BToken block with anchor winner.");
@@ -150,7 +149,6 @@ internal partial class Testbench
         && IsAnchorWinnerLowestScore(nameParser, blockParsed.Header.Hash, blockParsed.Header, [tXOutputTokenAnchor], ref message);
     }
 
-    // Counter-tested 2026-11-14 03:01
     bool Test_AnchorsWinner(Wallet wallet, ref string message)
     {
       Console.WriteLine("  5. Anchor Winners: Draw winners of two IDTokens, ignoring anchors with ineligible LockTime.");

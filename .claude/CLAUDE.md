@@ -15,7 +15,7 @@
 ## Testing
 9. Each test writes one console line in the format `  <number>. <Test title>: <description of at most 10 words>`.
 10. Never run the Testbench or any other test unless the user explicitly asks for it. Building (`dotnet build`) is allowed.
-11. A test counter-tested by a fresh agent, which breaks the BTokenCore code the test covers on purpose and checks that the test fails, carries the comment `// Counter-tested <yyyy-MM-dd HH:mm>` above its method, as a pointer for the user. The timestamp stays valid only while neither the test nor the BTokenCore code it covers changes. A counter-test round covers only tests without a valid timestamp, and renews their timestamps afterwards. Reason: tests with a valid timestamp need no counter-testing again.
+11. A test counter-tested by a fresh agent, which breaks the BTokenCore code the test covers on purpose and checks that the test fails, carries the comment `// Counter-tested <yyyy-MM-dd HH:mm>` above its method, as a pointer for the user. A change to the test or to the BTokenCore code it covers invalidates the timestamp, and Claude removes the comment right away, when Claude judges that the risk of the change weakening the test justifies counter-testing it again. A counter-test round covers only tests without a timestamp and adds their timestamps afterwards. Reason: tests with a valid timestamp need no counter-testing again.
 
 ## Rating
 12. When the user asks for a rating of a concern in this project, rate its risk, its severity and its fix effort from 0 to 10 on this scale:
