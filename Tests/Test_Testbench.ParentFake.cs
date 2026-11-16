@@ -80,6 +80,13 @@ internal partial class Testbench
         Block block = new(0) { Header = header };
         block.TXs.AddRange(tXs);
 
+        if (anchors.Length > 0)
+        {
+          TXBitcoin tXAnchors = new() { LockTime = header.Height - 1 };
+          tXAnchors.TXOutputs.AddRange(anchors);
+          block.TXs.Add(tXAnchors);
+        }
+
         ChainRoot.BlocksQueued.Add(header.Height, block);
 
         UpdateTipBlockchain(ChainRoot);
@@ -110,7 +117,7 @@ internal partial class Testbench
 
       internal void DeleteBlocksStored(int heightFirst, int heightLast)
       {
-        BlocksStored.DeleteMany(Query.Between(NAME_FIELD_ID, heightFirst, heightLast));
+        BlocksCompact.DeleteMany(Query.Between(NAME_FIELD_ID, heightFirst, heightLast));
       }
 
       internal void RollBackTo(int height)

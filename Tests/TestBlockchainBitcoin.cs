@@ -154,7 +154,7 @@ internal partial class Testbench
       {
         Header header = new HeaderBitcoin(block.Header.Hash, 0, block.Header.HashPrevious, null, 0, 0, 0) { Height = block.Header.Height };
 
-        return TryParseBlockStored(header, CreateDocumentBlockStored(block), out Block blockReloaded) ? blockReloaded : null;
+        return TryParseBlockStored(header, CreateDocumentBlockCompact(block), out Block blockReloaded) ? blockReloaded : null;
       }
     }
 
@@ -259,7 +259,7 @@ internal partial class Testbench
         };
 
         new ParserBitcoin().ParseBlock(blockParsed, verifySignatures: false);
-        Blockchain.ParserToken.DrawAnchorsWinner(blockParsed);
+        Blockchain.ParserToken.DrawAnchorsWinner(blockParsed.Header, Blockchain.ParserToken.EnumerateAnchorsEligible(blockParsed.TXs, blockParsed.Header.Height));
 
         string nameParser = $"Anchor winners drawn by ParserBitcoin in block {block.Header.Hash.ToHexString()}";
 
@@ -274,7 +274,7 @@ internal partial class Testbench
 
     bool Test_AnchorsStored(Block blockParsed, ref string message)
     {
-      Console.WriteLine("  6. Stored Anchors: Keep anchor winners through CreateDocumentBlockStored and ParseBlockStored.");
+      Console.WriteLine("  6. Stored Anchors: Keep anchor winners through CreateDocumentBlockCompact and ParseBlockStored.");
 
       const string NAME_CASE = "Anchor winners reloaded by ParseBlockStored";
 
