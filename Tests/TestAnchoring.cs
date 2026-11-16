@@ -23,7 +23,8 @@ internal partial class Testbench
         && BlockchainAnchoring.TestRestartAnchored(Testbench.Wallet, ref message)
         && BlockchainAnchoring.TestRestartUnanchored(Testbench.Wallet, ref message)
         && BlockchainAnchoring.TestWindowResync(Testbench.Wallet, ref message)
-        && BlockchainAnchoring.TestRestartResync(Testbench.Wallet, ref message);
+        && BlockchainAnchoring.TestRestartResync(Testbench.Wallet, ref message)
+        && BlockchainAnchoring.TestCompactStore(Testbench.Wallet, ref message);
     }
 
     class BlockchainAnchoring : BlockchainTestbench
@@ -357,6 +358,72 @@ internal partial class Testbench
         blockchainRestarted.DeliverBlocks(blocksFork);
 
         return blockchainRestarted.IsWithoutAccounts("Restart resync, fork blocks delivered after the resync", HEIGHT_TIP_FORK, ref message);
+      }
+
+      internal static bool TestCompactStore(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  9. Compact Store: Keep compact blocks below pruned window, drop rolled-back ones.");
+
+        const int HEIGHT_ANCHORS = 7;
+        const int HEIGHT_TIP = COUNT_MAX_BLOCKS_STORED + 7;
+        const int COUNT_ROLLED_BACK = 3;
+
+        if (!TryCreateLedger(wallet, out Ledger ledger, ref message)
+          || !ledger.TryInsertBlock("spend with an eligible anchor", [ledger.CreateCoinbase(wallet, CreateIDAccount(1000, 1), FEE), ledger.CreateTXSpend(wallet, CreateIDAccount(1001, 2), VALUE_SPEND, t => AddAnchor(t, HEIGHT_ANCHORS - 1))], isValidExpected: true, null, ref message)
+          || !TryInsertCoinbasesUpTo(ledger, wallet, CreateIDAccount(1000, 1), HEIGHT_TIP, ref message))
+          return false;
+
+        List<Block> blocksLedger = ledger.GetBlocksInserted();
+        BlockchainAnchoring blockchain = StartNode();
+
+        foreach (Block blockLedger in blocksLedger)
+        {
+          blockchain.ParentFake.MineAnchors([blockLedger]);
+          blockchain.DeliverBlocks(blocksLedger);
+        }
+
+        const string NAME_CASE = "Compact store, chain synchronized beyond the stored window";
+
+        if (!blockchain.IsSynchronized(ledger, NAME_CASE, HEIGHT_TIP, ref message)
+          || !blockchain.IsBlockStoredOldestAt(NAME_CASE, HEIGHT_TIP - COUNT_MAX_BLOCKS_STORED + 1, ref message)
+          || !IsFieldEqual(NAME_CASE, $"eligible anchors at height {HEIGHT_ANCHORS}", 1, ParserToken.EnumerateAnchorsEligible(blocksLedger.Single(b => b.Header.Height == HEIGHT_ANCHORS).TXs, HEIGHT_ANCHORS).Count(), ref message)
+          || !blockchain.AreBlocksCompactMatching(NAME_CASE, blocksLedger, ref message))
+          return false;
+
+        blockchain.ParentFake.RollBackTo(blockchain.ParentFake.GetHeight() - COUNT_ROLLED_BACK);
+
+        const string NAME_CASE_ROLLED_BACK = "Compact store, Bitcoin chain rolled back by three blocks";
+
+        return blockchain.IsAtHeight(NAME_CASE_ROLLED_BACK, HEIGHT_TIP - COUNT_ROLLED_BACK, ref message)
+          && IsFieldEqual(NAME_CASE_ROLLED_BACK, "compact blocks above the tip", 0, blockchain.BlocksCompact.Count(Query.GT(NAME_FIELD_ID, HEIGHT_TIP - COUNT_ROLLED_BACK)), ref message)
+          && blockchain.AreBlocksCompactMatching(NAME_CASE_ROLLED_BACK, blocksLedger.Where(b => b.Header.Height <= HEIGHT_TIP - COUNT_ROLLED_BACK).ToList(), ref message);
+      }
+
+      bool AreBlocksCompactMatching(string nameCase, List<Block> blocks, ref string message)
+      {
+        foreach (Block block in blocks)
+        {
+          string nameBlock = $"{nameCase}, compact block at height {block.Header.Height}";
+
+          if (BlocksCompact.FindById(block.Header.Height) is not BsonDocument documentBlock)
+          {
+            message = $"{nameBlock}: missing.";
+            return false;
+          }
+
+          byte[] bytesBlock = documentBlock[NAME_FIELD_BLOCK_BYTES].AsBinary;
+          int index = 0;
+
+          HeaderBToken header = (HeaderBToken)Parser.ParseHeader(bytesBlock, ref index);
+          byte[] hashAnchors = ParserToken.ComputeHashAnchors(ParserToken.ParseAnchors(bytesBlock, ref index));
+
+          if (!IsFieldEqual(nameBlock, "header hash", block.Header.Hash, header.Hash, ref message)
+            || !IsFieldEqual(nameBlock, "hash of the stored anchors", ParserToken.ComputeHashAnchors(ParserToken.EnumerateAnchorsEligible(block.TXs, block.Header.Height)), hashAnchors, ref message)
+            || !IsFieldEqual(nameBlock, "HashAnchors", header.HashAnchors, hashAnchors, ref message))
+            return false;
+        }
+
+        return true;
       }
 
       static bool TryForkLedger(Ledger ledger, Wallet wallet, int heightFork, int heightTip, out List<Block> blocksFork, ref string message)
