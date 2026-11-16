@@ -30,7 +30,8 @@ internal partial class Testbench
         && BlockchainAnchoring.TestCompactLoad(Testbench.Wallet, ref message)
         && BlockchainAnchoring.TestCompactServing(Testbench.Wallet, ref message)
         && BlockchainAnchoring.TestCompactInsertion(Testbench.Wallet, ref message)
-        && BlockchainAnchoring.TestChildSync(Testbench.Wallet, ref message);
+        && BlockchainAnchoring.TestChildSync(Testbench.Wallet, ref message)
+        && BlockchainAnchoring.TestCatchUpResync(Testbench.Wallet, ref message);
     }
 
     class BlockchainAnchoring : BlockchainTestbench
@@ -378,6 +379,24 @@ internal partial class Testbench
 
         return blockchainRestarted.IsWithoutAccounts(NAME_CASE_DELIVERED, HEIGHT_TIP_FORK, ref message)
           && blockchainRestarted.IsBlockStoredOldestAt(NAME_CASE_DELIVERED, HEIGHT_TIP_FORK - COUNT_MAX_BLOCKS_STORED + 1, ref message);
+      }
+
+      internal static bool TestCatchUpResync(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  14. Catch-up Resync: Drop accounts when a parent catch-up outruns the window.");
+
+        if (!TryCreateLedger(wallet, out Ledger ledger, ref message)
+          || !TryInsertCoinbasesUpTo(ledger, wallet, CreateIDAccount(1000, 1), COUNT_MAX_BLOCKS_STORED + 1, ref message))
+          return false;
+
+        BlockchainAnchoring blockchain = StartNode();
+
+        if (!blockchain.IsSynchronized(ledger, "Catch-up resync, fresh node before the parent catch-up", 0, ref message))
+          return false;
+
+        blockchain.ParentFake.CatchUpAnchors(ledger.GetBlocksInserted());
+
+        return blockchain.IsBehindWindowAtFork("Catch-up resync, parent caught up below its header tip", 0, ref message);
       }
 
       bool IsBehindWindowAtFork(string nameCase, int heightFork, ref string message)

@@ -64,6 +64,29 @@ internal partial class Testbench
 
       internal Header MineBlock(List<TXBitcoin> tXs, params TXOutputTokenAnchor[] anchors)
       {
+        Block block = AppendBlockMined(tXs, anchors);
+
+        ChainRoot.BlocksQueued.Add(block.Header.Height, block);
+
+        UpdateTipBlockchain(ChainRoot);
+
+        return block.Header;
+      }
+
+      internal void CatchUpAnchors(List<Block> blocksLedger)
+      {
+        List<Block> blocks = blocksLedger.Select(b => AppendBlockMined([], CreateAnchor(b.Header.Hash, b.Header.HashPrevious))).ToList();
+
+        AppendBlockMined([]);
+
+        foreach (Block block in blocks)
+          ChainRoot.BlocksQueued.Add(block.Header.Height, block);
+
+        UpdateTipBlockchain(ChainRoot);
+      }
+
+      Block AppendBlockMined(List<TXBitcoin> tXs, params TXOutputTokenAnchor[] anchors)
+      {
         int height = ChainRoot.HeaderTip.Height + 1;
         Block block = new(0);
         block.TXs.AddRange(tXs);
@@ -95,11 +118,7 @@ internal partial class Testbench
         ChainRoot.AppendHeader(header);
         block.Header = header;
 
-        ChainRoot.BlocksQueued.Add(header.Height, block);
-
-        UpdateTipBlockchain(ChainRoot);
-
-        return header;
+        return block;
       }
 
       internal void MineAnchors(List<Block> blocksLedger)
