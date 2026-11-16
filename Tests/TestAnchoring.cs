@@ -27,16 +27,24 @@ internal partial class Testbench
         && BlockchainAnchoring.TestCompactStore(Testbench.Wallet, ref message)
         && BlockchainAnchoring.TestCompactLoad(Testbench.Wallet, ref message)
         && BlockchainAnchoring.TestCompactServing(Testbench.Wallet, ref message)
-        && BlockchainAnchoring.TestCompactInsertion(Testbench.Wallet, ref message);
+        && BlockchainAnchoring.TestCompactInsertion(Testbench.Wallet, ref message)
+        && BlockchainAnchoring.TestChildSync(Testbench.Wallet, ref message);
     }
 
     class BlockchainAnchoring : BlockchainTestbench
     {
       const string NAME_TOKEN = "TestAnchoring";
+      const string NAME_TOKEN_CHILD = "TestAnchoringChild";
+      const string NAME_ID_TOKEN_CHILD = "CHD";
+      static readonly byte[] ID_TOKEN_CHILD = new ParserBToken(NAME_ID_TOKEN_CHILD).IDToken;
       const int COUNT_MAX_BLOCKS_STORED = COUNT_SEGMENTS + BITCOIN_REORG_MARGIN;
 
       BlockchainAnchoring(LiteDatabase liteDatabase, BlockchainParentFake blockchainParent)
         : base(NAME_TOKEN, liteDatabase, blockchainParent)
+      { }
+
+      BlockchainAnchoring(LiteDatabase liteDatabase, BlockchainAnchoring blockchainParent)
+        : base(NAME_TOKEN_CHILD, liteDatabase, blockchainParent, NAME_ID_TOKEN_CHILD)
       { }
 
       // Counter-tested 2026-11-13 19:05
@@ -571,6 +579,103 @@ internal partial class Testbench
         blockchain.DeliverBlocks(blocksLedger);
 
         return blockchain.IsWithoutAccounts("Compact insertion, window blocks delivered after the compact blocks", HEIGHT_TIP_BEYOND_WINDOW, ref message);
+      }
+
+      internal static bool TestChildSync(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  13. Child Sync: Fresh child syncs through compact blocks its parent fetches.");
+
+        const int HEIGHT_TIP_CHILD = 6;
+        const string NAME_CASE_FRESH = "Child sync, fresh node with the child anchored below the parent's window";
+        const string NAME_CASE_RESTARTED = "Child sync, restart of the synchronized child";
+
+        byte[] iDMiner = CreateIDAccount(1000, 1);
+        Ledger ledgerChild = new(heightRoot: 0);
+        Ledger ledgerParent = new(heightRoot: 0);
+
+        if (!TryInsertCoinbasesUpTo(ledgerChild, wallet, iDMiner, HEIGHT_TIP_CHILD, ref message)
+          || !ledgerParent.TryInsertBlock("coinbase creating the wallet account", [ledgerParent.CreateCoinbase(wallet, wallet.Hash160KeyPublicReceiving, 0)], isValidExpected: true, null, ref message))
+          return false;
+
+        List<Block> blocksChild = ledgerChild.GetBlocksInserted();
+
+        foreach (Block blockChild in blocksChild)
+        {
+          int lockTime = ledgerParent.GetHeightTip();
+
+          TXBToken tXAnchor = ledgerParent.CreateTXSpend(wallet, CreateIDAccount(1001, 2), VALUE_SPEND, t =>
+          {
+            TXOutputTokenAnchor anchor = new()
+            {
+              IDToken = ID_TOKEN_CHILD,
+              HashBlockReferenced = blockChild.Header.Hash,
+              HashBlockPreviousReferenced = blockChild.Header.HashPrevious
+            };
+
+            anchor.Serialize();
+            t.TXOutputs.Add(anchor);
+            t.LockTime = lockTime;
+          });
+
+          if (!ledgerParent.TryInsertBlock($"spend anchoring the child block at height {blockChild.Header.Height}", [ledgerParent.CreateCoinbase(wallet, iDMiner, FEE), tXAnchor], isValidExpected: true, null, ref message))
+            return false;
+        }
+
+        if (!TryInsertCoinbasesUpTo(ledgerParent, wallet, iDMiner, HEIGHT_TIP_BEYOND_WINDOW, ref message))
+          return false;
+
+        List<Block> blocksParent = ledgerParent.GetBlocksInserted();
+        BlockchainAnchoring blockchainServing = StartNode();
+        blockchainServing.SyncBlockByBlock(blocksParent);
+
+        CreateWalletFile(NAME_TOKEN_CHILD);
+
+        BlockchainAnchoring blockchainChild = StartNodeWithChild(new BlockchainParentFake(CreateLiteDatabase()), CreateLiteDatabase(), CreateLiteDatabase(), out BlockchainAnchoring blockchainParent);
+
+        blockchainParent.ParentFake.MineAnchors(blocksParent);
+        blockchainParent.FetchBlocksCompact(blockchainServing);
+        blockchainParent.DeliverBlocks(blocksParent);
+        blockchainChild.DeliverBlocks(blocksChild);
+
+        if (!blockchainParent.IsWithoutAccounts(NAME_CASE_FRESH, HEIGHT_TIP_BEYOND_WINDOW, ref message)
+          || !blockchainChild.IsSynchronized(ledgerChild, NAME_CASE_FRESH, HEIGHT_TIP_CHILD, ref message)
+          || !blockchainChild.AreAnchoredByParent(NAME_CASE_FRESH, blocksParent, ref message))
+          return false;
+
+        BlockchainAnchoring blockchainChildRestarted = StartNodeWithChild(blockchainParent.ParentFake.Restart(), blockchainParent.LiteDatabase, blockchainChild.LiteDatabase, out _);
+
+        return blockchainChildRestarted.IsSynchronized(ledgerChild, NAME_CASE_RESTARTED, HEIGHT_TIP_CHILD, ref message)
+          && blockchainChildRestarted.AreAnchoredByParent(NAME_CASE_RESTARTED, blocksParent, ref message)
+          && blockchainChildRestarted.IsRequestingNoBlock(NAME_CASE_RESTARTED, ref message);
+      }
+
+      static BlockchainAnchoring StartNodeWithChild(BlockchainParentFake blockchainBitcoin, LiteDatabase liteDatabaseParent, LiteDatabase liteDatabaseChild, out BlockchainAnchoring blockchainParent)
+      {
+        blockchainParent = new(liteDatabaseParent, blockchainBitcoin);
+
+        BlockchainAnchoring blockchainChild = new(liteDatabaseChild, blockchainParent);
+        blockchainChild.Load();
+
+        return blockchainChild;
+      }
+
+      bool AreAnchoredByParent(string nameCase, List<Block> blocksParent, ref string message)
+      {
+        for (Header header = ChainRoot.HeaderTipBlockchain; header.Height > 0; header = header.HeaderPrevious)
+        {
+          string nameBlock = $"{nameCase}, child block at height {header.Height}";
+
+          if (header.HeaderParent == null)
+          {
+            message = $"{nameBlock}: not linked to a parent block.";
+            return false;
+          }
+
+          if (!IsFieldEqual(nameBlock, "hash of HeaderParent", blocksParent.Single(b => b.Header.Height == header.Height + 1).Header.Hash, header.HeaderParent.Hash, ref message))
+            return false;
+        }
+
+        return true;
       }
 
       List<(Header header, List<TXOutputTokenAnchor> anchors)> ParseBlocksCompact(byte[] payload)

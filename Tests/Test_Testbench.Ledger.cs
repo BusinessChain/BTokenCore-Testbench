@@ -30,8 +30,8 @@ internal partial class Testbench
         : base(null, null, null, null, null)
       { }
 
-      protected BlockchainTestbench(string nameToken, LiteDatabase liteDatabase, Blockchain blockchainParent)
-        : base(nameToken, liteDatabase, NAME_ID_TOKEN_BTOKEN, blockchainParent, new SemaphoreSlim(1))
+      protected BlockchainTestbench(string nameToken, LiteDatabase liteDatabase, Blockchain blockchainParent, string nameIDToken = NAME_ID_TOKEN_BTOKEN)
+        : base(nameToken, liteDatabase, nameIDToken, blockchainParent, new SemaphoreSlim(1))
       {
         ParentFake = blockchainParent as BlockchainParentFake;
       }
