@@ -154,7 +154,7 @@ internal partial class Testbench
       {
         Header header = new HeaderBitcoin(block.Header.Hash, 0, block.Header.HashPrevious, null, 0, 0, 0) { Height = block.Header.Height };
 
-        return TryParseBlockStored(header, CreateDocumentBlockCompact(block), out Block blockReloaded) ? blockReloaded : null;
+        return TryParseBlockStored(header, CreateDocumentBlockCompact(block.Header, ParserToken.EnumerateAnchorsEligible(block.TXs, block.Header.Height)), out Block blockReloaded) ? blockReloaded : null;
       }
     }
 

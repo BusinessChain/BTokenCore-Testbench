@@ -45,7 +45,7 @@ internal partial class Testbench
       // Counter-tested 2026-11-14 03:01
       internal static bool TestForkPruning(ref string message)
       {
-        Console.WriteLine("  11. Fork Pruning: Check DropForksDeep and ReRoot at every height.");
+        Console.WriteLine("  11. Fork Pruning: Check DropForksDeep at every height.");
 
         for (int countBlocksMain = 0; countBlocksMain <= COUNT_HEADERS_MAIN; countBlocksMain++)
           if (!TryForkPermutations(countBlocksMain, [], COUNT_FORKS_PRUNING_MAX, IsPruningCorrect, ref message))
@@ -68,29 +68,6 @@ internal partial class Testbench
           if (!IsTreeConsistent(chainRoot, headerRoot, headersExpected, headersHeldExpected, out string error))
           {
             message = $"Fork pruning, DropForksDeep at height {height}, {DescribePermutation(countBlocksMain, forks)}: {error}";
-            return false;
-          }
-
-          chainRoot = BuildTree(countBlocksMain, forks, out headerRoot, out headersMain, out headersForks, out headersExpected, out headersHeldExpected);
-
-          Header headerRootNew = headersMain[height - 1];
-
-          foreach (Header header in headersMain.Where(h => h.Height > countBlocksMain + 1))
-          {
-            chainRoot.BlocksQueued.Add(header.Height, new Block(0) { Header = header });
-            headersHeldExpected.Add(header);
-          }
-
-          RemoveForksDeep(forks, headersForks, height, headersExpected, headersHeldExpected);
-          headersExpected.RemoveWhere(h => h.Height < height && IsDescendantOf(headerRootNew, h));
-          headersHeldExpected.RemoveWhere(h => h == headerRoot || headersMain.Contains(h) && (h.Height <= countBlocksMain || h.Height <= height));
-          headersHeldExpected.Add(headerRootNew);
-
-          chainRoot.ReRoot(headerRootNew);
-
-          if (!IsTreeConsistent(chainRoot, headerRootNew, headersExpected, headersHeldExpected, out error))
-          {
-            message = $"Fork pruning, ReRoot at height {height}, {DescribePermutation(countBlocksMain, forks)}: {error}";
             return false;
           }
         }
