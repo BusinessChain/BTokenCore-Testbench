@@ -448,11 +448,11 @@ internal partial class Testbench
 
       internal static bool TestCompactServing(Wallet wallet, ref string message)
       {
-        Console.WriteLine("  11. Compact Serving: Serve compact blocks below a hash, newest first, within limits.");
+        Console.WriteLine("  11. Compact Serving: Serve compact blocks above a hash, ascending, within limits.");
 
         const int COUNT_MAX = 2000;
         const int SIZE_MAX = 4_000_000;
-        const int HEIGHT_LOW = 50;
+        const int COUNT_BELOW_TIP = 50;
         const int COUNT_SIZE_LIMITED = 3;
         const string NAME_CASE = "Compact serving, chain synchronized beyond the stored window";
 
@@ -460,16 +460,17 @@ internal partial class Testbench
           return false;
 
         Header headerTip = blockchain.ChainRoot.HeaderTipBlockchain;
-        Header headerLow = headerTip.GetHeaderAncestor(HEIGHT_LOW);
+        Header headerRoot = headerTip.GetHeaderAncestor(0);
+        Header headerBelowTip = headerTip.GetHeaderAncestor(headerTip.Height - COUNT_BELOW_TIP);
 
         int sizeLimited = VarInt.GetBytes(COUNT_MAX).Length
-          + Enumerable.Range(1, COUNT_SIZE_LIMITED).Sum(i => blockchain.GetBytesBlockCompact(headerTip.Height - i).Length);
+          + Enumerable.Range(1, COUNT_SIZE_LIMITED).Sum(h => blockchain.GetBytesBlockCompact(h).Length);
 
-        return blockchain.IsBatchServed("Compact serving, batch below the tip", headerTip.Hash, COUNT_MAX, SIZE_MAX, headerTip.Height - 1, COUNT_MAX, ref message)
-          && blockchain.IsBatchServed($"Compact serving, batch below height {HEIGHT_LOW}", headerLow.Hash, COUNT_MAX, SIZE_MAX, HEIGHT_LOW - 1, HEIGHT_LOW - 1, ref message)
-          && blockchain.IsBatchServed("Compact serving, batch limited by size", headerTip.Hash, COUNT_MAX, sizeLimited, headerTip.Height - 1, COUNT_SIZE_LIMITED, ref message)
+        return blockchain.IsBatchServed("Compact serving, batch above the root", headerRoot.Hash, COUNT_MAX, SIZE_MAX, 1, COUNT_MAX, ref message)
+          && blockchain.IsBatchServed($"Compact serving, batch above {COUNT_BELOW_TIP} blocks below the tip", headerBelowTip.Hash, COUNT_MAX, SIZE_MAX, headerBelowTip.Height + 1, COUNT_BELOW_TIP, ref message)
+          && blockchain.IsBatchServed("Compact serving, batch limited by size", headerRoot.Hash, COUNT_MAX, sizeLimited, 1, COUNT_SIZE_LIMITED, ref message)
           && blockchain.IsBatchRefused("Compact serving, unknown hash", new byte[32], COUNT_MAX, SIZE_MAX, ref message)
-          && blockchain.IsBatchRefused("Compact serving, lowest block", headerTip.GetHeaderAncestor(1).Hash, COUNT_MAX, SIZE_MAX, ref message);
+          && blockchain.IsBatchRefused("Compact serving, tip", headerTip.Hash, COUNT_MAX, SIZE_MAX, ref message);
       }
 
       byte[] GetBytesBlockCompact(int height)
@@ -487,7 +488,7 @@ internal partial class Testbench
 
         byte[] payloadExpected = [
           .. VarInt.GetBytes(countExpected),
-          .. Enumerable.Range(0, countExpected).SelectMany(i => GetBytesBlockCompact(heightFirst - i))];
+          .. Enumerable.Range(heightFirst, countExpected).SelectMany(GetBytesBlockCompact)];
 
         return IsFieldEqual(nameCase, "payload", payloadExpected, payload, ref message);
       }
