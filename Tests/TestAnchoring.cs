@@ -26,7 +26,8 @@ internal partial class Testbench
         && BlockchainAnchoring.TestRestartResync(Testbench.Wallet, ref message)
         && BlockchainAnchoring.TestCompactStore(Testbench.Wallet, ref message)
         && BlockchainAnchoring.TestCompactLoad(Testbench.Wallet, ref message)
-        && BlockchainAnchoring.TestCompactServing(Testbench.Wallet, ref message);
+        && BlockchainAnchoring.TestCompactServing(Testbench.Wallet, ref message)
+        && BlockchainAnchoring.TestCompactInsertion(Testbench.Wallet, ref message);
     }
 
     class BlockchainAnchoring : BlockchainTestbench
@@ -471,6 +472,105 @@ internal partial class Testbench
           && blockchain.IsBatchServed("Compact serving, batch limited by size", headerRoot.Hash, COUNT_MAX, sizeLimited, 1, COUNT_SIZE_LIMITED, ref message)
           && blockchain.IsBatchRefused("Compact serving, unknown hash", new byte[32], COUNT_MAX, SIZE_MAX, ref message)
           && blockchain.IsBatchRefused("Compact serving, tip", headerTip.Hash, COUNT_MAX, SIZE_MAX, ref message);
+      }
+
+      internal static bool TestCompactInsertion(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  12. Compact Insertion: Append checked compact blocks behind the window, then download blocks.");
+
+        const int COUNT_MAX = 2000;
+        const int SIZE_MAX = 4_000_000;
+        const int HEIGHT_TARGET = HEIGHT_TIP_BEYOND_WINDOW - COUNT_MAX_BLOCKS_STORED;
+        const string NAME_CASE = "Compact insertion, serving chain synchronized beyond the stored window";
+        const string NAME_CASE_BEHIND = "Compact insertion, fresh node with every anchor mined";
+
+        if (!TrySyncBeyondWindow(wallet, NAME_CASE, out Ledger ledger, out BlockchainAnchoring blockchainServing, ref message))
+          return false;
+
+        List<Block> blocksLedger = ledger.GetBlocksInserted();
+        BlockchainAnchoring blockchain = StartNode();
+        List<Block> blocksAnnounced = new();
+        blockchain.OnBlockInserted += blocksAnnounced.Add;
+
+        blockchain.ParentFake.MineAnchors(blocksLedger);
+
+        Header headerRoot = blockchain.ChainRoot.HeaderTipBlockchain;
+
+        if (!IsFieldEqual(NAME_CASE_BEHIND, "height of the tip", 0, headerRoot.Height, ref message))
+          return false;
+
+        if (blockchain.FetchHeaderBlockMissingNext(h => true) != null || blockchain.FetchHeaderBlockCompactNext(h => true) != headerRoot)
+        {
+          message = $"{NAME_CASE_BEHIND}: the node requests a block or no compact blocks above its tip.";
+          return false;
+        }
+
+        List<(Header header, List<TXOutputTokenAnchor> anchors)> blocksCompact = blockchain.ParseBlocksCompact(
+          blockchainServing.GetBlocksCompactSerialized(headerRoot.Hash, COUNT_MAX, SIZE_MAX));
+
+        List<(Header header, List<TXOutputTokenAnchor> anchors)> blocksCompactAnchorsWrong = blocksCompact
+          .Take(HEIGHT_ANCHORS_BEYOND_WINDOW)
+          .Select(b => b.header.Height == HEIGHT_ANCHORS_BEYOND_WINDOW ? (b.header, new List<TXOutputTokenAnchor>()) : b)
+          .ToList();
+
+        if (!IsRejected("Compact insertion, first compact block of another height", () => blockchain.InsertBlocksCompact(headerRoot.Hash, blocksCompact.Skip(1).ToList()), ref message)
+          || !blockchain.IsAtHeight("Compact insertion, after the compact block of another height", 0, ref message)
+          || !IsRejected($"Compact insertion, anchors left out at height {HEIGHT_ANCHORS_BEYOND_WINDOW}", () => blockchain.InsertBlocksCompact(headerRoot.Hash, blocksCompactAnchorsWrong), ref message)
+          || !blockchain.IsAtHeight("Compact insertion, after the compact block with wrong anchors", HEIGHT_ANCHORS_BEYOND_WINDOW - 1, ref message))
+          return false;
+
+        blockchain.InsertBlocksCompact(headerRoot.Hash, blocksCompact);
+
+        if (!blockchain.IsAtHeight("Compact insertion, answer to an outdated tip", HEIGHT_ANCHORS_BEYOND_WINDOW - 1, ref message))
+          return false;
+
+        Header headerTip = blockchain.ChainRoot.HeaderTipBlockchain;
+        blockchain.InsertBlocksCompact(headerTip.Hash, blockchain.ParseBlocksCompact(blockchainServing.GetBlocksCompactSerialized(headerTip.Hash, COUNT_MAX, SIZE_MAX)));
+
+        const string NAME_CASE_TARGET = "Compact insertion, compact blocks up to the tallest tip minus the stored window";
+
+        if (!blockchain.IsAtHeight(NAME_CASE_TARGET, HEIGHT_TARGET, ref message)
+          || !blockchain.AreBlocksCompactMatching(NAME_CASE_TARGET, blocksLedger.Where(b => b.Header.Height <= HEIGHT_TARGET).ToList(), ref message))
+          return false;
+
+        if (!blocksAnnounced.Select(b => b.Header.Height).SequenceEqual(Enumerable.Range(1, HEIGHT_TARGET)))
+        {
+          message = $"{NAME_CASE_TARGET}: the compact blocks were announced at heights {string.Join(",", blocksAnnounced.Select(b => b.Header.Height))}, expected 1 to {HEIGHT_TARGET}.";
+          return false;
+        }
+
+        Header headerAnchors = blockchain.ChainRoot.HeaderTipBlockchain.GetHeaderAncestor(HEIGHT_ANCHORS_BEYOND_WINDOW);
+        Header headerAnchorsServing = blockchainServing.ChainRoot.HeaderTipBlockchain.GetHeaderAncestor(HEIGHT_ANCHORS_BEYOND_WINDOW);
+
+        if (!IsFieldEqual(NAME_CASE_TARGET, $"AnchorsWinner.Count at height {HEIGHT_ANCHORS_BEYOND_WINDOW}", headerAnchorsServing.AnchorsWinner.Count, headerAnchors.AnchorsWinner.Count, ref message)
+          || !IsFieldEqual(NAME_CASE_TARGET, $"HashBlockReferenced of the anchor winner at height {HEIGHT_ANCHORS_BEYOND_WINDOW}", headerAnchorsServing.AnchorsWinner[ID_TOKEN].HashBlockReferenced, headerAnchors.AnchorsWinner[ID_TOKEN].HashBlockReferenced, ref message))
+          return false;
+
+        if (blockchain.FetchHeaderBlockCompactNext(h => true) != null)
+        {
+          message = $"{NAME_CASE_TARGET}: the node still requests compact blocks.";
+          return false;
+        }
+
+        blockchain.DeliverBlocks(blocksLedger);
+
+        return blockchain.IsWithoutAccounts("Compact insertion, window blocks delivered after the compact blocks", HEIGHT_TIP_BEYOND_WINDOW, ref message);
+      }
+
+      List<(Header header, List<TXOutputTokenAnchor> anchors)> ParseBlocksCompact(byte[] payload)
+      {
+        int index = 0;
+        int countBlocksCompact = VarInt.GetInt(payload, ref index);
+
+        List<(Header header, List<TXOutputTokenAnchor> anchors)> blocksCompact = new();
+
+        for (int i = 0; i < countBlocksCompact; i++)
+        {
+          Header header = Parser.ParseHeader(payload, ref index);
+          blocksCompact.Add((header, ParserToken.ParseAnchors(payload, ref index)));
+        }
+
+        return blocksCompact;
       }
 
       byte[] GetBytesBlockCompact(int height)
