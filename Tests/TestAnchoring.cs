@@ -281,10 +281,9 @@ internal partial class Testbench
           && blockchainParentLost.AreBlocksCompactMatching(nameCaseLostAll, blocksLedger.Where(b => b.Header.Height <= HEIGHT_BELOW_WINDOW).ToList(), ref message);
       }
 
-      // Counter-tested 2026-11-13 19:05
       internal static bool TestWindowResync(Wallet wallet, ref string message)
       {
-        Console.WriteLine("  7. Window Resync: Drop accounts, re-root when a fork outruns the stored window.");
+        Console.WriteLine("  7. Window Resync: Drop accounts, fetch compact blocks when a fork outruns the window.");
 
         const int HEIGHT_FORK = 3;
         const int HEIGHT_TIP = 6;
@@ -313,22 +312,26 @@ internal partial class Testbench
 
         foreach (Block blockFork in blocksFork.Where(b => b.Header.Height >= HEIGHT_RESYNC))
         {
-          int heightRoot = blockFork.Header.Height - COUNT_MAX_BLOCKS_STORED;
           string nameCase = $"Window resync, fork anchored up to height {blockFork.Header.Height}";
 
           blockchain.ParentFake.MineAnchors([blockFork]);
 
-          if (!blockchain.IsWithoutAccounts(nameCase, heightRoot, ref message)
-            || !blockchain.IsBlockStoredOldestAt(nameCase, heightRoot, ref message))
+          if (!blockchain.IsBehindWindowAtFork(nameCase, HEIGHT_FORK, ref message))
             return false;
         }
 
+        BlockchainAnchoring blockchainServing = StartNode();
+        blockchainServing.SyncBlockByBlock(ledger.GetBlocksInserted());
+
+        blockchain.FetchBlocksCompact(blockchainServing);
         blockchain.DeliverBlocks(blocksFork);
 
-        return blockchain.IsWithoutAccounts("Window resync, fork blocks delivered after the resync", HEIGHT_RESYNC + 1, ref message);
+        const string NAME_CASE_DELIVERED = "Window resync, compact blocks fetched and fork blocks delivered after the resync";
+
+        return blockchain.IsWithoutAccounts(NAME_CASE_DELIVERED, HEIGHT_RESYNC + 1, ref message)
+          && blockchain.IsBlockStoredOldestAt(NAME_CASE_DELIVERED, HEIGHT_RESYNC + 1 - COUNT_MAX_BLOCKS_STORED + 1, ref message);
       }
 
-      // Counter-tested 2026-11-14 03:01
       internal static bool TestRestartResync(Wallet wallet, ref string message)
       {
         Console.WriteLine("  8. Restart Resync: Resync at restart when RollBackUnanchored drops below the window.");
@@ -350,20 +353,34 @@ internal partial class Testbench
           || !TryForkLedger(ledger, wallet, HEIGHT_FORK, HEIGHT_TIP_FORK, out List<Block> blocksFork, ref message))
           return false;
 
-        BlockchainAnchoring blockchainAnchoringFork = StartNode();
-        blockchainAnchoringFork.ParentFake.MineAnchors([.. blocksMain.Where(b => b.Header.Height <= HEIGHT_FORK), .. blocksFork]);
+        BlockchainAnchoring blockchainServing = StartNode();
+        blockchainServing.SyncBlockByBlock(ledger.GetBlocksInserted());
 
-        BlockchainAnchoring blockchainRestarted = StartNode(blockchain.LiteDatabase, blockchainAnchoringFork.ParentFake.Restart());
+        BlockchainAnchoring blockchainRestarted = StartNode(blockchain.LiteDatabase, blockchainServing.ParentFake.Restart());
 
-        string nameCase = "Restart resync, restart on a parent chain anchoring a fork below the tip";
-
-        if (!blockchainRestarted.IsWithoutAccounts(nameCase, HEIGHT_TIP_FORK - COUNT_MAX_BLOCKS_STORED, ref message)
-          || !blockchainRestarted.IsBlockStoredOldestAt(nameCase, HEIGHT_TIP_FORK - COUNT_MAX_BLOCKS_STORED, ref message))
+        if (!blockchainRestarted.IsBehindWindowAtFork("Restart resync, restart on a parent chain anchoring a fork below the tip", HEIGHT_FORK, ref message))
           return false;
 
+        blockchainRestarted.FetchBlocksCompact(blockchainServing);
         blockchainRestarted.DeliverBlocks(blocksFork);
 
-        return blockchainRestarted.IsWithoutAccounts("Restart resync, fork blocks delivered after the resync", HEIGHT_TIP_FORK, ref message);
+        const string NAME_CASE_DELIVERED = "Restart resync, compact blocks fetched and fork blocks delivered after the resync";
+
+        return blockchainRestarted.IsWithoutAccounts(NAME_CASE_DELIVERED, HEIGHT_TIP_FORK, ref message)
+          && blockchainRestarted.IsBlockStoredOldestAt(NAME_CASE_DELIVERED, HEIGHT_TIP_FORK - COUNT_MAX_BLOCKS_STORED + 1, ref message);
+      }
+
+      bool IsBehindWindowAtFork(string nameCase, int heightFork, ref string message)
+      {
+        if (!IsWithoutAccounts(nameCase, heightFork, ref message)
+          || !IsFieldEqual(nameCase, "count of full blocks", 0, BlocksStored.Count(), ref message))
+          return false;
+
+        if (FetchHeaderBlockCompactNext(h => true) is Header headerRequested && headerRequested.Height == heightFork)
+          return true;
+
+        message = $"{nameCase}: the node does not request the compact blocks above the fork at height {heightFork}.";
+        return false;
       }
 
       internal static bool TestCompactStore(Wallet wallet, ref string message)
