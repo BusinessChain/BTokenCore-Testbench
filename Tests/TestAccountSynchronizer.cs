@@ -41,13 +41,9 @@ internal partial class Testbench
       const int HEIGHT_TIP_WINDOW = 2060;
       const int HEIGHT_INSTALLED = HEIGHT_TIP_WINDOW - BITCOIN_REORG_MARGIN;
 
-      int HeightAnchored;
-
-      BlockchainSynchronizing(LiteDatabase liteDatabase, Blockchain blockchainParent, int heightAnchored)
+      BlockchainSynchronizing(LiteDatabase liteDatabase, Blockchain blockchainParent)
         : base(NAME_TOKEN, liteDatabase, blockchainParent)
-      {
-        HeightAnchored = heightAnchored;
-      }
+      { }
 
       // Counter-tested 2026-11-13 17:16
       internal static bool TestFreshStart(Wallet wallet, ref string message)
@@ -104,7 +100,6 @@ internal partial class Testbench
         return blockchain.IsSynchronized(ledger, "Account synchronizer, replacing fork inserted after the rollback to height 3", 6, ref message);
       }
 
-      // Counter-tested 2026-11-14 03:01
       internal static bool TestRestartRollback(Wallet wallet, ref string message)
       {
         Console.WriteLine("  3. Restart Rollback: Restart rolls accounts back with unanchored blocks before replaying.");
@@ -143,6 +138,7 @@ internal partial class Testbench
           return false;
 
         blockchainRestarted.BlocksStored.Delete(6);
+        blockchainRestarted.BlocksCompact.Delete(6);
 
         return StartNode(blockchainRestarted.LiteDatabase, int.MaxValue)
           .IsSynchronized(ledger, "Account synchronizer, restart without the stored block the accounts applied last", 5, ref message);
@@ -211,7 +207,6 @@ internal partial class Testbench
           && blockchainReloaded.IsInPool("owned TX reloaded after the replay", tXSpend.Hash, true, ref message);
       }
 
-      // Counter-tested 2026-11-14 03:01
       internal static bool TestRollbackGating(Wallet wallet, ref string message)
       {
         Console.WriteLine("  10. Rollback Gating: Return rolled-back TXs to the pool only with accounts.");
@@ -838,20 +833,23 @@ internal partial class Testbench
         CreateWalletFile(BlockchainBitcoin.NAME_TOKEN);
         CreateWalletFile(NAME_TOKEN);
 
-        BlockchainBitcoin blockchainParent = new(CreateLiteDatabase(), new SemaphoreSlim(1));
+        BlockchainParentFake blockchainParent = new(CreateLiteDatabase());
 
-        BlockchainSynchronizing blockchain = new(liteDatabase, blockchainParent, heightAnchored);
+        foreach (BsonDocument documentBlock in liteDatabase.GetCollection<BsonDocument>("blocksCompact").Find(Query.All(Query.Ascending)))
+        {
+          if (documentBlock[NAME_FIELD_ID].AsInt32 > heightAnchored)
+            break;
+
+          int index = 0;
+          HeaderBToken header = new(documentBlock[NAME_FIELD_BLOCK_BYTES].AsBinary, ref index);
+
+          blockchainParent.MineBlock([], BlockchainParentFake.CreateAnchor(header.Hash, header.HashPrevious));
+        }
+
+        BlockchainSynchronizing blockchain = new(liteDatabase, blockchainParent.Restart());
         blockchain.Load();
 
         return blockchain;
-      }
-
-      protected override void ParseBlockStored(Block block, BsonDocument documentBlock)
-      {
-        if (block.Header.Height <= HeightAnchored)
-          block.Header.HeaderParent = ChainRoot.HeaderRoot.HeaderParent;
-
-        base.ParseBlockStored(block, documentBlock);
       }
 
       void InsertBlocks(List<Block> blocksLedger)

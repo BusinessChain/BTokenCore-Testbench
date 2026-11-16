@@ -1,4 +1,6 @@
-﻿using BTokenCore;
+﻿using System.Security.Cryptography;
+
+using BTokenCore;
 
 using LiteDB;
 
@@ -487,8 +489,7 @@ internal partial class Testbench
           return false;
 
         Header headerTip = blockchain.ChainRoot.HeaderTipBlockchain;
-        Header headerRoot = headerTip.GetHeaderAncestor(0);
-        Header headerBelowTip = headerTip.GetHeaderAncestor(headerTip.Height - COUNT_BELOW_TIP);
+        Header headerRoot = headerTip.GetHeaderAncestor(0);        Header headerBelowTip = headerTip.GetHeaderAncestor(headerTip.Height - COUNT_BELOW_TIP);
 
         int sizeLimited = VarInt.GetBytes(COUNT_MAX_BLOCKS_COMPACT).Length
           + Enumerable.Range(1, COUNT_SIZE_LIMITED).Sum(h => blockchain.GetBytesBlockCompact(h).Length);
@@ -496,7 +497,7 @@ internal partial class Testbench
         return blockchain.IsBatchServed("Compact serving, batch above the root", headerRoot.Hash, COUNT_MAX_BLOCKS_COMPACT, SIZE_MAX_BLOCKS_COMPACT, 1, COUNT_MAX_BLOCKS_COMPACT, ref message)
           && blockchain.IsBatchServed($"Compact serving, batch above {COUNT_BELOW_TIP} blocks below the tip", headerBelowTip.Hash, COUNT_MAX_BLOCKS_COMPACT, SIZE_MAX_BLOCKS_COMPACT, headerBelowTip.Height + 1, COUNT_BELOW_TIP, ref message)
           && blockchain.IsBatchServed("Compact serving, batch limited by size", headerRoot.Hash, COUNT_MAX_BLOCKS_COMPACT, sizeLimited, 1, COUNT_SIZE_LIMITED, ref message)
-          && blockchain.IsBatchRefused("Compact serving, unknown hash", new byte[32], COUNT_MAX_BLOCKS_COMPACT, SIZE_MAX_BLOCKS_COMPACT, ref message)
+          && blockchain.IsBatchRefused("Compact serving, unknown hash", RandomNumberGenerator.GetBytes(32), COUNT_MAX_BLOCKS_COMPACT, SIZE_MAX_BLOCKS_COMPACT, ref message)
           && blockchain.IsBatchRefused("Compact serving, tip", headerTip.Hash, COUNT_MAX_BLOCKS_COMPACT, SIZE_MAX_BLOCKS_COMPACT, ref message);
       }
 
@@ -534,7 +535,7 @@ internal partial class Testbench
 
         List<(Header header, List<TXOutputTokenAnchor> anchors)> blocksCompactAnchorsWrong = blocksCompact
           .Take(HEIGHT_ANCHORS_BEYOND_WINDOW)
-          .Select(b => b.header.Height == HEIGHT_ANCHORS_BEYOND_WINDOW ? (b.header, new List<TXOutputTokenAnchor>()) : b)
+          .Select((b, i) => i + 1 == HEIGHT_ANCHORS_BEYOND_WINDOW ? (b.header, new List<TXOutputTokenAnchor>()) : b)
           .ToList();
 
         if (!IsRejected("Compact insertion, first compact block of another height", () => blockchain.InsertBlocksCompact(headerRoot.Hash, blocksCompact.Skip(1).ToList()), ref message)

@@ -64,28 +64,36 @@ internal partial class Testbench
 
       internal Header MineBlock(List<TXBitcoin> tXs, params TXOutputTokenAnchor[] anchors)
       {
-        HeaderBToken header = new(
-          headerHash: null,
-          hashPrevious: ChainRoot.HeaderTip.Hash,
-          merkleRootHash: RandomNumberGenerator.GetBytes(32),
-          hashAccounts: new byte[32],
-          nonce: 0);
-
-        header.ComputeHash();
-
-        foreach (TXOutputTokenAnchor anchor in anchors)
-          header.AnchorsWinner[anchor.IDToken] = anchor;
-
-        ChainRoot.AppendHeader(header);
-        Block block = new(0) { Header = header };
+        int height = ChainRoot.HeaderTip.Height + 1;
+        Block block = new(0);
         block.TXs.AddRange(tXs);
 
         if (anchors.Length > 0)
         {
-          TXBitcoin tXAnchors = new() { LockTime = header.Height - 1 };
+          TXBitcoin tXAnchors = new() { LockTime = height - 1 };
           tXAnchors.TXOutputs.AddRange(anchors);
           block.TXs.Add(tXAnchors);
         }
+
+        List<TXOutputTokenAnchor> anchorsEligible = ParserToken.EnumerateAnchorsEligible(block.TXs, height).ToList();
+        HeaderBToken header;
+
+        do
+        {
+          header = new(
+            headerHash: null,
+            hashPrevious: ChainRoot.HeaderTip.Hash,
+            merkleRootHash: RandomNumberGenerator.GetBytes(32),
+            hashAccounts: new byte[32],
+            nonce: 0);
+
+          header.ComputeHash();
+          ParserToken.DrawAnchorsWinner(header, anchorsEligible, 0);
+        }
+        while (anchors.Any(a => header.AnchorsWinner[a.IDToken] != a));
+
+        ChainRoot.AppendHeader(header);
+        block.Header = header;
 
         ChainRoot.BlocksQueued.Add(header.Height, block);
 

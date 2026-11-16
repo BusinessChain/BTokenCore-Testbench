@@ -314,7 +314,7 @@ internal partial class Testbench
         TXBToken tXCoinbaseCreating = ledger.CreateCoinbase(wallet, iDMiner, tXA1.Fee + tXC1Conflicting.Fee, new TXOutputP2PKH(1000, iDCreatedByBlock));
 
         return ledger.TryInsertBlock("block confirming a spend, replacing a spend and creating an account", [tXCoinbaseCreating, tXA1, tXC1Conflicting], isValidExpected: true, null, ref message)
-          && AreTXsRankedCorrect("pool after RemoveTXs", pool.GetTXsRanked(), [.. new[] { tXA2, tXC2 }.OrderByDescending(t => t.GetFeePerByte())], ref message)
+          && AreTXsRankedCorrect("pool after RemoveTXs", pool.GetTXsRanked(), [.. new[] { tXA2, tXC2 }.OrderByDescending(t => ParseTXRaw(t.TXRaw).GetFeePerByte())], ref message)
           && ledger.TryInsertBlockFromPool("block of the TXs left in the pool", pool, wallet, iDMiner, 2, ref message);
       }
 
