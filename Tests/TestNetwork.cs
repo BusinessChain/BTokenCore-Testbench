@@ -100,6 +100,7 @@ internal partial class Testbench
         && TestHeadersInsertion(ref message)
         && TestReturnIdle(ref message)
         && TestEndToEnd(blocksWindow, spendsWindow[0], ref message)
+        && TestFreshCompacts(blocksWindow, ref message)
         && TestNetworkRecovery(Testbench.Wallet, ref message)
         && TestPoolConvergence(Testbench.Wallet, ref message)
         && TestAnnounceReopened(Testbench.Wallet, ref message)
@@ -466,6 +467,47 @@ internal partial class Testbench
         return true;
 
       message = $"{NAME_CASE}: the fresh node does not receive the TX {spend.Hash.ToHexString()} submitted to the serving node.";
+      return false;
+    }
+
+    static bool TestFreshCompacts(List<Block> blocksWindow, ref string message)
+    {
+      Console.WriteLine("  52. Fresh Compacts: A fresh node fetches the compact blocks below its window from a peer.");
+
+      const string NAME_CASE = "Fresh compacts";
+      const string IP_FRESH = "10.0.6.3";
+      const int SECONDS_TIMEOUT_SYNC = 300;
+
+      CommunicationFake communicationServing = new();
+      CommunicationFake communicationFresh = new();
+      communicationFresh.LinkOutbound(communicationServing, IP_FRESH);
+
+      NetworkTestbench networkServing = BlockchainNetwork.StartNode(communicationServing, prepare: b => b.AnchorAndDeliver(blocksWindow));
+      NetworkTestbench networkFresh = BlockchainNetwork.StartNode(
+        communicationFresh,
+        prepareParent: p =>
+        {
+          p.MineAnchors(blocksWindow);
+          p.MineBlock([]);
+        });
+
+      int heightTip = blocksWindow[^1].Header.Height;
+
+      if (!IsAtHeight(NAME_CASE, networkFresh, heightTip, ref message, SECONDS_TIMEOUT_SYNC))
+        return false;
+
+      BlockchainNetwork blockchainServing = (BlockchainNetwork)networkServing.Blockchain;
+      BlockchainNetwork blockchainFresh = (BlockchainNetwork)networkFresh.Blockchain;
+
+      string messageCompacts = "";
+
+      bool areBlocksCompactEqual = blockchainServing.RunLocked(() =>
+        blockchainFresh.RunLocked(() => blockchainFresh.AreBlocksCompactEqual(NAME_CASE, blockchainServing, heightTip, ref messageCompacts)).Result).Result;
+
+      if (areBlocksCompactEqual)
+        return true;
+
+      message = messageCompacts;
       return false;
     }
 
@@ -2593,6 +2635,38 @@ internal partial class Testbench
           return false;
 
         blocks = ledger.GetBlocksInserted();
+        return true;
+      }
+
+      internal bool AreBlocksCompactEqual(string nameCase, BlockchainNetwork blockchainOther, int heightTip, ref string message)
+      {
+        for (int height = 1; height <= heightTip; height++)
+        {
+          string nameBlock = $"{nameCase}, compact block at height {height}";
+
+          if (BlocksCompact.FindById(height) is not BsonDocument documentBlock
+            || blockchainOther.BlocksCompact.FindById(height) is not BsonDocument documentBlockOther)
+          {
+            message = $"{nameBlock}: missing on one of the nodes.";
+            return false;
+          }
+
+          Header header = ChainRoot.HeaderTipBlockchain.GetHeaderAncestor(height);
+          Header headerOther = blockchainOther.ChainRoot.HeaderTipBlockchain.GetHeaderAncestor(height);
+
+          if (!IsFieldEqual(nameBlock, "stored bytes", documentBlockOther[NAME_FIELD_BLOCK_BYTES].AsBinary, documentBlock[NAME_FIELD_BLOCK_BYTES].AsBinary, ref message)
+            || !IsFieldEqual(nameBlock, "AnchorsWinner.Count", headerOther.AnchorsWinner.Count, header.AnchorsWinner.Count, ref message))
+            return false;
+
+          foreach (TXOutputTokenAnchor anchor in headerOther.AnchorsWinner.Values)
+            if (!header.AnchorsWinner.TryGetValue(anchor.IDToken, out TXOutputTokenAnchor anchorWinner)
+              || !anchorWinner.HashBlockReferenced.IsAllBytesEqual(anchor.HashBlockReferenced))
+            {
+              message = $"{nameBlock}: the anchor winner of IDToken {anchor.IDToken.ToHexString()} differs.";
+              return false;
+            }
+        }
+
         return true;
       }
 
