@@ -259,7 +259,7 @@ internal partial class Testbench
         };
 
         new ParserBitcoin().ParseBlock(blockParsed, verifySignatures: false);
-        Blockchain.ParserToken.DrawAnchorsWinner(blockParsed.Header, Blockchain.ParserToken.EnumerateAnchorsEligible(blockParsed.TXs, blockParsed.Header.Height));
+        Blockchain.ParserToken.DrawAnchorsWinner(blockParsed.Header, Blockchain.ParserToken.EnumerateAnchorsEligible(blockParsed.TXs, blockParsed.Header.Height), 0);
 
         string nameParser = $"Anchor winners drawn by ParserBitcoin in block {block.Header.Hash.ToHexString()}";
 

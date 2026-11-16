@@ -213,7 +213,6 @@ internal partial class Testbench
       return true;
     }
 
-    // Counter-tested 2026-11-15 16:34
     bool Test_ScoreRootHash(Wallet wallet, out Block blockParsed, ref string message)
     {
       Console.WriteLine("  6. Root Hash Score: Score child anchors with the root chain's header hash.");

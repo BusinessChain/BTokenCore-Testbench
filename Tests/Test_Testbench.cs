@@ -153,7 +153,12 @@ internal partial class Testbench
       };
 
       new ParserBToken(NAME_ID_TOKEN_BTOKEN).ParseBlock(blockParsed, verifySignatures: true);
-      Blockchain.ParserToken.DrawAnchorsWinner(blockParsed.Header, Blockchain.ParserToken.EnumerateAnchorsEligible(blockParsed.TXs, blockParsed.Header.Height));
+      int countLevelsBelowRoot = 0;
+
+      for (Header header = headerExpected.HeaderParent; header != null; header = header.HeaderParent)
+        countLevelsBelowRoot += 1;
+
+      Blockchain.ParserToken.DrawAnchorsWinner(blockParsed.Header, Blockchain.ParserToken.EnumerateAnchorsEligible(blockParsed.TXs, blockParsed.Header.Height), countLevelsBelowRoot);
 
       return blockParsed;
     }
