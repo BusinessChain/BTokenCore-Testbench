@@ -200,14 +200,12 @@ internal partial class Testbench
           && blockchainRestarted.IsRequestingNoBlock(nameCase, ref message);
       }
 
-      // Counter-tested 2026-11-14 03:01
       internal static bool TestRestartUnanchored(Wallet wallet, ref string message)
       {
         Console.WriteLine("  6. Restart Unanchored: Roll back unanchored tip blocks, keep unanchored blocks below anchored.");
 
-        const int HEIGHT_TIP_REROOTED = COUNT_MAX_BLOCKS_STORED + 7;
-        const int HEIGHT_ROOT_REROOTED = HEIGHT_TIP_REROOTED - COUNT_MAX_BLOCKS_STORED;
-        const int HEIGHT_ANCHOR_LOST_LAST = HEIGHT_ROOT_REROOTED + 3;
+        const int HEIGHT_BELOW_WINDOW = HEIGHT_TIP_BEYOND_WINDOW - COUNT_MAX_BLOCKS_STORED;
+        const int HEIGHT_ANCHOR_LOST_LAST = HEIGHT_BELOW_WINDOW + 3;
 
         if (!TryCreateLedger(wallet, out Ledger ledger, ref message))
           return false;
@@ -243,39 +241,44 @@ internal partial class Testbench
         BlockchainAnchoring blockchainGenesisRestarted = StartNode(blockchainGenesis.LiteDatabase, blockchainGenesis.ParentFake.Restart());
 
         if (!blockchainGenesisRestarted.IsSynchronized(ledger, "Restart unanchored, restart under the genesis root after the Bitcoin blocks up to height 2 were lost", 6, ref message)
-          || !TryInsertCoinbasesUpTo(ledger, wallet, CreateIDAccount(1000, 1), HEIGHT_TIP_REROOTED, ref message))
+          || !TryInsertCoinbasesUpTo(ledger, wallet, CreateIDAccount(1000, 1), HEIGHT_TIP_BEYOND_WINDOW, ref message))
           return false;
 
         blocksLedger = ledger.GetBlocksInserted();
-        BlockchainAnchoring blockchainRerooted = StartNode();
+        BlockchainAnchoring blockchainServing = StartNode();
+        blockchainServing.SyncBlockByBlock(blocksLedger);
 
-        blockchainRerooted.ParentFake.MineAnchors(blocksLedger);
-        blockchainRerooted.DeliverBlocks(blocksLedger);
+        BlockchainAnchoring blockchainBeyondWindow = StartNode();
 
-        string nameCaseRerooted = $"Restart unanchored, chain re-rooted at height {HEIGHT_ROOT_REROOTED}";
+        blockchainBeyondWindow.ParentFake.MineAnchors(blocksLedger);
+        blockchainBeyondWindow.FetchBlocksCompact(blockchainServing);
+        blockchainBeyondWindow.DeliverBlocks(blocksLedger);
 
-        if (!blockchainRerooted.IsWithoutAccounts(nameCaseRerooted, HEIGHT_TIP_REROOTED, ref message)
-          || !blockchainRerooted.IsBlockStoredOldestAt(nameCaseRerooted, HEIGHT_ROOT_REROOTED + 1, ref message))
+        string nameCaseBeyondWindow = $"Restart unanchored, compact blocks fetched up to height {HEIGHT_BELOW_WINDOW}, window delivered";
+
+        if (!blockchainBeyondWindow.IsWithoutAccounts(nameCaseBeyondWindow, HEIGHT_TIP_BEYOND_WINDOW, ref message)
+          || !blockchainBeyondWindow.IsBlockStoredOldestAt(nameCaseBeyondWindow, HEIGHT_BELOW_WINDOW + 1, ref message))
           return false;
 
-        blockchainRerooted.ParentFake.DeleteBlocksStored(0, HEIGHT_ANCHOR_LOST_LAST);
+        blockchainBeyondWindow.ParentFake.DeleteBlocksStored(0, HEIGHT_ANCHOR_LOST_LAST);
 
-        BlockchainAnchoring blockchainRerootedRestarted = StartNode(blockchainRerooted.LiteDatabase, blockchainRerooted.ParentFake.Restart());
+        BlockchainAnchoring blockchainBeyondWindowRestarted = StartNode(blockchainBeyondWindow.LiteDatabase, blockchainBeyondWindow.ParentFake.Restart());
 
         string nameCaseLostBelow = $"Restart unanchored, restart after the Bitcoin blocks up to height {HEIGHT_ANCHOR_LOST_LAST} were lost";
 
-        if (!blockchainRerootedRestarted.IsWithoutAccounts(nameCaseLostBelow, HEIGHT_TIP_REROOTED, ref message)
-          || !blockchainRerootedRestarted.IsBlockStoredOldestAt(nameCaseLostBelow, HEIGHT_ROOT_REROOTED + 1, ref message))
+        if (!blockchainBeyondWindowRestarted.IsWithoutAccounts(nameCaseLostBelow, HEIGHT_TIP_BEYOND_WINDOW, ref message)
+          || !blockchainBeyondWindowRestarted.IsBlockStoredOldestAt(nameCaseLostBelow, HEIGHT_BELOW_WINDOW + 1, ref message))
           return false;
 
-        blockchainRerootedRestarted.ParentFake.DeleteBlocksStored(0, int.MaxValue);
+        blockchainBeyondWindowRestarted.ParentFake.DeleteBlocksStored(0, int.MaxValue);
 
-        BlockchainAnchoring blockchainParentLost = StartNode(blockchainRerootedRestarted.LiteDatabase, blockchainRerootedRestarted.ParentFake.Restart());
+        BlockchainAnchoring blockchainParentLost = StartNode(blockchainBeyondWindowRestarted.LiteDatabase, blockchainBeyondWindowRestarted.ParentFake.Restart());
 
-        string nameCaseLostAll = "Restart unanchored, restart of the re-rooted node after all Bitcoin blocks were lost";
+        string nameCaseLostAll = "Restart unanchored, restart of the node beyond the window after all Bitcoin blocks were lost";
 
-        return blockchainParentLost.IsWithoutAccounts(nameCaseLostAll, HEIGHT_ROOT_REROOTED + 1, ref message)
-          && blockchainParentLost.IsBlockStoredOldestAt(nameCaseLostAll, HEIGHT_ROOT_REROOTED + 1, ref message);
+        return blockchainParentLost.IsWithoutAccounts(nameCaseLostAll, HEIGHT_BELOW_WINDOW, ref message)
+          && IsFieldEqual(nameCaseLostAll, "count of full blocks", 0, blockchainParentLost.BlocksStored.Count(), ref message)
+          && blockchainParentLost.AreBlocksCompactMatching(nameCaseLostAll, blocksLedger.Where(b => b.Header.Height <= HEIGHT_BELOW_WINDOW).ToList(), ref message);
       }
 
       // Counter-tested 2026-11-13 19:05
@@ -451,8 +454,6 @@ internal partial class Testbench
       {
         Console.WriteLine("  11. Compact Serving: Serve compact blocks above a hash, ascending, within limits.");
 
-        const int COUNT_MAX = 2000;
-        const int SIZE_MAX = 4_000_000;
         const int COUNT_BELOW_TIP = 50;
         const int COUNT_SIZE_LIMITED = 3;
         const string NAME_CASE = "Compact serving, chain synchronized beyond the stored window";
@@ -464,22 +465,20 @@ internal partial class Testbench
         Header headerRoot = headerTip.GetHeaderAncestor(0);
         Header headerBelowTip = headerTip.GetHeaderAncestor(headerTip.Height - COUNT_BELOW_TIP);
 
-        int sizeLimited = VarInt.GetBytes(COUNT_MAX).Length
+        int sizeLimited = VarInt.GetBytes(COUNT_MAX_BLOCKS_COMPACT).Length
           + Enumerable.Range(1, COUNT_SIZE_LIMITED).Sum(h => blockchain.GetBytesBlockCompact(h).Length);
 
-        return blockchain.IsBatchServed("Compact serving, batch above the root", headerRoot.Hash, COUNT_MAX, SIZE_MAX, 1, COUNT_MAX, ref message)
-          && blockchain.IsBatchServed($"Compact serving, batch above {COUNT_BELOW_TIP} blocks below the tip", headerBelowTip.Hash, COUNT_MAX, SIZE_MAX, headerBelowTip.Height + 1, COUNT_BELOW_TIP, ref message)
-          && blockchain.IsBatchServed("Compact serving, batch limited by size", headerRoot.Hash, COUNT_MAX, sizeLimited, 1, COUNT_SIZE_LIMITED, ref message)
-          && blockchain.IsBatchRefused("Compact serving, unknown hash", new byte[32], COUNT_MAX, SIZE_MAX, ref message)
-          && blockchain.IsBatchRefused("Compact serving, tip", headerTip.Hash, COUNT_MAX, SIZE_MAX, ref message);
+        return blockchain.IsBatchServed("Compact serving, batch above the root", headerRoot.Hash, COUNT_MAX_BLOCKS_COMPACT, SIZE_MAX_BLOCKS_COMPACT, 1, COUNT_MAX_BLOCKS_COMPACT, ref message)
+          && blockchain.IsBatchServed($"Compact serving, batch above {COUNT_BELOW_TIP} blocks below the tip", headerBelowTip.Hash, COUNT_MAX_BLOCKS_COMPACT, SIZE_MAX_BLOCKS_COMPACT, headerBelowTip.Height + 1, COUNT_BELOW_TIP, ref message)
+          && blockchain.IsBatchServed("Compact serving, batch limited by size", headerRoot.Hash, COUNT_MAX_BLOCKS_COMPACT, sizeLimited, 1, COUNT_SIZE_LIMITED, ref message)
+          && blockchain.IsBatchRefused("Compact serving, unknown hash", new byte[32], COUNT_MAX_BLOCKS_COMPACT, SIZE_MAX_BLOCKS_COMPACT, ref message)
+          && blockchain.IsBatchRefused("Compact serving, tip", headerTip.Hash, COUNT_MAX_BLOCKS_COMPACT, SIZE_MAX_BLOCKS_COMPACT, ref message);
       }
 
       internal static bool TestCompactInsertion(Wallet wallet, ref string message)
       {
         Console.WriteLine("  12. Compact Insertion: Append checked compact blocks behind the window, then download blocks.");
 
-        const int COUNT_MAX = 2000;
-        const int SIZE_MAX = 4_000_000;
         const int HEIGHT_TARGET = HEIGHT_TIP_BEYOND_WINDOW - COUNT_MAX_BLOCKS_STORED;
         const string NAME_CASE = "Compact insertion, serving chain synchronized beyond the stored window";
         const string NAME_CASE_BEHIND = "Compact insertion, fresh node with every anchor mined";
@@ -506,7 +505,7 @@ internal partial class Testbench
         }
 
         List<(Header header, List<TXOutputTokenAnchor> anchors)> blocksCompact = blockchain.ParseBlocksCompact(
-          blockchainServing.GetBlocksCompactSerialized(headerRoot.Hash, COUNT_MAX, SIZE_MAX));
+          blockchainServing.GetBlocksCompactSerialized(headerRoot.Hash, COUNT_MAX_BLOCKS_COMPACT, SIZE_MAX_BLOCKS_COMPACT));
 
         List<(Header header, List<TXOutputTokenAnchor> anchors)> blocksCompactAnchorsWrong = blocksCompact
           .Take(HEIGHT_ANCHORS_BEYOND_WINDOW)
@@ -525,7 +524,7 @@ internal partial class Testbench
           return false;
 
         Header headerTip = blockchain.ChainRoot.HeaderTipBlockchain;
-        blockchain.InsertBlocksCompact(headerTip.Hash, blockchain.ParseBlocksCompact(blockchainServing.GetBlocksCompactSerialized(headerTip.Hash, COUNT_MAX, SIZE_MAX)));
+        blockchain.InsertBlocksCompact(headerTip.Hash, blockchain.ParseBlocksCompact(blockchainServing.GetBlocksCompactSerialized(headerTip.Hash, COUNT_MAX_BLOCKS_COMPACT, SIZE_MAX_BLOCKS_COMPACT)));
 
         const string NAME_CASE_TARGET = "Compact insertion, compact blocks up to the tallest tip minus the stored window";
 
@@ -602,6 +601,8 @@ internal partial class Testbench
         return false;
       }
 
+      const int COUNT_MAX_BLOCKS_COMPACT = 2000;
+      const int SIZE_MAX_BLOCKS_COMPACT = 4_000_000;
       const int HEIGHT_ANCHORS_BEYOND_WINDOW = 7;
       const int HEIGHT_TIP_BEYOND_WINDOW = COUNT_MAX_BLOCKS_STORED + 7;
 
@@ -616,15 +617,25 @@ internal partial class Testbench
 
         List<Block> blocksLedger = ledger.GetBlocksInserted();
         blockchain = StartNode();
-
-        foreach (Block blockLedger in blocksLedger)
-        {
-          blockchain.ParentFake.MineAnchors([blockLedger]);
-          blockchain.DeliverBlocks(blocksLedger);
-        }
+        blockchain.SyncBlockByBlock(blocksLedger);
 
         return blockchain.IsSynchronized(ledger, nameCase, HEIGHT_TIP_BEYOND_WINDOW, ref message)
           && IsFieldEqual(nameCase, $"eligible anchors at height {HEIGHT_ANCHORS_BEYOND_WINDOW}", 1, ParserToken.EnumerateAnchorsEligible(blocksLedger.Single(b => b.Header.Height == HEIGHT_ANCHORS_BEYOND_WINDOW).TXs, HEIGHT_ANCHORS_BEYOND_WINDOW).Count(), ref message);
+      }
+
+      void SyncBlockByBlock(List<Block> blocksLedger)
+      {
+        foreach (Block blockLedger in blocksLedger)
+        {
+          ParentFake.MineAnchors([blockLedger]);
+          DeliverBlocks(blocksLedger);
+        }
+      }
+
+      void FetchBlocksCompact(BlockchainAnchoring blockchainServing)
+      {
+        while (FetchHeaderBlockCompactNext(h => true) is Header header)
+          InsertBlocksCompact(header.Hash, ParseBlocksCompact(blockchainServing.GetBlocksCompactSerialized(header.Hash, COUNT_MAX_BLOCKS_COMPACT, SIZE_MAX_BLOCKS_COMPACT)));
       }
 
       bool AreBlocksCompactMatching(string nameCase, List<Block> blocks, ref string message)
