@@ -24,7 +24,8 @@ internal partial class Testbench
         && BlockchainAnchoring.TestRestartUnanchored(Testbench.Wallet, ref message)
         && BlockchainAnchoring.TestWindowResync(Testbench.Wallet, ref message)
         && BlockchainAnchoring.TestRestartResync(Testbench.Wallet, ref message)
-        && BlockchainAnchoring.TestCompactStore(Testbench.Wallet, ref message);
+        && BlockchainAnchoring.TestCompactStore(Testbench.Wallet, ref message)
+        && BlockchainAnchoring.TestCompactLoad(Testbench.Wallet, ref message);
     }
 
     class BlockchainAnchoring : BlockchainTestbench
@@ -364,29 +365,15 @@ internal partial class Testbench
       {
         Console.WriteLine("  9. Compact Store: Keep compact blocks below pruned window, drop rolled-back ones.");
 
-        const int HEIGHT_ANCHORS = 7;
-        const int HEIGHT_TIP = COUNT_MAX_BLOCKS_STORED + 7;
         const int COUNT_ROLLED_BACK = 3;
+        const string NAME_CASE = "Compact store, chain synchronized beyond the stored window";
 
-        if (!TryCreateLedger(wallet, out Ledger ledger, ref message)
-          || !ledger.TryInsertBlock("spend with an eligible anchor", [ledger.CreateCoinbase(wallet, CreateIDAccount(1000, 1), FEE), ledger.CreateTXSpend(wallet, CreateIDAccount(1001, 2), VALUE_SPEND, t => AddAnchor(t, HEIGHT_ANCHORS - 1))], isValidExpected: true, null, ref message)
-          || !TryInsertCoinbasesUpTo(ledger, wallet, CreateIDAccount(1000, 1), HEIGHT_TIP, ref message))
+        if (!TrySyncBeyondWindow(wallet, NAME_CASE, out Ledger ledger, out BlockchainAnchoring blockchain, ref message))
           return false;
 
         List<Block> blocksLedger = ledger.GetBlocksInserted();
-        BlockchainAnchoring blockchain = StartNode();
 
-        foreach (Block blockLedger in blocksLedger)
-        {
-          blockchain.ParentFake.MineAnchors([blockLedger]);
-          blockchain.DeliverBlocks(blocksLedger);
-        }
-
-        const string NAME_CASE = "Compact store, chain synchronized beyond the stored window";
-
-        if (!blockchain.IsSynchronized(ledger, NAME_CASE, HEIGHT_TIP, ref message)
-          || !blockchain.IsBlockStoredOldestAt(NAME_CASE, HEIGHT_TIP - COUNT_MAX_BLOCKS_STORED + 1, ref message)
-          || !IsFieldEqual(NAME_CASE, $"eligible anchors at height {HEIGHT_ANCHORS}", 1, ParserToken.EnumerateAnchorsEligible(blocksLedger.Single(b => b.Header.Height == HEIGHT_ANCHORS).TXs, HEIGHT_ANCHORS).Count(), ref message)
+        if (!blockchain.IsBlockStoredOldestAt(NAME_CASE, HEIGHT_TIP_BEYOND_WINDOW - COUNT_MAX_BLOCKS_STORED + 1, ref message)
           || !blockchain.AreBlocksCompactMatching(NAME_CASE, blocksLedger, ref message))
           return false;
 
@@ -394,9 +381,93 @@ internal partial class Testbench
 
         const string NAME_CASE_ROLLED_BACK = "Compact store, Bitcoin chain rolled back by three blocks";
 
-        return blockchain.IsAtHeight(NAME_CASE_ROLLED_BACK, HEIGHT_TIP - COUNT_ROLLED_BACK, ref message)
-          && IsFieldEqual(NAME_CASE_ROLLED_BACK, "compact blocks above the tip", 0, blockchain.BlocksCompact.Count(Query.GT(NAME_FIELD_ID, HEIGHT_TIP - COUNT_ROLLED_BACK)), ref message)
-          && blockchain.AreBlocksCompactMatching(NAME_CASE_ROLLED_BACK, blocksLedger.Where(b => b.Header.Height <= HEIGHT_TIP - COUNT_ROLLED_BACK).ToList(), ref message);
+        return blockchain.IsAtHeight(NAME_CASE_ROLLED_BACK, HEIGHT_TIP_BEYOND_WINDOW - COUNT_ROLLED_BACK, ref message)
+          && IsFieldEqual(NAME_CASE_ROLLED_BACK, "compact blocks above the tip", 0, blockchain.BlocksCompact.Count(Query.GT(NAME_FIELD_ID, HEIGHT_TIP_BEYOND_WINDOW - COUNT_ROLLED_BACK)), ref message)
+          && blockchain.AreBlocksCompactMatching(NAME_CASE_ROLLED_BACK, blocksLedger.Where(b => b.Header.Height <= HEIGHT_TIP_BEYOND_WINDOW - COUNT_ROLLED_BACK).ToList(), ref message);
+      }
+
+      internal static bool TestCompactLoad(Wallet wallet, ref string message)
+      {
+        Console.WriteLine("  10. Compact Load: Restart keeps whole history, announces it in order, redraws winners.");
+
+        const string NAME_CASE = "Compact load, chain synchronized beyond the stored window";
+        const string NAME_CASE_RESTARTED = "Compact load, restart of the synchronized chain";
+
+        if (!TrySyncBeyondWindow(wallet, NAME_CASE, out Ledger ledger, out BlockchainAnchoring blockchain, ref message))
+          return false;
+
+        Dictionary<int, Header> headersBefore = Enumerable.Range(1, HEIGHT_TIP_BEYOND_WINDOW)
+          .ToDictionary(h => h, h => blockchain.ChainRoot.HeaderTipBlockchain.GetHeaderAncestor(h));
+
+        if (!IsFieldEqual(NAME_CASE, $"anchor winners at height {HEIGHT_ANCHORS_BEYOND_WINDOW}", 1, headersBefore[HEIGHT_ANCHORS_BEYOND_WINDOW].AnchorsWinner.Count, ref message))
+          return false;
+
+        BlockchainAnchoring blockchainRestarted = new(blockchain.LiteDatabase, blockchain.ParentFake.Restart());
+        List<Block> blocksAnnounced = new();
+        blockchainRestarted.OnBlockInserted += blocksAnnounced.Add;
+        blockchainRestarted.Load();
+
+        if (!blockchainRestarted.IsSynchronized(ledger, NAME_CASE_RESTARTED, HEIGHT_TIP_BEYOND_WINDOW, ref message)
+          || !IsFieldEqual(NAME_CASE_RESTARTED, "height of the root header", 0, blockchainRestarted.ChainRoot.HeaderRoot.Height, ref message))
+          return false;
+
+        if (!blocksAnnounced.Select(b => b.Header.Height).SequenceEqual(Enumerable.Range(1, HEIGHT_TIP_BEYOND_WINDOW)))
+        {
+          message = $"{NAME_CASE_RESTARTED}: the loaded blocks were announced at heights {string.Join(",", blocksAnnounced.Select(b => b.Header.Height).Take(10))}..., expected 1 to {HEIGHT_TIP_BEYOND_WINDOW} in ascending order.";
+          return false;
+        }
+
+        foreach (Block blockAnnounced in blocksAnnounced)
+        {
+          Header headerBefore = headersBefore[blockAnnounced.Header.Height];
+          string nameBlock = $"{NAME_CASE_RESTARTED}, block announced at height {blockAnnounced.Header.Height}";
+
+          if (!IsFieldEqual(nameBlock, "hash", headerBefore.Hash, blockAnnounced.Header.Hash, ref message)
+            || !IsFieldEqual(nameBlock, "AnchorsWinner.Count", headerBefore.AnchorsWinner.Count, blockAnnounced.Header.AnchorsWinner.Count, ref message))
+            return false;
+
+          foreach (TXOutputTokenAnchor anchor in headerBefore.AnchorsWinner.Values)
+            if (!blockAnnounced.Header.AnchorsWinner.TryGetValue(anchor.IDToken, out TXOutputTokenAnchor anchorReloaded)
+              || !IsFieldEqual(nameBlock, $"HashBlockReferenced of IDToken {anchor.IDToken.ToHexString()}", anchor.HashBlockReferenced, anchorReloaded.HashBlockReferenced, ref message))
+            {
+              if (message == "")
+                message = $"{nameBlock}: no anchor winner of IDToken {anchor.IDToken.ToHexString()}.";
+
+              return false;
+            }
+        }
+
+        const string NAME_CASE_UNLINKED = "Compact load, header one level short of Bitcoin";
+
+        HeaderBToken headerUnlinked = new() { Hash = headersBefore[HEIGHT_ANCHORS_BEYOND_WINDOW].Hash };
+        ParserToken.DrawAnchorsWinner(headerUnlinked, headersBefore[HEIGHT_ANCHORS_BEYOND_WINDOW].AnchorsWinner.Values, blockchain.CountLevelsBelowRoot);
+
+        return IsFieldEqual(NAME_CASE_UNLINKED, "AnchorsWinner.Count", 0, headerUnlinked.AnchorsWinner.Count, ref message);
+      }
+
+      const int HEIGHT_ANCHORS_BEYOND_WINDOW = 7;
+      const int HEIGHT_TIP_BEYOND_WINDOW = COUNT_MAX_BLOCKS_STORED + 7;
+
+      static bool TrySyncBeyondWindow(Wallet wallet, string nameCase, out Ledger ledger, out BlockchainAnchoring blockchain, ref string message)
+      {
+        blockchain = null;
+
+        if (!TryCreateLedger(wallet, out ledger, ref message)
+          || !ledger.TryInsertBlock("spend with an eligible anchor", [ledger.CreateCoinbase(wallet, CreateIDAccount(1000, 1), FEE), ledger.CreateTXSpend(wallet, CreateIDAccount(1001, 2), VALUE_SPEND, t => AddAnchor(t, HEIGHT_ANCHORS_BEYOND_WINDOW - 1))], isValidExpected: true, null, ref message)
+          || !TryInsertCoinbasesUpTo(ledger, wallet, CreateIDAccount(1000, 1), HEIGHT_TIP_BEYOND_WINDOW, ref message))
+          return false;
+
+        List<Block> blocksLedger = ledger.GetBlocksInserted();
+        blockchain = StartNode();
+
+        foreach (Block blockLedger in blocksLedger)
+        {
+          blockchain.ParentFake.MineAnchors([blockLedger]);
+          blockchain.DeliverBlocks(blocksLedger);
+        }
+
+        return blockchain.IsSynchronized(ledger, nameCase, HEIGHT_TIP_BEYOND_WINDOW, ref message)
+          && IsFieldEqual(nameCase, $"eligible anchors at height {HEIGHT_ANCHORS_BEYOND_WINDOW}", 1, ParserToken.EnumerateAnchorsEligible(blocksLedger.Single(b => b.Header.Height == HEIGHT_ANCHORS_BEYOND_WINDOW).TXs, HEIGHT_ANCHORS_BEYOND_WINDOW).Count(), ref message);
       }
 
       bool AreBlocksCompactMatching(string nameCase, List<Block> blocks, ref string message)
